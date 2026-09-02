@@ -1,0 +1,43 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+dist-electron/
+out/
+build/
+release/
+.vite/
+
+# logs
+*.log
+npm-debug.log*
+
+# OS cruft
+.DS_Store
+
+# secrets / signing credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.mobileprovision
+
+# local/manual-testing workspace configs & app data
+# (real workspace configs contain actual project paths, client names,
+# internal URLs — never commit one, even for testing)
+.local/
+dev-data/
+
+# editor
+.vscode/*
+!.vscode/settings.json
+
+# mockup_design/ is its own independently version-controlled repo
+# (already pushed to github.com:StasRechimciuc/mockup_design) — not
+# tracked as part of this repo's history.
+mockup_design/
+
+# vitest / coverage
+coverage/

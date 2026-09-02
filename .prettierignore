@@ -1,0 +1,17 @@
+node_modules
+dist
+dist-electron
+out
+build
+release
+.vite
+coverage
+mockup_design
+package-lock.json
+
+# hand-maintained product/process docs and editor/agent config — not
+# app source code, left to their own formatting
+docs
+claude.md
+.claude
+.vscode

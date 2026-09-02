@@ -1,0 +1,39 @@
+{
+  "name": "workspace-launcher-vscode",
+  "displayName": "Workspace Launcher",
+  "description": "Companion extension for Workspace Launcher — reads a workspace config and creates/runs terminals inside VS Code.",
+  "version": "0.0.0",
+  "private": true,
+  "publisher": "workspace-launcher",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:workspaceLauncher.ping"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "workspaceLauncher.ping",
+        "title": "Workspace Launcher: Ping"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@workspace-launcher/shared": "*"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.90.0",
+    "esbuild": "^0.24.0"
+  }
+}

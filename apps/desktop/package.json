@@ -1,0 +1,24 @@
+{
+  "name": "@workspace-launcher/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Workspace Launcher desktop app (Electron).",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
+    "package:mac": "electron-vite build && electron-builder --mac"
+  },
+  "dependencies": {
+    "@electron-toolkit/utils": "^3.0.0",
+    "@workspace-launcher/shared": "*",
+    "electron-store": "^10.0.0"
+  },
+  "devDependencies": {
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^2.3.0"
+  }
+}

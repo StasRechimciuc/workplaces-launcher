@@ -1,0 +1,18 @@
+appId: com.workspacelauncher.app
+productName: Workspace Launcher
+directories:
+  output: release
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+mac:
+  target:
+    - dmg
+    - zip
+  category: public.app-category.developer-tools
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  # entitlements/notarization (Apple Developer account + signing
+  # identity) are configured when there's an actual account to sign
+  # with — see claude.md. Not needed for local dev builds.

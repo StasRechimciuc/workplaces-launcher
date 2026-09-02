@@ -3,6 +3,8 @@ import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import eslintConfigPrettier from 'eslint-config-prettier';
 import globals from 'globals';
+import reactHooks from 'eslint-plugin-react-hooks';
+import reactRefresh from 'eslint-plugin-react-refresh';
 
 const UNSAFE_SHELL_MESSAGE =
   'Use the safe wrapper (execFile/spawn with an argument array) from src/main/lib/shell-exec.ts instead of exec/execSync — a string-interpolated shell command is a command-injection risk. See claude.md Code Quality Standard.';
@@ -31,6 +33,20 @@ export default tseslint.config(
     files: ['**/*.mjs', '**/*.cjs'],
     languageOptions: {
       globals: globals.node,
+    },
+  },
+  {
+    // React renderer code only — rules-of-hooks/exhaustive-deps and the
+    // Vite-HMR "only export components" rule don't apply to main/
+    // preload/shared, which have no React.
+    files: ['apps/desktop/src/renderer/**/*.{ts,tsx}'],
+    plugins: {
+      'react-hooks': reactHooks,
+      'react-refresh': reactRefresh,
+    },
+    rules: {
+      ...reactHooks.configs['recommended-latest'].rules,
+      'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
     },
   },
   {

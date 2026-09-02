@@ -1,7 +1,21 @@
 import { join } from 'node:path';
-import { app, BrowserWindow, shell } from 'electron';
+import { app, BrowserWindow, Menu, shell } from 'electron';
 import { electronApp, is, optimizer } from '@electron-toolkit/utils';
 import { registerIpcHandlers } from './ipc/handlers';
+import { buildAppMenu } from './menu';
+
+app.setName('Workspace Launcher');
+
+// Single-instance lock: without this, launching the app a second time
+// (e.g. double-clicking the dock icon while it's already running)
+// starts a second process that reads/writes the same on-disk workspace
+// configs and settings as the first — a real data-race risk, not just
+// a cosmetic "two windows" annoyance. The second launch instead just
+// focuses the existing window.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+}
 
 function createMainWindow(): BrowserWindow {
   const mainWindow = new BrowserWindow({
@@ -48,25 +62,40 @@ function createMainWindow(): BrowserWindow {
   return mainWindow;
 }
 
-void app.whenReady().then(() => {
-  electronApp.setAppUserModelId('com.workspacelauncher.app');
-
-  app.on('browser-window-created', (_event, window) => {
-    optimizer.watchWindowShortcuts(window);
-  });
-
-  registerIpcHandlers();
-  createMainWindow();
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createMainWindow();
+if (gotSingleInstanceLock) {
+  // Someone tried to launch a second instance — focus the existing
+  // window instead of letting a second process start.
+  app.on('second-instance', () => {
+    const [existingWindow] = BrowserWindow.getAllWindows();
+    if (existingWindow) {
+      if (existingWindow.isMinimized()) {
+        existingWindow.restore();
+      }
+      existingWindow.focus();
     }
   });
-});
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
-});
+  void app.whenReady().then(() => {
+    electronApp.setAppUserModelId('com.workspacelauncher.app');
+    Menu.setApplicationMenu(buildAppMenu());
+
+    app.on('browser-window-created', (_event, window) => {
+      optimizer.watchWindowShortcuts(window);
+    });
+
+    registerIpcHandlers();
+    createMainWindow();
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createMainWindow();
+      }
+    });
+  });
+
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') {
+      app.quit();
+    }
+  });
+}

@@ -41,18 +41,12 @@
       }
 
       body {
-        background:
-          radial-gradient(ellipse 900px 500px at 50% -10%, rgba(99, 102, 241, 0.1), transparent),
-          var(--bg-page);
+        background: var(--bg-page);
         color: var(--text);
         font-family:
           -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', 'Segoe UI', Helvetica, Arial,
           sans-serif;
         -webkit-font-smoothing: antialiased;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: 48px 24px;
       }
 
       svg.icon {
@@ -69,14 +63,9 @@
       /* ---------- window chrome ---------- */
 
       .window {
-        width: min(1180px, 96vw);
-        height: 740px;
+        width: 100%;
+        height: 100vh;
         background: var(--bg);
-        border-radius: 14px;
-        border: 1px solid var(--border-strong);
-        box-shadow:
-          0 30px 80px -20px rgba(0, 0, 0, 0.65),
-          0 0 0 1px rgba(0, 0, 0, 0.3);
         overflow: hidden;
         display: flex;
         flex-direction: column;
@@ -92,29 +81,20 @@
         padding: 0 14px;
         background: var(--bg-elevated);
         border-bottom: 1px solid var(--border);
+        /* This window is frameless (see main/index.ts — titleBarStyle:
+           'hiddenInset') so macOS's real traffic lights are drawn on top
+           of the reserved space below, and the titlebar itself has to
+           opt in to being draggable like a native one would be. */
+        -webkit-app-region: drag;
       }
 
-      .traffic-lights {
-        display: flex;
-        gap: 8px;
+      /* Reserves the space the real (native) traffic lights render into
+         — see trafficLightPosition in main/index.ts. Not a visible
+         element itself, just layout spacing so titlebar content doesn't
+         sit underneath them. */
+      .titlebar-traffic-light-spacer {
+        width: 52px;
         flex-shrink: 0;
-      }
-
-      .traffic-lights span {
-        width: 12px;
-        height: 12px;
-        border-radius: 50%;
-        display: inline-block;
-      }
-
-      .traffic-lights span:nth-child(1) {
-        background: #ff5f57;
-      }
-      .traffic-lights span:nth-child(2) {
-        background: #febc2e;
-      }
-      .traffic-lights span:nth-child(3) {
-        background: #28c840;
       }
 
       .titlebar-crumb {
@@ -146,6 +126,8 @@
         border: 1px solid var(--border);
         color: var(--text-faint);
         font-size: 12.5px;
+        /* Interactive despite living inside the draggable titlebar. */
+        -webkit-app-region: no-drag;
       }
 
       .titlebar-search svg {
@@ -854,9 +836,6 @@
       }
 
       @media (max-width: 900px) {
-        body {
-          padding: 28px 16px;
-        }
         .sidebar {
           width: 232px;
         }
@@ -875,20 +854,6 @@
       }
 
       @media (max-width: 720px) {
-        body {
-          padding: 0;
-          align-items: stretch;
-        }
-
-        .window {
-          width: 100vw;
-          height: 100dvh;
-          height: 100vh;
-          border-radius: 0;
-          border: none;
-          box-shadow: none;
-        }
-
         .titlebar {
           justify-content: center;
           padding: 0 14px;
@@ -905,16 +870,6 @@
         .titlebar-right {
           display: none;
         }
-        .titlebar {
-          position: relative;
-        }
-        .traffic-lights {
-          position: absolute;
-          left: 14px;
-          top: 50%;
-          transform: translateY(-50%);
-        }
-
         .sidebar {
           position: absolute;
           inset: 0;
@@ -998,7 +953,7 @@
   <body>
     <div class="window">
       <div class="titlebar">
-        <div class="traffic-lights"><span></span><span></span><span></span></div>
+        <div class="titlebar-traffic-light-spacer"></div>
         <div class="titlebar-crumb">
           <span>Workspace Launcher</span>
           <span

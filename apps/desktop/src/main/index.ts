@@ -9,6 +9,12 @@ function createMainWindow(): BrowserWindow {
     height: 800,
     show: false,
     autoHideMenuBar: true,
+    // The renderer (adapted from mockup_design/index.html) draws its own
+    // title bar and traffic lights — it was designed as a "floating
+    // window mockup" card, not edge-to-edge OS content. Frameless here
+    // so macOS doesn't also draw a second, real title bar around it.
+    titleBarStyle: 'hiddenInset',
+    trafficLightPosition: { x: 14, y: 14 },
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       // Security baseline (claude.md Code Quality Standard: least

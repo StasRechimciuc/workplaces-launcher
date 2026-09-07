@@ -1,16 +1,33 @@
 import type { WorkspaceDisplay } from '../../preload';
 
 /**
- * Placeholder data for the 'workspaces:list' IPC handler, moved here
- * verbatim from mockup_design/index.html's inline `const workspaces`.
- * Goal at this stage is only to prove the IPC round-trip end-to-end —
- * renderer calls window.api.listWorkspaces() instead of reading a
- * hardcoded constant, UI stays pixel-identical to the original mockup.
+ * Placeholder data for the 'workspaces:list' / 'workspaces:restore' IPC
+ * handlers, moved here verbatim from mockup_design/index.html's inline
+ * `const workspaces`, with `type`/`params` added to each tool so
+ * "Restore workspace" has something real to run (see
+ * src/main/ipc/handlers.ts) — not just something to display.
  *
- * Replacing this with real persisted workspace configs (read via
- * src/main/config/loader.ts, validated against
- * @workspace-launcher/shared's WorkspaceConfigSchema) is Tier 1 feature
- * work, not boilerplate — see docs/build-shell.md.
+ * Only `vscode` (type: 'vscode') has a registered tool plugin so far
+ * (src/main/tools/vscode-tool.ts). `docker`, `terminal`, `chrome`,
+ * `slack`, and `spotify` are claude.md's approved Tier 1 step types,
+ * just not built yet — restoring a workspace that includes one
+ * correctly reports "no registered tool for step type X" via the
+ * orchestrator, rather than pretending to succeed.
+ *
+ * `github` and `notes` (used by a couple of the mock entries below,
+ * ported as-is from the original mockup) are NOT on that approved
+ * list. They're left in only because the mockup already had them and
+ * removing them would mean inventing different mock data — same
+ * "no registered tool" behavior as the other unbuilt types, but do not
+ * build github-tool.ts/notes-tool.ts under this list's authority; that
+ * would need an explicit scope decision first (claude.md: "do not add
+ * steps not on this list mid-build").
+ *
+ * Replacing this whole file with real persisted workspace configs
+ * (read via src/main/config/loader.ts, validated against
+ * @workspace-launcher/shared's WorkspaceConfigSchema, created through
+ * the "New workspace" modal) is Tier 1 feature work, not boilerplate —
+ * see docs/build-shell.md.
  */
 export const MOCK_WORKSPACES: WorkspaceDisplay[] = [
   {
@@ -32,6 +49,8 @@ export const MOCK_WORKSPACES: WorkspaceDisplay[] = [
           { i: 'folder', label: 'Path', mono: '~/projects/client-a' },
           { i: 'check', label: 'Restores last active editor layout' },
         ],
+        type: 'vscode',
+        params: { path: '~/projects/client-a' },
       },
       {
         icon: 'box',
@@ -43,6 +62,8 @@ export const MOCK_WORKSPACES: WorkspaceDisplay[] = [
           { i: 'terminal', label: 'Command', mono: 'tilt up' },
           { i: 'check', label: 'Requires Docker Desktop running' },
         ],
+        type: 'docker',
+        params: { command: 'tilt up', cwd: '~/projects/client-a' },
       },
       {
         icon: 'terminal',
@@ -54,6 +75,8 @@ export const MOCK_WORKSPACES: WorkspaceDisplay[] = [
           { i: 'terminal', label: 'Pane 1', mono: 'npm run dev' },
           { i: 'terminal', label: 'Pane 2', mono: 'npm run server' },
         ],
+        type: 'terminal',
+        params: { commands: ['npm run dev', 'npm run server'] },
       },
       {
         icon: 'globe',
@@ -65,6 +88,8 @@ export const MOCK_WORKSPACES: WorkspaceDisplay[] = [
           { i: 'globe', label: 'Profile', mono: 'Work' },
           { i: 'check', label: '4 tabs, localhost:3000 pinned' },
         ],
+        type: 'chrome',
+        params: { profile: 'Work', urls: ['http://localhost:3000'] },
       },
       {
         icon: 'message',
@@ -73,6 +98,8 @@ export const MOCK_WORKSPACES: WorkspaceDisplay[] = [
         time: '<1s',
         detail: 'Opens to #client-a-eng',
         expand: [{ i: 'message', label: 'Channel', mono: '#client-a-eng' }],
+        type: 'slack',
+        params: { channel: '#client-a-eng' },
       },
       {
         icon: 'music',
@@ -81,6 +108,8 @@ export const MOCK_WORKSPACES: WorkspaceDisplay[] = [
         time: '<1s',
         detail: 'Resumes the Deep Focus playlist',
         expand: [{ i: 'music', label: 'Playlist', mono: 'Deep Focus' }],
+        type: 'spotify',
+        params: { playlist: 'Deep Focus' },
       },
     ],
   },
@@ -100,6 +129,8 @@ export const MOCK_WORKSPACES: WorkspaceDisplay[] = [
         time: '~1s',
         detail: 'Opens ~/projects/side-api',
         expand: [{ i: 'folder', label: 'Path', mono: '~/projects/side-api' }],
+        type: 'vscode',
+        params: { path: '~/projects/side-api' },
       },
       {
         icon: 'box',
@@ -111,6 +142,8 @@ export const MOCK_WORKSPACES: WorkspaceDisplay[] = [
           { i: 'terminal', label: 'Command', mono: 'docker compose up' },
           { i: 'check', label: 'Requires Docker Desktop running' },
         ],
+        type: 'docker',
+        params: { command: 'docker compose up', cwd: '~/projects/side-api' },
       },
       {
         icon: 'terminal',
@@ -119,6 +152,8 @@ export const MOCK_WORKSPACES: WorkspaceDisplay[] = [
         time: '~1s',
         detail: '1 pane — npm run dev',
         expand: [{ i: 'terminal', label: 'Pane 1', mono: 'npm run dev' }],
+        type: 'terminal',
+        params: { commands: ['npm run dev'] },
       },
       {
         icon: 'gitBranch',
@@ -127,6 +162,8 @@ export const MOCK_WORKSPACES: WorkspaceDisplay[] = [
         time: '<1s',
         detail: 'Opens PR #482 in the default browser',
         expand: [{ i: 'gitBranch', label: 'Link', mono: 'PR #482' }],
+        type: 'github',
+        params: { url: 'https://github.com/example/side-api/pull/482' },
       },
     ],
   },
@@ -146,6 +183,8 @@ export const MOCK_WORKSPACES: WorkspaceDisplay[] = [
         time: '~2s',
         detail: 'Design profile — Figma file and review doc',
         expand: [{ i: 'globe', label: 'Profile', mono: 'Design' }],
+        type: 'chrome',
+        params: { profile: 'Design', urls: [] },
       },
       {
         icon: 'message',
@@ -154,6 +193,8 @@ export const MOCK_WORKSPACES: WorkspaceDisplay[] = [
         time: '<1s',
         detail: 'Opens to #design-review',
         expand: [{ i: 'message', label: 'Channel', mono: '#design-review' }],
+        type: 'slack',
+        params: { channel: '#design-review' },
       },
       {
         icon: 'folder',
@@ -162,6 +203,8 @@ export const MOCK_WORKSPACES: WorkspaceDisplay[] = [
         time: '<1s',
         detail: 'Opens the review checklist',
         expand: [{ i: 'folder', label: 'Note', mono: 'Review checklist' }],
+        type: 'notes',
+        params: { note: 'Review checklist' },
       },
     ],
   },
@@ -181,6 +224,8 @@ export const MOCK_WORKSPACES: WorkspaceDisplay[] = [
         time: '~1s',
         detail: 'Opens ~/projects/client-b-site',
         expand: [{ i: 'folder', label: 'Path', mono: '~/projects/client-b-site' }],
+        type: 'vscode',
+        params: { path: '~/projects/client-b-site' },
       },
       {
         icon: 'box',
@@ -189,6 +234,8 @@ export const MOCK_WORKSPACES: WorkspaceDisplay[] = [
         time: '~3s',
         detail: 'Starts 1 container (cms)',
         expand: [{ i: 'terminal', label: 'Command', mono: 'docker compose up cms' }],
+        type: 'docker',
+        params: { command: 'docker compose up cms', cwd: '~/projects/client-b-site' },
       },
       {
         icon: 'terminal',
@@ -200,6 +247,8 @@ export const MOCK_WORKSPACES: WorkspaceDisplay[] = [
           { i: 'terminal', label: 'Pane 1', mono: 'npm run dev' },
           { i: 'terminal', label: 'Pane 2', mono: 'npm run cms' },
         ],
+        type: 'terminal',
+        params: { commands: ['npm run dev', 'npm run cms'] },
       },
       {
         icon: 'globe',
@@ -208,6 +257,8 @@ export const MOCK_WORKSPACES: WorkspaceDisplay[] = [
         time: '~1s',
         detail: 'Work profile — staging + CMS tabs',
         expand: [{ i: 'globe', label: 'Profile', mono: 'Work' }],
+        type: 'chrome',
+        params: { profile: 'Work', urls: [] },
       },
       {
         icon: 'music',
@@ -216,6 +267,8 @@ export const MOCK_WORKSPACES: WorkspaceDisplay[] = [
         time: '<1s',
         detail: 'Resumes the Deep Focus playlist',
         expand: [{ i: 'music', label: 'Playlist', mono: 'Deep Focus' }],
+        type: 'spotify',
+        params: { playlist: 'Deep Focus' },
       },
     ],
   },
@@ -235,6 +288,8 @@ export const MOCK_WORKSPACES: WorkspaceDisplay[] = [
         time: '<1s',
         detail: 'Opens the current draft',
         expand: [{ i: 'folder', label: 'Note', mono: 'Current draft' }],
+        type: 'notes',
+        params: { note: 'Current draft' },
       },
       {
         icon: 'music',
@@ -243,6 +298,8 @@ export const MOCK_WORKSPACES: WorkspaceDisplay[] = [
         time: '<1s',
         detail: 'Resumes the Instrumental focus playlist',
         expand: [{ i: 'music', label: 'Playlist', mono: 'Instrumental focus' }],
+        type: 'spotify',
+        params: { playlist: 'Instrumental focus' },
       },
     ],
   },

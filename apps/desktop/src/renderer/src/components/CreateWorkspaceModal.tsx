@@ -1,6 +1,16 @@
 import { useState } from 'react';
 import { Icon } from '../icons';
-import { CREATE_TOOL_PRESETS, toolColor, type CreateToolPreset } from '../constants';
+import { CREATE_TOOL_PRESETS, type CreateToolPreset } from '../constants';
+import { cn } from '../lib/utils';
+import { toolBadgeClasses } from '../lib/tool-colors';
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog';
 
 interface CreateWorkspaceModalProps {
   open: boolean;
@@ -23,45 +33,52 @@ export function CreateWorkspaceModal({ open, onClose }: CreateWorkspaceModalProp
   }
 
   return (
-    <div
-      className={`overlay ${open ? 'open' : ''}`}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) {
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) {
           onClose();
         }
       }}
     >
-      <div className="create-modal">
-        <div className="create-modal-header">
-          <h2>New workspace</h2>
-          <button
-            className="btn-icon"
-            type="button"
-            style={{ width: 28, height: 28 }}
-            onClick={onClose}
-          >
+      <DialogContent showCloseButton={false}>
+        <DialogHeader>
+          <DialogTitle>New workspace</DialogTitle>
+          <DialogClose className="flex h-7 w-7 items-center justify-center rounded-md text-text-muted hover:bg-bg-hover hover:text-text">
             <Icon name="x" size={14} />
-          </button>
-        </div>
-        <div className="create-modal-body">
-          <p className="field-label">Workspace name</p>
-          <input className="field-input" type="text" placeholder="e.g. Client C — Backend" />
+          </DialogClose>
+        </DialogHeader>
 
-          <p className="field-label">Tools · runs in order added</p>
-          <div className="create-steps">
+        <div className="flex-1 overflow-y-auto p-5">
+          <p className="mb-1.5 text-xs font-medium text-text-muted">Workspace name</p>
+          <input
+            className="mb-4.5 h-8.5 w-full rounded-sm border border-border-strong bg-bg-elevated px-2.75 text-[13px] text-text placeholder:text-text-faint focus:border-accent-border focus:outline-none"
+            type="text"
+            placeholder="e.g. Client C — Backend"
+          />
+
+          <p className="mb-1.5 text-xs font-medium text-text-muted">Tools · runs in order added</p>
+          <div className="mb-3.5 flex flex-col gap-2">
             {createSteps.map((s, i) => {
-              const colors = toolColor(s.color);
               return (
-                <div className="create-step" key={i}>
-                  <span className="tool-icon" style={{ background: colors.bg, color: colors.fg }}>
+                <div
+                  className="flex items-center gap-2.5 rounded-sm border border-border bg-bg-elevated px-2.5 py-2.25"
+                  key={i}
+                >
+                  <span
+                    className={cn(
+                      'flex h-6 w-6 items-center justify-center rounded-sm text-[13px]',
+                      toolBadgeClasses(s.color),
+                    )}
+                  >
                     <Icon name={s.icon} size={13} />
                   </span>
                   <div>
-                    <div className="create-step-name">{s.name}</div>
-                    <div className="create-step-config">{s.config}</div>
+                    <div className="text-[12.5px] font-medium text-text">{s.name}</div>
+                    <div className="mt-px text-[11.5px] text-text-faint">{s.config}</div>
                   </div>
                   <span
-                    className="create-step-remove"
+                    className="ml-auto flex h-5.5 w-5.5 shrink-0 cursor-pointer items-center justify-center rounded-[5px] text-text-faint hover:bg-bg-active hover:text-text"
                     onClick={() => {
                       removeTool(i);
                     }}
@@ -73,20 +90,28 @@ export function CreateWorkspaceModal({ open, onClose }: CreateWorkspaceModalProp
             })}
           </div>
 
-          <button className="btn-add-tool" type="button" onClick={addTool}>
+          <button
+            className="flex h-8 w-full items-center justify-center gap-1.5 rounded-sm border border-dashed border-border-strong text-xs text-text-faint hover:border-text-faint hover:text-text-muted"
+            type="button"
+            onClick={addTool}
+          >
             <Icon name="plus" size={12} />
             Add tool
           </button>
         </div>
-        <div className="create-modal-footer">
-          <button className="btn-ghost" type="button" onClick={onClose}>
+
+        <DialogFooter>
+          <DialogClose className="h-8 rounded-md border border-border-strong px-3.25 text-[12.5px] font-medium text-text-muted hover:bg-bg-hover hover:text-text">
             Cancel
-          </button>
-          <button className="btn-save" type="button">
+          </DialogClose>
+          <button
+            className="h-8 rounded-md bg-accent px-3.5 text-[12.5px] font-semibold text-white hover:bg-accent-hover"
+            type="button"
+          >
             Save workspace
           </button>
-        </div>
-      </div>
-    </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

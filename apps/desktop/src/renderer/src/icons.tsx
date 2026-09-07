@@ -1,3 +1,5 @@
+import { cn } from './lib/utils';
+
 // Minimal inline icon set (lucide-style: 24x24, stroke, round caps),
 // ported from mockup_design/index.html's ICONS map.
 const ICON_PATHS: Record<string, string> = {
@@ -47,9 +49,12 @@ export function Icon({ name, size = 16, className }: IconProps): JSX.Element {
   const body = ICON_PATHS[name] ?? '';
   return (
     <svg
-      className={className ? `icon ${className}` : 'icon'}
+      className={cn('h-[1em] w-[1em] shrink-0 fill-none stroke-current', className)}
       viewBox="0 0 24 24"
       style={{ fontSize: size }}
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
       dangerouslySetInnerHTML={{ __html: body }}
     />
   );

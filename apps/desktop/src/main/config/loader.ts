@@ -16,42 +16,57 @@ function getWorkspacesDir(): string {
   return join(app.getPath('userData'), 'workspaces');
 }
 
-async function ensureWorkspacesDir(): Promise<string> {
-  const dir = getWorkspacesDir();
-  await mkdir(dir, { recursive: true });
-  return dir;
-}
-
 export interface LoadWorkspacesResult {
   configs: WorkspaceConfig[];
-  /** file name -> human-readable reason it failed to load. */
+  /** file name (or the workspaces directory itself) -> human-readable reason it failed to load. */
   errors: Record<string, string>;
 }
 
 /**
- * Reads every *.json file in the workspaces directory and validates
- * each one against WorkspaceConfigSchema. A single malformed file is
- * reported by name, not thrown — one bad config must never take down
- * the whole workspace list (claude.md: no silent failures, but also no
- * unhandled exception for one bad file).
+ * Reads every *.json file in the workspaces directory (in a stable,
+ * deterministic order — sorted by filename, not whatever order the
+ * filesystem happens to return) and validates each one against
+ * WorkspaceConfigSchema. A single malformed file, a duplicate id, or
+ * an inaccessible directory is reported by name, not thrown — one bad
+ * config must never take down the whole workspace list (claude.md: no
+ * silent failures, but also no unhandled exception for one bad file).
  */
 export async function loadAllWorkspaceConfigs(): Promise<LoadWorkspacesResult> {
-  const dir = await ensureWorkspacesDir();
-  const entries = await readdir(dir);
-  const jsonFiles = entries.filter((entry) => entry.endsWith('.json'));
+  const dir = getWorkspacesDir();
+  const errors: Record<string, string> = {};
+
+  let jsonFiles: string[];
+  try {
+    await mkdir(dir, { recursive: true });
+    const entries = await readdir(dir);
+    jsonFiles = entries.filter((entry) => entry.endsWith('.json')).sort();
+  } catch (err) {
+    errors[dir] =
+      `Could not access the workspaces directory: ${err instanceof Error ? err.message : String(err)}`;
+    return { configs: [], errors };
+  }
 
   const configs: WorkspaceConfig[] = [];
-  const errors: Record<string, string> = {};
+  const fileById = new Map<string, string>();
 
   for (const file of jsonFiles) {
     try {
       const raw = await readFile(join(dir, file), 'utf-8');
       const parsed = parseWorkspaceConfig(JSON.parse(raw));
-      if (parsed.success) {
-        configs.push(parsed.config);
-      } else {
+      if (!parsed.success) {
         errors[file] = parsed.error;
+        continue;
       }
+
+      const existingFile = fileById.get(parsed.config.id);
+      if (existingFile) {
+        errors[file] =
+          `Duplicate workspace id "${parsed.config.id}" (already loaded from ${existingFile}) — skipped.`;
+        continue;
+      }
+
+      fileById.set(parsed.config.id, file);
+      configs.push(parsed.config);
     } catch (err) {
       errors[file] = err instanceof Error ? err.message : String(err);
     }

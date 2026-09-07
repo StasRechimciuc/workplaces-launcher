@@ -25,6 +25,7 @@ GUI-based (not config-file-based), macOS-first, dev-service-orchestration focus 
 ## Scope Discipline (do not violate without a real reason)
 
 - **macOS only** for the MVP. Cross-platform (Windows/Linux) is explicitly Phase 2, not now — even though a team member has Linux/VPN background, that capability is deliberately being held back until after validation.
+- **Desktop-only layout, no phone/tablet responsive design.** This is a native desktop app, not a website — there is no mobile context to design for. Build and test against a minimum window width of 1200px; don't spend effort on narrow-viewport/touch layouts.
 - **No feature creep** into adjacent verticals (design tools, rendering pipelines, etc.) until the core dev use case is validated and working.
 - If a new idea or expansion surfaces mid-build, default answer is "not now" unless it's required to ship the core one-click restore flow.
 

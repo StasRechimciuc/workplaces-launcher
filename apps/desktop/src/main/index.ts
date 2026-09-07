@@ -1,8 +1,9 @@
 import { join } from 'node:path';
-import { app, BrowserWindow, Menu, shell } from 'electron';
+import { app, BrowserWindow, dialog, Menu, shell } from 'electron';
 import { electronApp, is, optimizer } from '@electron-toolkit/utils';
 import { registerIpcHandlers } from './ipc/handlers';
 import { buildAppMenu } from './menu';
+import { registerBuiltInTools } from './tools';
 
 app.setName('Workspace Launcher');
 
@@ -53,11 +54,24 @@ function createMainWindow(): BrowserWindow {
     return { action: 'deny' };
   });
 
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    void mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL']);
-  } else {
-    void mainWindow.loadFile(join(__dirname, '../renderer/index.html'));
-  }
+  const rendererUrl = is.dev ? process.env['ELECTRON_RENDERER_URL'] : undefined;
+  const loadPromise = rendererUrl
+    ? mainWindow.loadURL(rendererUrl)
+    : mainWindow.loadFile(join(__dirname, '../renderer/index.html'));
+
+  // Never let a failed load pass silently — with no renderer, this app
+  // is just a blank window with no way for the user to know why. This
+  // is main-process-only failure (the renderer itself couldn't load),
+  // so it can't be shown in the UI — a native dialog is the only way to
+  // actually surface it.
+  loadPromise.catch((err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`Failed to load the renderer: ${message}`);
+    dialog.showErrorBox(
+      'Workspace Launcher failed to start',
+      `The app window could not load its interface:\n\n${message}`,
+    );
+  });
 
   return mainWindow;
 }
@@ -83,6 +97,7 @@ if (gotSingleInstanceLock) {
       optimizer.watchWindowShortcuts(window);
     });
 
+    registerBuiltInTools();
     registerIpcHandlers();
     createMainWindow();
 

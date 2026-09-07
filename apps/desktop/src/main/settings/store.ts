@@ -1,3 +1,6 @@
+// See the identical note in ../orchestrator/step-timing-history.ts —
+// electron-store is pinned to ^8.x because v9+ is pure ESM and this
+// main process bundle builds as CommonJS.
 import Store from 'electron-store';
 
 export interface AppSettings {

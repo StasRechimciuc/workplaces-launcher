@@ -2,11 +2,16 @@
 
 ## Vision
 
-macOS-first app that lets developers save and restore full dev environments —
+An app that lets developers save and restore full dev environments —
 apps, terminal commands, Docker/Tilt, browser profile, background apps — with
 one click. Wedge vs existing tools (ShiftPlus, PowerToys): dev-specific
 service orchestration (Docker/Tilt/dev servers as first-class), not just
 window/app restore.
+
+**Platform roadmap (updated 2026-09-07): Windows v1 → Linux → macOS.**
+Originally macOS-first; reordered because macOS's AppleScript/TCC-permission
+surface was the harder, slower path to a validated end-to-end restore flow.
+See `claude.md`'s Platform roadmap note and Scope Discipline section.
 
 ## Competitive Landscape (checked, not a stop condition)
 
@@ -31,9 +36,9 @@ Zero setup."
 ## Team & Roles
 
 - **Founder:** product, design, full build of prototype/MVP, core engine.
-- **Ally (cybersecurity/software background):** outreach, marketing,
-  future Linux/VPN/OS-level work (explicitly Phase 2, not now). Has a base
-  of trusted potential customers to pitch once there's something to show.
+- **Ally (cybersecurity/software background):** outreach, marketing, the
+  Linux/VPN/OS-level port (Phase 2, after Windows v1). Has a base of
+  trusted potential customers to pitch once there's something to show.
 
 ## Feature Decisions
 
@@ -67,29 +72,35 @@ Zero setup."
   gated behind an opt-in "extensions" toggle in settings, not built into
   the default/core UI. Keep the core app lean by default.
 
-## OS / Platform — Long-Term Notes
+## OS / Platform Notes
 
-Not in scope for v1 (macOS-only), but documented for later:
+v1 scope is Windows-only now (see Platform roadmap above); Linux and macOS
+are deferred, not out of scope forever:
 
-- **App control:** macOS uses AppleScript/`open -a`. Windows needs COM
-  automation or process spawning. Linux varies by desktop environment
-  (no single standard) — hardest to support well.
-- **Window management:** macOS Accessibility API; Windows has its own API;
+- **App control:** Windows v1 needs process spawning / `ShellExecute` (or
+  per-app CLI where available) in place of the old AppleScript/`open -a`
+  approach. Linux varies by desktop environment (no single standard) —
+  hardest to support well, deferred to Phase 2. macOS AppleScript/`open -a`
+  code already exists from the original pass — paused, not deleted;
+  becomes the Phase 3 implementation again.
+- **Window management:** Windows has its own API; macOS Accessibility API;
   Linux fragmented (X11 vs Wayland).
 - **VS Code extension:** OS-agnostic — same extension API everywhere.
-  Low porting cost.
+  Low porting cost, unaffected by the platform reorder.
 - **Docker/terminal/CLI tools:** near-identical across OSes (just shelling
   out to CLI commands). Low OS-specific complexity.
 - **Browser profile switching:** works similarly across OSes via CLI flags.
   Low complexity.
-- **Packaging/distribution:** fully OS-specific (.app/notarization,
-  .exe/installer, varies for Linux).
+- **Packaging/distribution:** fully OS-specific (.exe/installer for
+  Windows v1; .app/notarization for macOS's later Phase 3 pass; varies for
+  Linux).
 
 Conclusion: hardest OS-specific parts are window management and native app
-control. CLI-based pieces (Docker, VS Code, terminal) port over easily.
-When cross-platform happens, it's mostly "redo the app-launching layer,"
-not a full rewrite — this is why the OS abstraction interface (see
-architecture.md) is worth having from day one, at low cost.
+control — true regardless of which OS ships first. CLI-based pieces
+(Docker, VS Code, terminal) port over easily between all three. This is
+why the OS abstraction interface (see architecture.md) was worth having
+from day one: reordering which OS ships first cost a platform-layer swap,
+not a rewrite of the orchestrator, config parser, or UI.
 
 ## Validation Approach
 

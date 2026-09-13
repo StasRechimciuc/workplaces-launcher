@@ -5,21 +5,28 @@ none of them add scope to Tier 1's feature list.
 
 ## 1. OS Abstraction Layer
 
-Build a shared interface now; implement macOS only for v1.
+Build a shared interface now; implement Windows only for v1 (roadmap
+reordered 2026-09-07 — see `claude.md`'s Platform roadmap note. macOS was
+the original v1 target; its AppleScript/TCC-permission surface was the
+harder, slower path to a validated end-to-end restore flow, so Windows
+ships first, Linux next, macOS last).
 
 ```
 /platform
   index.ts          → detects OS, returns correct implementation
   types.ts          → shared interface (launchApp, positionWindow, openTerminal, ...)
   /macos
-    launcher.ts      → real AppleScript / `open -a` code
-  /windows           → does not exist yet, added when actually building Windows support
+    launcher.ts      → real AppleScript / `open -a` code, built during the
+                        original macOS-first pass — kept as-is, paused, not
+                        deleted. Becomes the Phase 3 implementation again.
+  /windows           → does not exist yet, added now (this is the v1 target)
+  /linux             → does not exist yet, added for Phase 2
 ```
 
 Rest of the app (orchestrator, UI, config parser) calls the generic
-`platform` interface only — never OS-specific code directly. When Windows
-support is eventually built, only a new `/platform/windows/launcher.ts`
-is needed; nothing else changes.
+`platform` interface only — never OS-specific code directly. Windows v1
+means adding `/platform/windows/launcher.ts`; nothing else in the app
+should need to change.
 
 ## 2. Plugin-Style Tool Registry
 

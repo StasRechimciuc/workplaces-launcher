@@ -2,7 +2,7 @@
   "name": "workspace-launcher",
   "private": true,
   "version": "0.0.0",
-  "description": "One-click dev environment restore for macOS (Docker/Tilt, VS Code, terminal commands, Chrome profile, background apps).",
+  "description": "One-click dev environment restore for Windows (Docker/Tilt, VS Code, terminal commands, Chrome profile, background apps).",
   "engines": {
     "node": ">=20"
   },

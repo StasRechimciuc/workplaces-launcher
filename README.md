@@ -1,8 +1,9 @@
 # Workspace Launcher
 
-One-click dev environment restore for macOS: Docker/Tilt, VS Code, terminal
+One-click dev environment restore for Windows: Docker/Tilt, VS Code, terminal
 commands, Chrome profile, and background apps — restored in order, from a
-single saved workspace config.
+single saved workspace config. (Platform roadmap: Windows v1 → Linux → macOS
+— see `claude.md`.)
 
 See `claude.md` and `docs/` for product/architecture context.
 

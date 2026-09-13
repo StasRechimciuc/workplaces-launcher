@@ -6,7 +6,7 @@
 - [ ] Define workspace config format (JSON)
 - [ ] Config holds ordered list of steps
 - [ ] Each step: tool type + params
-- [ ] macOS app reads config, runs steps in order
+- [ ] Windows app reads config, runs steps in order
 - [ ] Simple UI: workspace list + detail (already mocked)
 
 ### Step types to support
@@ -26,7 +26,7 @@
 
 ### Orchestrator logic
 - [ ] Shell out for CLI tools (Docker, git)
-- [ ] `open -a` / AppleScript for GUI apps
+- [ ] Windows GUI-app launch (`start`/ShellExecute, or per-app CLI where available) — replaces the old macOS `open -a`/AppleScript step
 - [ ] Sequence steps (wait where needed)
 - [ ] Show per-step status (success/fail)
 - [ ] Basic retry button per failed step

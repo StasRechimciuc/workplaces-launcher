@@ -13,13 +13,19 @@ ships first, Linux next, macOS last).
 
 ```
 /platform
-  index.ts          → detects OS, returns correct implementation
-  types.ts          → shared interface (launchApp, positionWindow, openTerminal, ...)
+  index.ts          → detects OS, dispatches to the right implementation
+  types.ts          → shared interface (launchApp, openInApp, openUrlInBrowserProfile)
   /macos
-    launcher.ts      → real AppleScript / `open -a` code, built during the
-                        original macOS-first pass — kept as-is, paused, not
-                        deleted. Becomes the Phase 3 implementation again.
-  /windows           → does not exist yet, added now (this is the v1 target)
+    launcher.ts      → real `open -a` code, built during the original
+                        macOS-first pass. Currently receiving interim
+                        feature work (not a reversion — see claude.md's
+                        2026-09-17 temporary note) while Windows VM access
+                        is unavailable; still becomes the Phase 3
+                        implementation once Windows and Linux both ship.
+  /windows           → built and unit-tested (the v1 target) — resolves
+                        real .exe paths via windows/app-paths.ts, avoids
+                        .cmd/cmd.exe shims; real end-to-end verification
+                        still pending VM access.
   /linux             → does not exist yet, added for Phase 2
 ```
 
@@ -38,6 +44,13 @@ a self-contained module with a consistent shape:
 
 Adding a new tool type later means adding a new module, not editing a
 growing if/else or switch statement in the orchestrator.
+
+Three of the six Tier 1 types are real today, all following this exact
+shape: `vscode-tool.ts`, `chrome-tool.ts`, `spotify-tool.ts`
+(`apps/desktop/src/main/tools/`). Docker, Terminal, and Slack remain
+unbuilt — they correctly report "no registered tool for step type X" on
+restore rather than pretending to succeed, matching the pattern the other
+three followed before they existed.
 
 ## 3. Config Schema Versioning
 

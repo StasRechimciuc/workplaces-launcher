@@ -14,9 +14,13 @@ apps/
   desktop/            Electron app (main/preload/renderer)
   vscode-extension/    Companion VS Code extension
 packages/
-  shared/              Config schema, step-result type, tool-plugin
-                        interface — shared by both apps
+  shared/              Config schema, step/tool types (types.ts),
+                        VS Code restore handoff, atomic file write —
+                        shared by both apps
 ```
+
+See `WCs/WC__project-status.md` for current build status (what's real,
+what's tested, what's next) — the canonical, up-to-date snapshot.
 
 ## Development
 

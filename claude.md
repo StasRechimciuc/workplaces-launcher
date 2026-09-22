@@ -6,6 +6,8 @@ An app that lets developers save and restore full "workspaces" with one click: p
 
 **Platform roadmap (updated 2026-09-07): Windows v1 → Linux → macOS.** Originally scoped macOS-first; reversed because macOS's AppleScript/TCC-permission surface was the harder, slower path to a validated end-to-end restore flow. Windows now ships first, end-to-end, as v1. Linux is next. macOS returns last. See "Scope Discipline" below — this is a deliberate, one-time reorder, not permission to keep reshuffling platform order later.
 
+**Temporary note (2026-09-17):** the founder has no Windows VM/virtualizer set up yet, so real end-to-end Windows testing is blocked for now (the Windows platform layer itself is built and unit-tested — see `apps/desktop/src/main/platform/windows/`). Feature work has resumed on the existing macOS platform code in the meantime, so progress isn't fully stalled. **This does not change the roadmap above** — Windows is still the v1/primary target; macOS work here is filler until a Windows VM exists, not a reversion. Remove this note once a VM is set up and Windows work resumes as primary.
+
 ## Core Pain Being Solved
 
 Devs lose 10-30+ min every session rebuilding their environment: reopening Docker, Tilt, VS Code, the right Chrome profile, retyping terminal commands (`npm run dev`, `node start`, etc). This is a personal, firsthand pain — the founder is the primary target user, which is the strongest validation signal available before external testing.
@@ -49,9 +51,12 @@ This is being built as a real, sellable SaaS product, not a throwaway prototype 
 
 ## Current Status
 
-- No prototype built yet.
-- Immediate task in progress: landing page to use as the validation/pitch asset for the ally's trusted customer base. May include early screenshots/mockups of the prototype once they exist.
-- Validation-first approach: get real signal from warm, trusted contacts (via the ally) before or alongside building — NOT cold outreach to strangers (already tried on a prior project, failed due to channel, not idea quality).
+**A working prototype now exists.** This section intentionally stays a short pointer, not a running log — `WCs/WC__project-status.md` is the single source of truth for current build status (what's real/tested/verified, known gaps, next steps); read that for the actual state and keep it, not this section, updated day to day.
+
+Summary as of the last check there: real workspace persistence + full CRUD (create/edit/delete), three working tool plugins (VS Code, Chrome, Spotify), a working Windows platform layer (unit-tested; real end-to-end verification still blocked on VM access — see the temporary note above), and a working VS Code companion extension that restores terminal commands on workspace restore.
+
+- Validation-first approach unchanged: get real signal from warm, trusted contacts (via the ally) before or alongside building — NOT cold outreach to strangers (already tried on a prior project, failed due to channel, not idea quality).
+- The landing page (the validation/pitch asset for the ally's trusted customer base) can now use real screenshots of the actual prototype instead of early mockups.
 
 ## The Pitch / Hook (for landing page and demo)
 
@@ -75,32 +80,33 @@ Recurring pattern to watch for: when a commitment starts to cost something real,
 ## Tier 1 — v1 (build now)
 
 ### Core
-- [ ] Define workspace config format (JSON)
-- [ ] Config holds ordered list of steps
-- [ ] Each step: tool type + params
-- [ ] Windows app reads config, runs steps in order
-- [ ] Simple UI: workspace list + detail (already mocked)
+- [x] Define workspace config format (JSON) — `WorkspaceConfigSchema` (`packages/shared/src/config-schema.ts`)
+- [x] Config holds ordered list of steps
+- [x] Each step: tool type + params
+- [x] App reads config, runs steps in order — `orchestrator.ts`, platform-agnostic; unit-tested on macOS/Windows both, real end-to-end manual run on Windows still pending (blocked on VM access, see claude.md's 2026-09-17 note)
+- [x] Simple UI: workspace list + detail — real, not mocked (persisted configs + create/edit/delete)
 
 ### Step types to support
-- [ ] VS Code — open folder path
-- [ ] Terminal — open pane(s), run command(s)
+- [x] VS Code — open folder path (plus optional terminal/command restore via the companion extension, below)
+- [ ] Terminal — open pane(s), run command(s) as its own standalone step type (distinct from the VS Code step's narrower terminal restore, which is scoped to that step only)
 - [ ] Docker — run compose/tilt command
-- [ ] Chrome — open profile + URLs
-- [ ] Spotify — open playlist URI
+- [x] Chrome — open profile + URLs
+- [x] Spotify — open playlist URI
 - [ ] Slack — open channel deep link
 
 ### VS Code companion extension
-- [ ] Scaffold extension (yo code)
-- [ ] Extension reads config on activation
-- [ ] Create terminal(s) via `createTerminal()`
-- [ ] Run commands via `terminal.sendText()`
-- [ ] Position terminals (editor vs panel)
+- [x] Scaffold extension (yo code)
+- [x] Extension reads config on activation — `onStartupFinished`, plus a window-refocus listener and a manual "Restore Terminals" command for the two gaps startup activation alone can't cover
+- [x] Create terminal(s) via `createTerminal()`
+- [x] Run commands via `terminal.sendText()`
+- [x] Position terminals — fixed to the editor's Panel location (`TerminalLocation.Panel`); a user-facing editor-vs-panel choice was never on the approved scope
+- Handoff is a versioned, TTL-expiring per-folder file in a shared app-data directory (`packages/shared/src/vscode-restore.ts`), not IPC — see `WCs/WC__project-status.md` for the full design writeup
 
 ### Orchestrator logic
-- [ ] Shell out for CLI tools (Docker, git)
-- [ ] Windows GUI-app launch (`start`/ShellExecute, or per-app CLI where available) — replaces the old macOS `open -a`/AppleScript step
-- [ ] Sequence steps (wait where needed)
-- [ ] Show per-step status (success/fail)
+- [ ] Shell out for CLI tools (Docker, git) — `lib/shell-exec.ts`'s `runCommand`/`runDetached` exist and are used by every platform launcher; no Docker-specific tool built yet
+- [x] Windows GUI-app launch — built as direct `.exe` resolution + spawn (`platform/windows/`), deliberately *not* `start`/ShellExecute (both route through `cmd.exe`, the same risk class as Node's CVE-2024-27980 for `.cmd`/`.bat` shims — see that file's own doc comment); replaces the old macOS `open -a`/AppleScript step
+- [x] Sequence steps (wait where needed)
+- [x] Show per-step status (success/fail)
 - [ ] Basic retry button per failed step
 
 ### Explicitly NOT in v1

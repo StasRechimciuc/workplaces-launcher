@@ -5,12 +5,11 @@ import type {
   DeleteWorkspaceResult,
   StepResult,
   UpdateWorkspaceResult,
-  WorkspaceStep,
 } from '@workspace-launcher/shared';
 import { CURRENT_WORKSPACE_CONFIG_VERSION, parseWorkspaceConfig } from '@workspace-launcher/shared';
 import { MOCK_WORKSPACES } from './mock-workspaces';
 import { runWorkspace } from '../orchestrator/orchestrator';
-import { getTool } from '../tools/registry';
+import { validateStepsWithRegisteredTools } from '../tools/validate-steps';
 import {
   deleteWorkspaceConfig,
   loadAllWorkspaceConfigs,
@@ -29,27 +28,6 @@ const MOCK_WORKSPACE_IDS = new Set(MOCK_WORKSPACES.map((ws) => ws.id));
 
 function isMockWorkspaceId(id: string): boolean {
   return MOCK_WORKSPACE_IDS.has(id);
-}
-
-/**
- * Runs each step's params through its registered tool's own validate()
- * (docs/architecture.md #2) — the second, trusted-side validation layer
- * both createWorkspace and updateWorkspace need identically. A step
- * type with no registered tool yet is intentionally allowed through
- * unvalidated, same as createWorkspace always did.
- */
-function validateStepsWithRegisteredTools(steps: WorkspaceStep[]): string | null {
-  for (const step of steps) {
-    const tool = getTool(step.type);
-    if (!tool) {
-      continue;
-    }
-    const validation = tool.validate(step.params);
-    if (!validation.valid) {
-      return `Invalid params for step type "${step.type}": ${validation.errors.join(', ')}`;
-    }
-  }
-  return null;
 }
 
 /**

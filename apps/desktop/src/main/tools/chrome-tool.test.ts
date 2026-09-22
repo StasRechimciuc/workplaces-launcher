@@ -28,11 +28,11 @@ describe('chromeTool', () => {
     it('accepts a params object with a profile and zero or more urls', () => {
       expect(chromeTool.validate({ profile: 'Work', urls: [] })).toEqual({
         valid: true,
-        errors: [],
+        data: { profile: 'Work', urls: [] },
       });
       expect(chromeTool.validate({ profile: 'Work', urls: ['https://example.com'] })).toEqual({
         valid: true,
-        errors: [],
+        data: { profile: 'Work', urls: ['https://example.com'] },
       });
     });
 
@@ -46,7 +46,7 @@ describe('chromeTool', () => {
 
     it('accepts params missing urls, defaulting to an empty array (profile-only launch)', () => {
       const result = chromeTool.validate({ profile: 'Work' });
-      expect(result).toEqual({ valid: true, errors: [] });
+      expect(result).toEqual({ valid: true, data: { profile: 'Work', urls: [] } });
     });
 
     it('rejects a urls array containing an empty string', () => {
@@ -163,6 +163,51 @@ describe('chromeTool', () => {
     it('is a successful no-op (Tier 2 not built yet)', async () => {
       const result = await chromeTool.teardown({ profile: 'Work', urls: [] });
       expect(result.success).toBe(true);
+    });
+  });
+
+  describe('detail', () => {
+    it('reports a profile-only launch with zero tabs', () => {
+      expect(chromeTool.detail?.({ profile: 'Work', urls: [] })).toBe(
+        'Opens Chrome (profile: Work).',
+      );
+    });
+
+    it('pluralizes correctly for one vs multiple tabs', () => {
+      expect(chromeTool.detail?.({ profile: 'Work', urls: ['https://a.com'] })).toBe(
+        'Opens 1 tab in Chrome (profile: Work).',
+      );
+      expect(
+        chromeTool.detail?.({ profile: 'Work', urls: ['https://a.com', 'https://b.com'] }),
+      ).toBe('Opens 2 tabs in Chrome (profile: Work).');
+    });
+
+    it('degrades gracefully when profile is missing/invalid raw input', () => {
+      // detail() takes RAW params, not validated data — must never
+      // throw on a hand-edited/legacy config that fails validate()
+      // (profile is schema-required, but that only gates run()/save).
+      expect(chromeTool.detail?.({ urls: [] })).toBe('Opens Chrome — no profile configured yet.');
+      expect(chromeTool.detail?.({})).toBe('Opens Chrome — no profile configured yet.');
+    });
+  });
+
+  describe('expand', () => {
+    it('returns Profile + Tab rows when profile is present', () => {
+      expect(chromeTool.expand?.({ profile: 'Work', urls: ['https://a.com'] })).toEqual([
+        { i: 'globe', label: 'Profile', mono: 'Work' },
+        { i: 'check', label: 'Tab', mono: 'https://a.com' },
+      ]);
+    });
+
+    it('returns just the Profile row when there are no urls', () => {
+      expect(chromeTool.expand?.({ profile: 'Work', urls: [] })).toEqual([
+        { i: 'globe', label: 'Profile', mono: 'Work' },
+      ]);
+    });
+
+    it('returns undefined when profile is missing/invalid raw input', () => {
+      expect(chromeTool.expand?.({ urls: [] })).toBeUndefined();
+      expect(chromeTool.expand?.({})).toBeUndefined();
     });
   });
 });

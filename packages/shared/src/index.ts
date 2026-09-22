@@ -1,6 +1,7 @@
 export * from './types';
 export * from './config-schema';
 export * from './step-types';
+export * from './tool-validation';
 
 // write-file-atomic.ts and vscode-restore.ts are deliberately NOT
 // re-exported here: both use real Node built-ins (node:fs, node:crypto,

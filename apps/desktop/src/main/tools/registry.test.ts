@@ -11,7 +11,7 @@ describe('tool registry', () => {
   function makeStubTool(type: string): ToolPlugin {
     return {
       type,
-      validate: () => ({ valid: true, errors: [] }),
+      validate: () => ({ valid: true, data: {} }),
       run: async () => ({ success: true, message: 'ok', durationMs: 0 }),
       teardown: async () => ({ success: true, message: 'ok', durationMs: 0 }),
     };

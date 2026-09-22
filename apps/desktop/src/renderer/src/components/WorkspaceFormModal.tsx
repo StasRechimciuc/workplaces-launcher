@@ -11,10 +11,7 @@ import { CREATE_TOOL_PRESETS, type CreateToolPreset } from '../constants';
 import { cn } from '../lib/utils';
 import { toolBadgeClasses } from '../lib/tool-colors';
 import { useIsMounted } from '../lib/useIsMounted';
-import {
-  getFirstTerminalCommands,
-  mergeFirstTerminalCommands,
-} from '../lib/vscode-terminal-params';
+import { getStepFieldsComponent } from './step-fields/registry';
 import {
   Dialog,
   DialogClose,
@@ -156,16 +153,11 @@ interface StepParamsFieldsProps {
 }
 
 /**
- * Renders the per-tool param inputs for one "Tools" row, switched on
- * preset.type. Extracted out of the row .map() (mirrors ToolPickerItem
- * above) now that there's more than one real case — vscode: one text
- * input; chrome: profile input + a multi-line urls textarea; spotify:
- * one optional text input.
- *
- * Only a row's *primary* field gets `registerPrimaryInputRef` — this is
- * what pendingFocusKeyRef's effect focuses once a preset is picked from
- * the Add-tool dropdown. A type with no input would simply never call
- * it; the focus effect's `?.focus()` is already a safe no-op then.
+ * Renders the per-tool param inputs for one "Tools" row, dispatched
+ * through step-fields/registry.ts's type-keyed lookup instead of a
+ * hand-written `if (preset.type === X)` chain — a new tool type's own
+ * fields component means adding an entry to that registry, not editing
+ * this component.
  */
 function StepParamsFields({
   preset,
@@ -173,94 +165,13 @@ function StepParamsFields({
   onChange,
   registerPrimaryInputRef,
 }: StepParamsFieldsProps): JSX.Element | null {
-  if (preset.type === 'vscode') {
-    const commands = getFirstTerminalCommands(params);
-    return (
-      <div className="flex flex-col gap-1.5">
-        <input
-          ref={registerPrimaryInputRef}
-          className="h-8 w-full rounded-sm border border-border-strong bg-bg px-2.5 text-[12.5px] text-text placeholder:text-text-faint focus:border-accent-border focus:outline-none"
-          type="text"
-          placeholder="e.g. ~/projects/client-c"
-          value={typeof params['path'] === 'string' ? params['path'] : ''}
-          onChange={(e) => {
-            onChange({ path: e.target.value });
-          }}
-        />
-        <p className="text-[11px] text-text-faint">
-          Optional — commands to run in a terminal when this workspace is restored (one per line).
-          Requires the Workspace Launcher VS Code extension.
-        </p>
-        <textarea
-          className="min-h-16 w-full resize-y rounded-sm border border-border-strong bg-bg px-2.5 py-1.5 text-[12.5px] text-text placeholder:text-text-faint focus:border-accent-border focus:outline-none"
-          placeholder={'One command per line (optional), e.g.\nnpm install\nnpm run dev'}
-          value={commands.join('\n')}
-          onChange={(e) => {
-            const nextCommands = e.target.value
-              .split('\n')
-              .map((line) => line.trim())
-              .filter((line) => line.length > 0);
-            onChange({ terminals: mergeFirstTerminalCommands(params, nextCommands) });
-          }}
-        />
-      </div>
-    );
+  const Fields = getStepFieldsComponent(preset.type);
+  if (!Fields) {
+    return null;
   }
-
-  if (preset.type === 'chrome') {
-    const urls = Array.isArray(params['urls'])
-      ? params['urls'].filter((u): u is string => typeof u === 'string')
-      : [];
-    return (
-      <div className="flex flex-col gap-1.5">
-        <input
-          ref={registerPrimaryInputRef}
-          className="h-8 w-full rounded-sm border border-border-strong bg-bg px-2.5 text-[12.5px] text-text placeholder:text-text-faint focus:border-accent-border focus:outline-none"
-          type="text"
-          placeholder="e.g. Default, Profile 1"
-          value={typeof params['profile'] === 'string' ? params['profile'] : ''}
-          onChange={(e) => {
-            onChange({ profile: e.target.value });
-          }}
-        />
-        <p className="text-[11px] text-text-faint">
-          The profile&rsquo;s on-disk directory name (e.g. &quot;Default&quot;, &quot;Profile
-          1&quot;) — not the name shown in Chrome&rsquo;s own UI.
-        </p>
-        <textarea
-          className="min-h-16 w-full resize-y rounded-sm border border-border-strong bg-bg px-2.5 py-1.5 text-[12.5px] text-text placeholder:text-text-faint focus:border-accent-border focus:outline-none"
-          placeholder={
-            'One URL per line (optional), e.g.\nhttps://example.com\nhttp://localhost:3000'
-          }
-          value={urls.join('\n')}
-          onChange={(e) => {
-            const nextUrls = e.target.value
-              .split('\n')
-              .map((line) => line.trim())
-              .filter((line) => line.length > 0);
-            onChange({ urls: nextUrls });
-          }}
-        />
-      </div>
-    );
-  }
-
-  if (preset.type === 'spotify') {
-    return (
-      <input
-        ref={registerPrimaryInputRef}
-        className="h-8 w-full rounded-sm border border-border-strong bg-bg px-2.5 text-[12.5px] text-text placeholder:text-text-faint focus:border-accent-border focus:outline-none"
-        type="text"
-        placeholder="Optional — spotify:playlist:... or https://open.spotify.com/playlist/..."
-        value={typeof params['playlist'] === 'string' ? params['playlist'] : ''}
-        onChange={(e) => {
-          onChange({ playlist: e.target.value });
-        }}
-      />
-    );
-  }
-
-  return null;
+  return (
+    <Fields params={params} onChange={onChange} registerPrimaryInputRef={registerPrimaryInputRef} />
+  );
 }
 
 export function WorkspaceFormModal({

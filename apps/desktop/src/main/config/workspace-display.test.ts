@@ -1,6 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import type { WorkspaceConfig } from '@workspace-launcher/shared';
 import { toWorkspaceDisplay } from './workspace-display';
+import { registerBuiltInTools } from '../tools';
+
+// describeStep (workspace-display.ts) now looks tools up via the real
+// registry to call their detail()/expand() methods — same setup
+// handlers.test.ts already needs for the same reason.
+beforeAll(() => {
+  registerBuiltInTools();
+});
 
 function baseConfig(steps: WorkspaceConfig['steps']): WorkspaceConfig {
   return { version: 1, id: 'ws-1', name: 'Test workspace', steps };

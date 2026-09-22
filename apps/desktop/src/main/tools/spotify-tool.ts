@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import type { StepResult, ToolPlugin, ValidationResult } from '@workspace-launcher/shared';
+import type {
+  StepResult,
+  StepDisplayRow,
+  ToolPlugin,
+  ValidationResult,
+} from '@workspace-launcher/shared';
+import { zodValidate } from '@workspace-launcher/shared';
 import { getPlatformLauncher } from '../platform';
 
 // A `spotify:` URI (e.g. "spotify:playlist:37i9dQZF1DWZeKCadgRdKQ") or an
@@ -28,12 +34,8 @@ const SPOTIFY_APP_NAME = 'Spotify';
 export const spotifyTool: ToolPlugin<SpotifyStepParams> = {
   type: 'spotify',
 
-  validate(params: unknown): ValidationResult {
-    const result = SpotifyStepParamsSchema.safeParse(params);
-    if (result.success) {
-      return { valid: true, errors: [] };
-    }
-    return { valid: false, errors: result.error.issues.map((issue) => issue.message) };
+  validate(params: unknown): ValidationResult<SpotifyStepParams> {
+    return zodValidate(SpotifyStepParamsSchema, params);
   },
 
   async run(params: SpotifyStepParams): Promise<StepResult> {
@@ -63,5 +65,24 @@ export const spotifyTool: ToolPlugin<SpotifyStepParams> = {
   async teardown(): Promise<StepResult> {
     // Tier 2 (docs/build-shell.md) — no-op for now.
     return { success: true, message: 'No teardown for Spotify steps yet.', durationMs: 0 };
+  },
+
+  // Raw-params contract (ToolPlugin.detail/expand's own doc comment) —
+  // relocated verbatim from config/workspace-display.ts's old
+  // detailForStep/expandForStep 'spotify' branches, not new logic.
+  detail(params) {
+    const playlist =
+      typeof params['playlist'] === 'string' && params['playlist'].length > 0
+        ? params['playlist']
+        : undefined;
+    return playlist ? `Opens ${playlist} in Spotify.` : 'Opens Spotify.';
+  },
+
+  expand(params): StepDisplayRow[] | undefined {
+    const playlist =
+      typeof params['playlist'] === 'string' && params['playlist'].length > 0
+        ? params['playlist']
+        : undefined;
+    return playlist ? [{ i: 'music', label: 'Playlist', mono: playlist }] : undefined;
   },
 };

@@ -41,12 +41,17 @@ describe('vscodeTool', () => {
   describe('validate', () => {
     it('accepts a params object with a non-empty path', () => {
       const result = vscodeTool.validate({ path: '/Users/me/projects/client-a' });
-      expect(result).toEqual({ valid: true, errors: [] });
+      expect(result).toEqual({
+        valid: true,
+        data: { path: '/Users/me/projects/client-a', terminals: [] },
+      });
     });
 
     it('rejects params missing path', () => {
       const result = vscodeTool.validate({});
-      expect(result.valid).toBe(false);
+      if (result.valid) {
+        throw new Error('expected validation to fail');
+      }
       expect(result.errors.length).toBeGreaterThan(0);
     });
 
@@ -61,13 +66,15 @@ describe('vscodeTool', () => {
       // folder.uri.fsPath ever will) and may open the wrong folder — see
       // lib/paths.ts's isAcceptableToolPath.
       const result = vscodeTool.validate({ path: 'my-project' });
-      expect(result.valid).toBe(false);
+      if (result.valid) {
+        throw new Error('expected validation to fail');
+      }
       expect(result.errors.join(' ')).toContain('absolute');
     });
 
     it('accepts a "~"-prefixed path', () => {
       const result = vscodeTool.validate({ path: '~/projects/client-a' });
-      expect(result).toEqual({ valid: true, errors: [] });
+      expect(result).toEqual({ valid: true, data: { path: '~/projects/client-a', terminals: [] } });
     });
 
     it('rejects non-object input', () => {
@@ -77,7 +84,10 @@ describe('vscodeTool', () => {
 
     it('accepts params missing terminals, defaulting to an empty array', () => {
       const result = vscodeTool.validate({ path: '/Users/me/projects/client-a' });
-      expect(result).toEqual({ valid: true, errors: [] });
+      expect(result).toEqual({
+        valid: true,
+        data: { path: '/Users/me/projects/client-a', terminals: [] },
+      });
     });
 
     it('accepts a valid terminals array', () => {
@@ -85,7 +95,13 @@ describe('vscodeTool', () => {
         path: '/Users/me/projects/client-a',
         terminals: [{ commands: ['npm install', 'npm run dev'] }],
       });
-      expect(result).toEqual({ valid: true, errors: [] });
+      expect(result).toEqual({
+        valid: true,
+        data: {
+          path: '/Users/me/projects/client-a',
+          terminals: [{ commands: ['npm install', 'npm run dev'] }],
+        },
+      });
     });
 
     it('rejects a terminal with an empty-string command', () => {
@@ -230,6 +246,34 @@ describe('vscodeTool', () => {
 
       expect(withTerminals.message).toContain('Restore Terminals');
       expect(withoutTerminals.message).not.toContain('Restore Terminals');
+    });
+  });
+
+  describe('detail', () => {
+    it('names the path', () => {
+      expect(vscodeTool.detail?.({ path: '~/projects/client-a' })).toBe(
+        'Opens ~/projects/client-a',
+      );
+    });
+
+    it('degrades gracefully when path is missing/invalid raw input', () => {
+      // detail() takes RAW params, not validated data — must never
+      // throw on a hand-edited/legacy config that fails validate().
+      expect(vscodeTool.detail?.({})).toBe('Opens the configured folder path.');
+      expect(vscodeTool.detail?.({ path: 42 })).toBe('Opens the configured folder path.');
+    });
+  });
+
+  describe('expand', () => {
+    it('returns a Path row when path is present', () => {
+      expect(vscodeTool.expand?.({ path: '~/projects/client-a' })).toEqual([
+        { i: 'folder', label: 'Path', mono: '~/projects/client-a' },
+      ]);
+    });
+
+    it('returns undefined when path is missing/invalid raw input', () => {
+      expect(vscodeTool.expand?.({})).toBeUndefined();
+      expect(vscodeTool.expand?.({ path: 42 })).toBeUndefined();
     });
   });
 

@@ -60,13 +60,13 @@ describe('runWorkspace', () => {
 
     const goodTool: ToolPlugin = {
       type: 'good',
-      validate: () => ({ valid: true, errors: [] }),
+      validate: () => ({ valid: true, data: {} }),
       run: async () => ({ success: true, message: 'ok', durationMs: 5 }),
       teardown: vi.fn(),
     };
     const throwingTool: ToolPlugin = {
       type: 'throws',
-      validate: () => ({ valid: true, errors: [] }),
+      validate: () => ({ valid: true, data: {} }),
       run: async () => {
         throw new Error('boom');
       },
@@ -96,7 +96,7 @@ describe('runWorkspace', () => {
 
     const instantTool: ToolPlugin = {
       type: 'instant',
-      validate: () => ({ valid: true, errors: [] }),
+      validate: () => ({ valid: true, data: {} }),
       run: async () => ({ success: true, message: 'instant', durationMs: 0 }),
       teardown: vi.fn(),
     };
@@ -112,7 +112,7 @@ describe('runWorkspace', () => {
 
     const hangingTool: ToolPlugin = {
       type: 'hangs',
-      validate: () => ({ valid: true, errors: [] }),
+      validate: () => ({ valid: true, data: {} }),
       run: () => new Promise(() => {}), // never resolves
       teardown: vi.fn(),
     };
@@ -129,13 +129,13 @@ describe('runWorkspace', () => {
 
     const goodTool: ToolPlugin = {
       type: 'good',
-      validate: () => ({ valid: true, errors: [] }),
+      validate: () => ({ valid: true, data: {} }),
       run: async () => ({ success: true, message: 'ok', durationMs: 42 }),
       teardown: vi.fn(),
     };
     const failingTool: ToolPlugin = {
       type: 'fails',
-      validate: () => ({ valid: true, errors: [] }),
+      validate: () => ({ valid: true, data: {} }),
       run: async () => ({ success: false, message: 'nope', durationMs: 7 }),
       teardown: vi.fn(),
     };
@@ -159,7 +159,7 @@ describe('runWorkspace', () => {
 
     const goodTool: ToolPlugin = {
       type: 'good',
-      validate: () => ({ valid: true, errors: [] }),
+      validate: () => ({ valid: true, data: {} }),
       run: async () => ({ success: true, message: 'ok', durationMs: 42 }),
       teardown: vi.fn(),
     };

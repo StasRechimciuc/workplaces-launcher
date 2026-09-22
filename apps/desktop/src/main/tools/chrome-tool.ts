@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import type { StepResult, ToolPlugin, ValidationResult } from '@workspace-launcher/shared';
+import type {
+  StepResult,
+  StepDisplayRow,
+  ToolPlugin,
+  ValidationResult,
+} from '@workspace-launcher/shared';
+import { zodValidate } from '@workspace-launcher/shared';
 import { getPlatformLauncher } from '../platform';
 
 const ChromeStepParamsSchema = z.object({
@@ -19,25 +25,19 @@ const CHROME_APP_NAME = 'Google Chrome';
 export const chromeTool: ToolPlugin<ChromeStepParams> = {
   type: 'chrome',
 
-  validate(params: unknown): ValidationResult {
-    const result = ChromeStepParamsSchema.safeParse(params);
-    if (result.success) {
-      return { valid: true, errors: [] };
-    }
-    return { valid: false, errors: result.error.issues.map((issue) => issue.message) };
+  validate(params: unknown): ValidationResult<ChromeStepParams> {
+    return zodValidate(ChromeStepParamsSchema, params);
   },
 
   async run(params: ChromeStepParams): Promise<StepResult> {
     const startedAt = Date.now();
     const launcher = getPlatformLauncher();
 
-    // validate()'s zod default([]) for `urls` is only used to decide
-    // pass/fail — it never writes the defaulted value back into the
-    // params that get saved to disk or the raw params the orchestrator
-    // later passes to run(). A step saved before ever touching the
-    // urls textarea is persisted as `{profile: '...'}` with no `urls`
-    // key at all, which still passes validate() (defaulting makes it
-    // valid) but would crash here on `.length` without this guard.
+    // orchestrator.ts now passes validate()'s already-defaulted `data`
+    // here, so `params.urls` is guaranteed an array on that path — this
+    // guard is redundant-in-practice for it. Kept anyway: `run()` is a
+    // public ToolPlugin method, and nothing enforces every caller
+    // (tests, any future path) routes through a zod parse first.
     const urls = Array.isArray(params.urls) ? params.urls : [];
 
     if (urls.length === 0) {
@@ -94,5 +94,38 @@ export const chromeTool: ToolPlugin<ChromeStepParams> = {
   async teardown(): Promise<StepResult> {
     // Tier 2 (docs/build-shell.md) — no-op for now.
     return { success: true, message: 'No teardown for Chrome steps yet.', durationMs: 0 };
+  },
+
+  // Raw-params contract (ToolPlugin.detail/expand's own doc comment) —
+  // relocated verbatim from config/workspace-display.ts's old
+  // detailForStep/expandForStep 'chrome' branches, not new logic. Must
+  // handle a missing `profile` gracefully (not guaranteed present —
+  // this operates on raw, possibly-invalid saved params, unlike run()).
+  detail(params) {
+    const profile = typeof params['profile'] === 'string' ? params['profile'] : undefined;
+    const urls = Array.isArray(params['urls'])
+      ? params['urls'].filter((u): u is string => typeof u === 'string')
+      : [];
+    if (!profile) {
+      return 'Opens Chrome — no profile configured yet.';
+    }
+    if (urls.length === 0) {
+      return `Opens Chrome (profile: ${profile}).`;
+    }
+    return `Opens ${urls.length} tab${urls.length === 1 ? '' : 's'} in Chrome (profile: ${profile}).`;
+  },
+
+  expand(params): StepDisplayRow[] | undefined {
+    const profile = typeof params['profile'] === 'string' ? params['profile'] : undefined;
+    if (!profile) {
+      return undefined;
+    }
+    const urls = Array.isArray(params['urls'])
+      ? params['urls'].filter((u): u is string => typeof u === 'string')
+      : [];
+    return [
+      { i: 'globe', label: 'Profile', mono: profile },
+      ...urls.map((url) => ({ i: 'check', label: 'Tab', mono: url })),
+    ];
   },
 };

@@ -1,5 +1,6 @@
 import type { WorkspaceConfig, WorkspaceStep } from '@workspace-launcher/shared';
 import { getStepTypeDefinition, type StepTypeDefinition } from '@workspace-launcher/shared';
+import { getTool } from '../tools/registry';
 import type { WorkspaceDisplay, WorkspaceToolStepDisplay } from '../../preload';
 
 // Must match src/renderer/src/lib/tool-colors.ts's TAG_DOT_CLASSES keys
@@ -23,86 +24,53 @@ function joinWithAnd(names: string[]): string {
   return `${names.slice(0, 3).join(', ')} and ${names.length - 3} more`;
 }
 
-function detailForStep(step: WorkspaceStep, def: StepTypeDefinition | undefined): string {
-  if (step.type === 'vscode') {
-    const path = typeof step.params['path'] === 'string' ? step.params['path'] : undefined;
-    return path ? `Opens ${path}` : 'Opens the configured folder path.';
-  }
-  if (step.type === 'chrome') {
-    const profile = typeof step.params['profile'] === 'string' ? step.params['profile'] : undefined;
-    const urls = Array.isArray(step.params['urls'])
-      ? step.params['urls'].filter((u): u is string => typeof u === 'string')
-      : [];
-    if (!profile) {
-      return 'Opens Chrome — no profile configured yet.';
-    }
-    if (urls.length === 0) {
-      return `Opens Chrome (profile: ${profile}).`;
-    }
-    return `Opens ${urls.length} tab${urls.length === 1 ? '' : 's'} in Chrome (profile: ${profile}).`;
-  }
-  if (step.type === 'spotify') {
-    const playlist =
-      typeof step.params['playlist'] === 'string' && step.params['playlist'].length > 0
-        ? step.params['playlist']
-        : undefined;
-    return playlist ? `Opens ${playlist} in Spotify.` : 'Opens Spotify.';
-  }
-  if (!def) {
-    return `Unknown step type "${step.type}" — no tool is registered for it.`;
-  }
-  if (!def.implemented) {
-    return `${def.name} support isn't built yet — this step will be skipped on restore.`;
-  }
-  // Reachable once a fourth Tier 1 type ships without a bespoke detail
-  // line added above — flags the gap instead of silently going stale.
-  return `Runs the ${def.name} step.`;
-}
-
 /**
- * Structured rows for a step's expandable detail panel
- * (TimelineStep.tsx) — the mock data's old `expand` arrays had these
- * (e.g. a "Path" row with the folder mono'd out); real persisted
- * configs need the same treatment or the panel renders as an empty,
- * confusing box. Returns undefined (not an empty array) when there's
- * nothing structured to show — TimelineStep.tsx only renders the
- * expand toggle at all when this is present and non-empty, so an
- * unbuilt/unconfigured step's detail text (already honest on its own)
- * doesn't get a dead expand affordance next to it.
+ * Human-readable detail line + structured expand-panel rows for one
+ * step, dispatched through the tool registry instead of a hand-written
+ * `if (step.type === X)` chain — a 4th tool type implementing
+ * `detail`/`expand` on its own registered ToolPlugin object needs zero
+ * edits here (see ToolPlugin's own doc comment in
+ * packages/shared/src/types.ts for the raw-params contract those
+ * methods must honor).
+ *
+ * The `!tool` fallback chain (unregistered/unimplemented/unknown types)
+ * is unaffected by which tool types happen to implement `detail`/
+ * `expand` — it's keyed off STEP_TYPES via `def`, not the registry.
  */
-function expandForStep(step: WorkspaceStep): WorkspaceToolStepDisplay['expand'] {
-  if (step.type === 'vscode') {
-    const path = typeof step.params['path'] === 'string' ? step.params['path'] : undefined;
-    return path ? [{ i: 'folder', label: 'Path', mono: path }] : undefined;
-  }
-  if (step.type === 'chrome') {
-    const profile = typeof step.params['profile'] === 'string' ? step.params['profile'] : undefined;
-    if (!profile) {
-      return undefined;
+function describeStep(
+  step: WorkspaceStep,
+  def: StepTypeDefinition | undefined,
+): { detail: string; expand: WorkspaceToolStepDisplay['expand'] } {
+  const tool = getTool(step.type);
+
+  if (!tool) {
+    if (!def) {
+      return {
+        detail: `Unknown step type "${step.type}" — no tool is registered for it.`,
+        expand: undefined,
+      };
     }
-    const urls = Array.isArray(step.params['urls'])
-      ? step.params['urls'].filter((u): u is string => typeof u === 'string')
-      : [];
-    return [
-      { i: 'globe', label: 'Profile', mono: profile },
-      ...urls.map((url) => ({ i: 'check', label: 'Tab', mono: url })),
-    ];
+    if (!def.implemented) {
+      return {
+        detail: `${def.name} support isn't built yet — this step will be skipped on restore.`,
+        expand: undefined,
+      };
+    }
+    // Reachable if a Tier 1 type is flipped to implemented: true in
+    // STEP_TYPES before its tool module is actually registered — a
+    // wiring bug, not a normal user-facing path.
+    return { detail: `Runs the ${def.name} step.`, expand: undefined };
   }
-  if (step.type === 'spotify') {
-    const playlist =
-      typeof step.params['playlist'] === 'string' && step.params['playlist'].length > 0
-        ? step.params['playlist']
-        : undefined;
-    return playlist ? [{ i: 'music', label: 'Playlist', mono: playlist }] : undefined;
-  }
-  // Unbuilt or unknown types have nothing structured to show —
-  // detailForStep's own text already covers it.
-  return undefined;
+
+  return {
+    detail: tool.detail?.(step.params) ?? `Runs the ${def?.name ?? step.type} step.`,
+    expand: tool.expand?.(step.params),
+  };
 }
 
 function toWorkspaceToolStepDisplay(step: WorkspaceStep): WorkspaceToolStepDisplay {
   const def = getStepTypeDefinition(step.type);
-  const expand = expandForStep(step);
+  const { detail, expand } = describeStep(step, def);
   return {
     icon: def?.icon ?? 'box',
     color: def?.color ?? 'zinc',
@@ -110,7 +78,7 @@ function toWorkspaceToolStepDisplay(step: WorkspaceStep): WorkspaceToolStepDispl
     // No real per-step timing exists before a workspace's first
     // restore — an honest placeholder beats a fabricated number.
     time: '—',
-    detail: detailForStep(step, def),
+    detail,
     // Spread conditionally, not `expand: expand`: exactOptionalPropertyTypes
     // treats an explicit `undefined` value differently from the key
     // being absent, and WorkspaceToolStepDisplay's `expand?` means "a

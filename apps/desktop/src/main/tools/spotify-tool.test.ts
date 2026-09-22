@@ -28,18 +28,21 @@ describe('spotifyTool', () => {
 
   describe('validate', () => {
     it('accepts an absent playlist', () => {
-      expect(spotifyTool.validate({})).toEqual({ valid: true, errors: [] });
+      expect(spotifyTool.validate({})).toEqual({ valid: true, data: {} });
     });
 
     it('accepts an explicit empty-string playlist (the UI\'s "left blank" value)', () => {
-      expect(spotifyTool.validate({ playlist: '' })).toEqual({ valid: true, errors: [] });
+      expect(spotifyTool.validate({ playlist: '' })).toEqual({
+        valid: true,
+        data: { playlist: '' },
+      });
     });
 
     it('accepts a spotify: URI', () => {
       expect(spotifyTool.validate({ playlist: 'spotify:playlist:37i9dQZF1DWZeKCadgRdKQ' })).toEqual(
         {
           valid: true,
-          errors: [],
+          data: { playlist: 'spotify:playlist:37i9dQZF1DWZeKCadgRdKQ' },
         },
       );
     });
@@ -49,12 +52,17 @@ describe('spotifyTool', () => {
         spotifyTool.validate({
           playlist: 'https://open.spotify.com/playlist/37i9dQZF1DWZeKCadgRdKQ',
         }),
-      ).toEqual({ valid: true, errors: [] });
+      ).toEqual({
+        valid: true,
+        data: { playlist: 'https://open.spotify.com/playlist/37i9dQZF1DWZeKCadgRdKQ' },
+      });
     });
 
     it('rejects a friendly playlist name that is not a real spotify link', () => {
       const result = spotifyTool.validate({ playlist: 'Deep Focus' });
-      expect(result.valid).toBe(false);
+      if (result.valid) {
+        throw new Error('expected validation to fail');
+      }
       expect(result.errors[0]).toContain('spotify:');
     });
 
@@ -113,6 +121,33 @@ describe('spotifyTool', () => {
     it('is a successful no-op (Tier 2 not built yet)', async () => {
       const result = await spotifyTool.teardown({});
       expect(result.success).toBe(true);
+    });
+  });
+
+  describe('detail', () => {
+    it('names the playlist when present', () => {
+      expect(spotifyTool.detail?.({ playlist: 'spotify:playlist:abc' })).toBe(
+        'Opens spotify:playlist:abc in Spotify.',
+      );
+    });
+
+    it('falls back to a generic message when playlist is absent/blank/invalid raw input', () => {
+      expect(spotifyTool.detail?.({})).toBe('Opens Spotify.');
+      expect(spotifyTool.detail?.({ playlist: '' })).toBe('Opens Spotify.');
+      expect(spotifyTool.detail?.({ playlist: 42 })).toBe('Opens Spotify.');
+    });
+  });
+
+  describe('expand', () => {
+    it('returns a Playlist row when present', () => {
+      expect(spotifyTool.expand?.({ playlist: 'spotify:playlist:abc' })).toEqual([
+        { i: 'music', label: 'Playlist', mono: 'spotify:playlist:abc' },
+      ]);
+    });
+
+    it('returns undefined when playlist is absent/blank', () => {
+      expect(spotifyTool.expand?.({})).toBeUndefined();
+      expect(spotifyTool.expand?.({ playlist: '' })).toBeUndefined();
     });
   });
 });

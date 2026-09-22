@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import type { StepResult, ToolPlugin, ValidationResult } from '@workspace-launcher/shared';
+import type {
+  StepResult,
+  StepDisplayRow,
+  ToolPlugin,
+  ValidationResult,
+} from '@workspace-launcher/shared';
+import { zodValidate } from '@workspace-launcher/shared';
 import {
   deletePendingVscodeRestore,
   writePendingVscodeRestore,
@@ -51,17 +57,18 @@ const VSCODE_APP_NAME = 'Visual Studio Code';
 export const vscodeTool: ToolPlugin<VSCodeStepParams> = {
   type: 'vscode',
 
-  validate(params: unknown): ValidationResult {
-    const result = VSCodeStepParamsSchema.safeParse(params);
-    if (result.success) {
-      return { valid: true, errors: [] };
-    }
-    return { valid: false, errors: result.error.issues.map((issue) => issue.message) };
+  validate(params: unknown): ValidationResult<VSCodeStepParams> {
+    return zodValidate(VSCodeStepParamsSchema, params);
   },
 
   async run(params: VSCodeStepParams): Promise<StepResult> {
     const startedAt = Date.now();
     const folderPath = expandHome(params.path);
+    // orchestrator.ts now passes validate()'s already-defaulted `data`
+    // here, so `params.terminals` is guaranteed an array on that path —
+    // this guard is redundant-in-practice for it. Kept anyway: `run()`
+    // is a public ToolPlugin method, and nothing enforces every caller
+    // (tests, any future path) routes through a zod parse first.
     const terminals = Array.isArray(params.terminals) ? params.terminals : [];
 
     if (terminals.length > 0) {
@@ -112,5 +119,18 @@ export const vscodeTool: ToolPlugin<VSCodeStepParams> = {
   async teardown(): Promise<StepResult> {
     // Tier 2 (docs/build-shell.md) — no-op for now.
     return { success: true, message: 'No teardown for VS Code steps yet.', durationMs: 0 };
+  },
+
+  // Raw-params contract (ToolPlugin.detail/expand's own doc comment) —
+  // relocated verbatim from config/workspace-display.ts's old
+  // detailForStep/expandForStep 'vscode' branches, not new logic.
+  detail(params) {
+    const path = typeof params['path'] === 'string' ? params['path'] : undefined;
+    return path ? `Opens ${path}` : 'Opens the configured folder path.';
+  },
+
+  expand(params): StepDisplayRow[] | undefined {
+    const path = typeof params['path'] === 'string' ? params['path'] : undefined;
+    return path ? [{ i: 'folder', label: 'Path', mono: path }] : undefined;
   },
 };

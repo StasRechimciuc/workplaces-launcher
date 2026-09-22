@@ -12,9 +12,22 @@ export interface StepResult {
   durationMs: number;
 }
 
-export interface ValidationResult {
-  valid: boolean;
-  errors: string[];
+/**
+ * Discriminated on `valid` so a successful validate() carries zod's
+ * already-parsed-and-defaulted output (`data`) forward — see
+ * tool-validation.ts's `zodValidate` and orchestrator.ts's `runStep`,
+ * which passes this `data` straight into `run()` instead of the raw,
+ * un-defaulted params. No `errors` on the success variant: nothing
+ * reads it outside the `!valid` branch.
+ */
+export type ValidationResult<TParams = unknown> =
+  { valid: true; data: TParams } | { valid: false; errors: string[] };
+
+/** One row in a step's "expand" detail panel (config/workspace-display.ts). */
+export interface StepDisplayRow {
+  i: string;
+  label: string;
+  mono: string;
 }
 
 /**
@@ -35,8 +48,24 @@ export interface RunContext {
  */
 export interface ToolPlugin<TParams = unknown> {
   readonly type: string;
-  validate(params: unknown): ValidationResult;
+  validate(params: unknown): ValidationResult<TParams>;
   run(params: TParams, ctx: RunContext): Promise<StepResult>;
   /** Reserved for Tier 2 (docs/build-shell.md) — a no-op today. */
   teardown(params: TParams): Promise<StepResult>;
+  /**
+   * Human-readable display text for this step, shown in the sidebar/
+   * detail view (config/workspace-display.ts). Optional — a type with
+   * neither is shown with a generic "Runs the X step" fallback.
+   *
+   * Takes RAW params (`Record<string, unknown>`, exactly `step.params`
+   * as saved), never validated `TParams` — this must degrade gracefully
+   * for whatever's actually on disk, including a config that fails this
+   * same tool's own `validate()` (loader.ts only validates the outer
+   * WorkspaceConfigSchema shape, not each step's params against its
+   * specific tool schema, so a hand-edited/legacy/partially-corrupted
+   * file is a real, not theoretical, input here). Never throw.
+   */
+  detail?(params: Record<string, unknown>): string;
+  /** Same raw-params contract as `detail` above. `undefined` means no expand panel. */
+  expand?(params: Record<string, unknown>): StepDisplayRow[] | undefined;
 }

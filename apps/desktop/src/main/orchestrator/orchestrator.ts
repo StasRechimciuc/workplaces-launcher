@@ -1,5 +1,6 @@
 import type { StepResult, WorkspaceConfig } from '@workspace-launcher/shared';
 import { getTool } from '../tools/registry';
+import { formatInvalidParamsError } from '../tools/validate-steps';
 import { getStepTimeoutMs, recordSuccessfulStepDuration } from './step-timing-history';
 
 /**
@@ -51,7 +52,7 @@ async function runStep(
     if (!validation.valid) {
       return {
         success: false,
-        message: `Invalid params for step type "${step.type}": ${validation.errors.join(', ')}`,
+        message: formatInvalidParamsError(step.type, validation.errors),
         durationMs: 0,
       };
     }
@@ -61,7 +62,12 @@ async function runStep(
     // actual timeout value adapts from a generous default to this
     // tool's own real historical durations.
     const timeoutMs = getStepTimeoutMs(step.type);
-    const result = await withTimeout(tool.run(step.params, { workspaceId }), timeoutMs);
+    // validation.data, not the raw step.params: this is zod's own
+    // parsed-and-defaulted output, so a tool's run() never has to
+    // re-guess whether an optional/defaulted field survived a config
+    // saved before that field existed (see each tool's own detail on
+    // why they still keep a defensive guard anyway).
+    const result = await withTimeout(tool.run(validation.data, { workspaceId }), timeoutMs);
     const durationMs =
       // Trust the tool's own reported duration unless it didn't set one
       // — a plain `||` here would wrongly override a real 0ms result,

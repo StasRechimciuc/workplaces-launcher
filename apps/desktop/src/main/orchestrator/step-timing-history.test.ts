@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_STEP_TIMEOUT_MS,
   getStepTimeoutMs,
+  MIN_ADAPTIVE_TIMEOUT_MS,
   recordSuccessfulStepDuration,
 } from './step-timing-history';
 
@@ -39,32 +40,43 @@ describe('step-timing-history', () => {
   });
 
   it('switches to average * 1.5 once the threshold is met', () => {
-    recordSuccessfulStepDuration('terminal', 1000);
-    recordSuccessfulStepDuration('terminal', 1000);
-    recordSuccessfulStepDuration('terminal', 1000);
-    // average 1000 * 1.5 buffer = 1500
-    expect(getStepTimeoutMs('terminal')).toBe(1500);
+    recordSuccessfulStepDuration('terminal', 10000);
+    recordSuccessfulStepDuration('terminal', 10000);
+    recordSuccessfulStepDuration('terminal', 10000);
+    // average 10000 * 1.5 buffer = 15000 (well above the floor, so the
+    // real multiplier logic — not the floor — is what this asserts).
+    expect(getStepTimeoutMs('terminal')).toBe(15000);
   });
 
   it('keeps only the most recent 10 samples, dropping older ones', () => {
-    recordSuccessfulStepDuration('chrome', 100); // will be dropped
+    recordSuccessfulStepDuration('chrome', 1000); // will be dropped
     for (let i = 0; i < 10; i++) {
-      recordSuccessfulStepDuration('chrome', 200);
+      recordSuccessfulStepDuration('chrome', 10000);
     }
-    // If the dropped 100ms sample were still counted, the average
-    // would be below 200 and the timeout below 300.
-    expect(getStepTimeoutMs('chrome')).toBe(300);
+    // If the dropped 1000ms sample were still counted (11 samples),
+    // the average — and therefore the timeout — would be lower than
+    // this.
+    expect(getStepTimeoutMs('chrome')).toBe(15000);
   });
 
   it('tracks separate history per tool type', () => {
-    recordSuccessfulStepDuration('slack', 10);
-    recordSuccessfulStepDuration('slack', 10);
-    recordSuccessfulStepDuration('slack', 10);
+    recordSuccessfulStepDuration('slack', 4000);
+    recordSuccessfulStepDuration('slack', 4000);
+    recordSuccessfulStepDuration('slack', 4000);
     recordSuccessfulStepDuration('spotify', 9000);
     recordSuccessfulStepDuration('spotify', 9000);
     recordSuccessfulStepDuration('spotify', 9000);
 
-    expect(getStepTimeoutMs('slack')).toBe(15);
+    expect(getStepTimeoutMs('slack')).toBe(6000);
     expect(getStepTimeoutMs('spotify')).toBe(13500);
+  });
+
+  it('never returns below the minimum floor, even for a consistently very fast tool', () => {
+    recordSuccessfulStepDuration('instant-tool', 10);
+    recordSuccessfulStepDuration('instant-tool', 10);
+    recordSuccessfulStepDuration('instant-tool', 10);
+    // Raw average * 1.5 would be 15ms — far too tight to survive
+    // ordinary scheduling jitter. The floor must win.
+    expect(getStepTimeoutMs('instant-tool')).toBe(MIN_ADAPTIVE_TIMEOUT_MS);
   });
 });

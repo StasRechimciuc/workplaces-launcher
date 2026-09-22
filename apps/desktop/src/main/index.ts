@@ -1,11 +1,18 @@
 import { join } from 'node:path';
 import { app, BrowserWindow, dialog, Menu, shell } from 'electron';
 import { electronApp, is, optimizer } from '@electron-toolkit/utils';
+import { PRODUCT_NAME } from '@workspace-launcher/shared/vscode-restore';
 import { registerIpcHandlers } from './ipc/handlers';
 import { buildAppMenu } from './menu';
 import { registerBuiltInTools } from './tools';
 
-app.setName('Workspace Launcher');
+// Must stay in sync with electron-builder.yml's productName — see
+// vscode-restore.ts's own doc comment on PRODUCT_NAME for why this
+// specific constant (not a fresh literal) is imported here: the
+// desktop app and the VS Code extension both derive their restore-
+// handoff data directory from it, and a drift between the two would
+// make that handoff silently stop working.
+app.setName(PRODUCT_NAME);
 
 // Single-instance lock: without this, launching the app a second time
 // (e.g. double-clicking the dock icon while it's already running)
@@ -18,18 +25,56 @@ if (!gotSingleInstanceLock) {
   app.quit();
 }
 
+// The renderer (adapted from mockup_design/index.html) draws its own
+// title bar — it was designed as a "floating window mockup" card, not
+// edge-to-edge OS content — so the real OS chrome must be fully
+// suppressed everywhere, or the OS draws a second, real title bar
+// around it (a real, shipped bug for one review round: `titleBarStyle`/
+// `trafficLightPosition` are macOS-only options that Electron silently
+// *ignores* on Windows/Linux rather than erroring, so this window fell
+// back to a normal native-framed window there — on Windows specifically,
+// the v1 target platform, not a corner case). `frame: false` is the
+// actual cross-platform primitive; `titleBarStyle: 'hiddenInset'` +
+// `trafficLightPosition` are a macOS-only refinement on top of it (they
+// keep the real traffic-light buttons visible and inset into the custom
+// bar, which `frame: false` alone would remove entirely — the two must
+// not both be set on darwin, `frame: false` there would just hide the
+// traffic lights the design relies on).
+const windowFrameOptions =
+  process.platform === 'darwin'
+    ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 14, y: 14 } }
+    : // `frame: false` alone (no replacement controls anywhere in the
+      // renderer) would leave Windows/Linux users with no way to
+      // close/minimize the window at all. `titleBarStyle: 'hidden'` +
+      // `titleBarOverlay` is Electron's supported cross-platform
+      // equivalent of macOS's hiddenInset: it keeps real, OS-drawn
+      // minimize/maximize/close buttons (rendered top-right, unlike
+      // macOS's top-left traffic lights — App.tsx's titlebar reserves
+      // space on the correct side per platform), just themed and
+      // positioned to sit inside the custom title bar instead of a
+      // full native one. Colors match styles.css's --color-bg-elevated
+      // (the titlebar's own background) / --color-text-muted exactly,
+      // not guessed. UNVERIFIED: no Windows/Linux machine to visually
+      // confirm this against — see WCs/WC__project-status.md.
+      {
+        titleBarStyle: 'hidden' as const,
+        titleBarOverlay: { color: '#1a1a1e', symbolColor: '#9a9aa4', height: 52 },
+      };
+
 function createMainWindow(): BrowserWindow {
   const mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
+    // claude.md: "Build and test against a minimum window width of
+    // 1200px" — this is the actual enforcement of that decision. The
+    // renderer has no responsive/narrow-viewport layout (fixed w-72
+    // sidebar + a detail pane), so letting the window shrink below
+    // this would produce a broken, unusable layout, not a degraded one.
+    minWidth: 1200,
+    minHeight: 700,
     show: false,
     autoHideMenuBar: true,
-    // The renderer (adapted from mockup_design/index.html) draws its own
-    // title bar and traffic lights — it was designed as a "floating
-    // window mockup" card, not edge-to-edge OS content. Frameless here
-    // so macOS doesn't also draw a second, real title bar around it.
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 14, y: 14 },
+    ...windowFrameOptions,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       // Security baseline (claude.md Code Quality Standard: least

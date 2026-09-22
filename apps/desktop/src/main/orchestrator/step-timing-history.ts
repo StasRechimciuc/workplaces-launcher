@@ -28,6 +28,16 @@ const MIN_SAMPLES_FOR_ADAPTIVE_TIMEOUT = 3;
 const TIMEOUT_BUFFER_MULTIPLIER = 1.5;
 
 /**
+ * Absolute floor for the adaptive timeout, regardless of how fast a
+ * tool's recent runs were. Without this, a consistently-fast tool
+ * (e.g. one that always completes in a few ms) converges on a
+ * single-digit-millisecond timeout — small enough that ordinary
+ * scheduling jitter (a GC pause, momentary disk contention) makes an
+ * otherwise-fine run look "hung" and fail it.
+ */
+export const MIN_ADAPTIVE_TIMEOUT_MS = 5000;
+
+/**
  * Generous first-run ceiling for any tool type with no history yet.
  * Real steps can legitimately take a long time (Docker/Tilt
  * cold-building several containers, a slow VPN-gated registry pull) —
@@ -54,7 +64,7 @@ export function getStepTimeoutMs(toolType: string): number {
     return DEFAULT_STEP_TIMEOUT_MS;
   }
   const average = samples.reduce((sum, ms) => sum + ms, 0) / samples.length;
-  return Math.round(average * TIMEOUT_BUFFER_MULTIPLIER);
+  return Math.max(MIN_ADAPTIVE_TIMEOUT_MS, Math.round(average * TIMEOUT_BUFFER_MULTIPLIER));
 }
 
 /**

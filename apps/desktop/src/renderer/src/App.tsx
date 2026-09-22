@@ -1,22 +1,51 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import type { WorkspaceConfig } from '@workspace-launcher/shared';
 import type { WorkspaceDisplay } from '../../preload';
 import { Icon } from './icons';
 import { Sidebar } from './components/Sidebar';
 import { Detail } from './components/Detail';
-import { CreateWorkspaceModal } from './components/CreateWorkspaceModal';
+import { WorkspaceFormModal } from './components/WorkspaceFormModal';
+import { DeleteWorkspaceConfirm } from './components/DeleteWorkspaceConfirm';
+import { resolveActiveWorkspaceId } from './lib/workspace-selection';
+
+// main/index.ts's windowFrameOptions puts the real OS window controls
+// on different sides per platform: macOS's traffic lights top-left
+// (trafficLightPosition), the Windows/Linux titleBarOverlay's
+// minimize/maximize/close cluster top-right. This custom-drawn title
+// bar must reserve space on whichever side is actually in play, or the
+// real controls render on top of — not beside — this content.
+const isDarwin = window.api.platform === 'darwin';
 
 export function App(): JSX.Element {
   const [workspaces, setWorkspaces] = useState<WorkspaceDisplay[]>([]);
   const [activeId, setActiveId] = useState('');
   const [isCreateModalOpen, setCreateModalOpen] = useState(false);
+  const [editingWorkspace, setEditingWorkspace] = useState<WorkspaceDisplay | null>(null);
+  const [deletingWorkspace, setDeletingWorkspace] = useState<WorkspaceDisplay | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  useEffect(() => {
-    window.api
+  /**
+   * Fetches the merged real+mock workspace list (see
+   * src/main/ipc/handlers.ts's listWorkspaces) and applies it to
+   * state. Shared by the initial load, "a workspace was just created/
+   * edited," and "a workspace was just deleted" — all need the same
+   * behavior, kept in one place instead of near-duplicate blocks that
+   * could drift.
+   *
+   * When `selectId` is omitted, keeps the current selection only if it
+   * still exists in the freshly loaded list, falling back to the first
+   * workspace otherwise — needed because delete can make the currently
+   * active id disappear; previously an omitted selectId always kept
+   * `current` verbatim even if it no longer existed, leaving Detail
+   * unrendered with nothing selected.
+   */
+  const refreshWorkspaces = useCallback((selectId?: string): Promise<void> => {
+    return window.api
       .listWorkspaces()
       .then((loaded) => {
         setWorkspaces(loaded);
-        setActiveId((current) => current || (loaded[0]?.id ?? ''));
+        setActiveId((current) => resolveActiveWorkspaceId(loaded, selectId ?? current));
+        setLoadError(null);
       })
       .catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
@@ -24,6 +53,10 @@ export function App(): JSX.Element {
         setLoadError(message);
       });
   }, []);
+
+  useEffect(() => {
+    void refreshWorkspaces();
+  }, [refreshWorkspaces]);
 
   const activeWorkspace = workspaces.find((ws) => ws.id === activeId);
 
@@ -34,8 +67,10 @@ export function App(): JSX.Element {
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
         {/* Reserves the space macOS's real traffic lights render into
-            — see trafficLightPosition in main/index.ts. */}
-        <div className="w-13 shrink-0" />
+            — see trafficLightPosition in main/index.ts. Not needed on
+            Windows/Linux, where the OS controls sit on the right
+            instead (below). */}
+        {isDarwin && <div className="w-13 shrink-0" />}
 
         <div className="flex shrink-0 items-center gap-1.5 text-[12.5px] whitespace-nowrap text-text-faint">
           <span>Workspace Launcher</span>
@@ -56,7 +91,12 @@ export function App(): JSX.Element {
           </span>
         </div>
 
-        <div className="w-19 shrink-0" />
+        {/* On Windows/Linux, widened to leave room for the real
+            titleBarOverlay minimize/maximize/close cluster
+            (main/index.ts) so it doesn't render on top of this content
+            — best-effort width, UNVERIFIED against a real Windows/
+            Linux window (see WCs/WC__project-status.md). */}
+        <div className={isDarwin ? 'w-19 shrink-0' : 'w-[138px] shrink-0'} />
       </div>
 
       {loadError && (
@@ -74,15 +114,46 @@ export function App(): JSX.Element {
           onNewWorkspace={() => {
             setCreateModalOpen(true);
           }}
+          onEditWorkspace={setEditingWorkspace}
+          onDeleteWorkspace={setDeletingWorkspace}
         />
 
-        {activeWorkspace && <Detail key={activeWorkspace.id} workspace={activeWorkspace} />}
+        {activeWorkspace && (
+          <Detail
+            key={activeWorkspace.id}
+            workspace={activeWorkspace}
+            onEditWorkspace={setEditingWorkspace}
+            onDeleteWorkspace={setDeletingWorkspace}
+          />
+        )}
       </div>
 
-      <CreateWorkspaceModal
-        open={isCreateModalOpen}
+      <WorkspaceFormModal
+        open={isCreateModalOpen || editingWorkspace !== null}
+        editingWorkspace={editingWorkspace}
         onClose={() => {
           setCreateModalOpen(false);
+          setEditingWorkspace(null);
+        }}
+        onSaved={(config: WorkspaceConfig) => {
+          setCreateModalOpen(false);
+          setEditingWorkspace(null);
+          void refreshWorkspaces(config.id);
+        }}
+      />
+
+      <DeleteWorkspaceConfirm
+        workspace={deletingWorkspace}
+        onClose={() => {
+          setDeletingWorkspace(null);
+        }}
+        onDeleted={(id) => {
+          // Defense-in-depth on top of DeleteWorkspaceConfirm's own
+          // close-blocking-while-deleting guard: only clear the dialog
+          // if it's still showing the workspace that was actually
+          // deleted, not whatever a later-opened dialog is showing now.
+          setDeletingWorkspace((current) => (current?.id === id ? null : current));
+          void refreshWorkspaces();
         }}
       />
     </div>

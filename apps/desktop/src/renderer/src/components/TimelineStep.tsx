@@ -18,6 +18,13 @@ export function TimelineStep({
   isOpen,
   onToggle,
 }: TimelineStepProps): JSX.Element {
+  // Nothing structured to show for this step (an unbuilt tool type, or
+  // one missing its required params) — hide the expand affordance
+  // entirely rather than let it open onto an empty box. The one-line
+  // `detail` text above already says everything there is to say for
+  // these cases.
+  const hasExpand = (tool.expand?.length ?? 0) > 0;
+
   return (
     <div className="flex gap-3.5">
       <div className="flex shrink-0 flex-col items-center">
@@ -27,7 +34,10 @@ export function TimelineStep({
         {!isLast && <div className="mt-0.5 w-px flex-1 bg-border" />}
       </div>
       <div className={cn('min-w-0 flex-1', isLast ? 'pb-0' : 'pb-5.5')}>
-        <div className="group flex cursor-pointer items-center gap-2.5" onClick={onToggle}>
+        <div
+          className={cn('group flex items-center gap-2.5', hasExpand && 'cursor-pointer')}
+          onClick={hasExpand ? onToggle : undefined}
+        >
           <span
             className={cn(
               'flex h-7 w-7 shrink-0 items-center justify-center rounded-sm text-[15px]',
@@ -40,19 +50,21 @@ export function TimelineStep({
           <span className="rounded-full border border-border bg-bg-elevated px-1.75 py-px text-[11px] text-text-faint">
             {tool.time}
           </span>
-          <span
-            className={cn(
-              'ml-auto flex shrink-0 items-center text-text-faint transition-transform duration-140',
-              isOpen && 'rotate-90',
-            )}
-          >
-            <Icon name="chevronRight" size={13} />
-          </span>
+          {hasExpand && (
+            <span
+              className={cn(
+                'ml-auto flex shrink-0 items-center text-text-faint transition-transform duration-140',
+                isOpen && 'rotate-90',
+              )}
+            >
+              <Icon name="chevronRight" size={13} />
+            </span>
+          )}
         </div>
         <p className="mt-1.25 ml-9.5 text-[12.5px] leading-[1.4] text-text-muted">{tool.detail}</p>
-        {isOpen && (
+        {hasExpand && isOpen && (
           <div className="mt-2.5 ml-9.5 flex flex-col gap-1.5 rounded-sm border border-border bg-bg-elevated px-3 py-2.5">
-            {(tool.expand ?? []).map((row, i) => (
+            {tool.expand!.map((row, i) => (
               <div className="flex items-center gap-2 text-xs text-text-muted" key={i}>
                 <Icon name={row.i} size={13} className="text-text-faint" />
                 <span>

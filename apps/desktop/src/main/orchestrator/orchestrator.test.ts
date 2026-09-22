@@ -152,4 +152,24 @@ describe('runWorkspace', () => {
     expect(recordSuccessfulStepDuration).toHaveBeenCalledTimes(1);
     expect(recordSuccessfulStepDuration).toHaveBeenCalledWith('good', 42);
   });
+
+  it('still reports the step as successful when recording its timing throws', async () => {
+    const { registerTool: register } = await import('../tools/registry');
+    const { runWorkspace: run } = await import('./orchestrator');
+
+    const goodTool: ToolPlugin = {
+      type: 'good',
+      validate: () => ({ valid: true, errors: [] }),
+      run: async () => ({ success: true, message: 'ok', durationMs: 42 }),
+      teardown: vi.fn(),
+    };
+    register(goodTool);
+    recordSuccessfulStepDuration.mockImplementationOnce(() => {
+      throw new Error('store write failed');
+    });
+
+    const results = await run(baseConfig([{ type: 'good', params: {} }]));
+
+    expect(results[0]).toMatchObject({ success: true, message: 'ok', durationMs: 42 });
+  });
 });

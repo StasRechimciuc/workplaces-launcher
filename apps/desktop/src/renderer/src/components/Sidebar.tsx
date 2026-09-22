@@ -2,12 +2,21 @@ import type { WorkspaceDisplay } from '../../../preload';
 import { Icon } from '../icons';
 import { cn } from '../lib/utils';
 import { tagDotClasses } from '../lib/tool-colors';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from './ui/dropdown-menu';
 
 interface SidebarProps {
   workspaces: WorkspaceDisplay[];
   activeId: string;
   onSelect: (id: string) => void;
   onNewWorkspace: () => void;
+  onEditWorkspace: (workspace: WorkspaceDisplay) => void;
+  onDeleteWorkspace: (workspace: WorkspaceDisplay) => void;
 }
 
 export function Sidebar({
@@ -15,6 +24,8 @@ export function Sidebar({
   activeId,
   onSelect,
   onNewWorkspace,
+  onEditWorkspace,
+  onDeleteWorkspace,
 }: SidebarProps): JSX.Element {
   return (
     <aside className="flex min-h-0 w-72 shrink-0 flex-col border-r border-border px-3 py-4">
@@ -76,9 +87,55 @@ export function Sidebar({
                 {ws.subtitle}
               </div>
             </div>
-            <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-[5px] text-text-faint opacity-0 group-hover:opacity-100 hover:bg-bg-active hover:text-text">
-              <Icon name="more" size={13} />
-            </span>
+            {ws.readOnly ? (
+              <span className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
+            ) : (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label={`Actions for ${ws.name}`}
+                    className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-[5px] text-text-faint opacity-0 group-hover:opacity-100 hover:bg-bg-active hover:text-text data-[state=open]:bg-bg-active data-[state=open]:text-text data-[state=open]:opacity-100"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                    }}
+                    onKeyDown={(e) => {
+                      // Click and keydown are separate DOM events —
+                      // stopping click propagation above doesn't stop a
+                      // keydown (Enter/Space to open this menu) from
+                      // also bubbling up to the row's own onKeyDown,
+                      // which would fire onSelect(ws.id) as an unwanted
+                      // side effect a keyboard user hitting Enter/Space
+                      // on this button never intended, unlike a mouse
+                      // click on the same button.
+                      e.stopPropagation();
+                    }}
+                  >
+                    <Icon name="more" size={13} />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent>
+                  <DropdownMenuItem
+                    onSelect={() => {
+                      onEditWorkspace(ws);
+                    }}
+                  >
+                    <Icon name="pencil" size={13} />
+                    Edit
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    variant="danger"
+                    onSelect={() => {
+                      onDeleteWorkspace(ws);
+                    }}
+                  >
+                    <Icon name="trash" size={13} />
+                    Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
           </div>
         ))}
       </div>

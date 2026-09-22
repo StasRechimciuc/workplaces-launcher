@@ -7,12 +7,12 @@ import type { WorkspaceDisplay } from '../../preload';
  * "Restore workspace" has something real to run (see
  * src/main/ipc/handlers.ts) — not just something to display.
  *
- * Only `vscode` (type: 'vscode') has a registered tool plugin so far
- * (src/main/tools/vscode-tool.ts). `docker`, `terminal`, `chrome`,
- * `slack`, and `spotify` are claude.md's approved Tier 1 step types,
- * just not built yet — restoring a workspace that includes one
- * correctly reports "no registered tool for step type X" via the
- * orchestrator, rather than pretending to succeed.
+ * `vscode`, `chrome`, and `spotify` (types: 'vscode'/'chrome'/'spotify')
+ * have registered tool plugins (src/main/tools/{vscode,chrome,spotify}-
+ * tool.ts). `docker`, `terminal`, and `slack` are claude.md's remaining
+ * approved Tier 1 step types, not built yet — restoring a workspace
+ * that includes one correctly reports "no registered tool for step
+ * type X" via the orchestrator, rather than pretending to succeed.
  *
  * `github` and `notes` (used by a couple of the mock entries below,
  * ported as-is from the original mockup) are NOT on that approved
@@ -109,7 +109,7 @@ export const MOCK_WORKSPACES: WorkspaceDisplay[] = [
         detail: 'Resumes the Deep Focus playlist',
         expand: [{ i: 'music', label: 'Playlist', mono: 'Deep Focus' }],
         type: 'spotify',
-        params: { playlist: 'Deep Focus' },
+        params: { playlist: 'spotify:playlist:37i9dQZF1DWZeKCadgRdKQ' },
       },
     ],
   },
@@ -268,7 +268,7 @@ export const MOCK_WORKSPACES: WorkspaceDisplay[] = [
         detail: 'Resumes the Deep Focus playlist',
         expand: [{ i: 'music', label: 'Playlist', mono: 'Deep Focus' }],
         type: 'spotify',
-        params: { playlist: 'Deep Focus' },
+        params: { playlist: 'spotify:playlist:37i9dQZF1DWZeKCadgRdKQ' },
       },
     ],
   },
@@ -299,7 +299,7 @@ export const MOCK_WORKSPACES: WorkspaceDisplay[] = [
         detail: 'Resumes the Instrumental focus playlist',
         expand: [{ i: 'music', label: 'Playlist', mono: 'Instrumental focus' }],
         type: 'spotify',
-        params: { playlist: 'Instrumental focus' },
+        params: { playlist: 'spotify:playlist:37i9dQZF1DX4sWSpwq3LiO' },
       },
     ],
   },

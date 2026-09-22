@@ -1,5 +1,7 @@
 import { registerTool } from './registry';
 import { vscodeTool } from './vscode-tool';
+import { chromeTool } from './chrome-tool';
+import { spotifyTool } from './spotify-tool';
 
 /**
  * Registers every built tool plugin into the registry. Call once at
@@ -9,4 +11,6 @@ import { vscodeTool } from './vscode-tool';
  */
 export function registerBuiltInTools(): void {
   registerTool(vscodeTool);
+  registerTool(chromeTool);
+  registerTool(spotifyTool);
 }

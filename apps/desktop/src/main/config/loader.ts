@@ -1,18 +1,15 @@
 import { app } from 'electron';
-import { mkdir, readdir, readFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseWorkspaceConfig, type WorkspaceConfig } from '@workspace-launcher/shared';
+import { writeFileAtomic } from '@workspace-launcher/shared/write-file-atomic';
 
 /**
  * Where workspace config JSON files actually live on disk, via
  * Electron's app.getPath('userData') — the correct, OS-appropriate
- * location on every platform (never a hardcoded path). Not yet wired
- * into the UI (see src/main/ipc/handlers.ts and
- * src/main/ipc/mock-workspaces.ts) — that wiring is Tier 1 feature
- * work. This module exists now so the config schema, validation, and
- * on-disk convention are settled before feature work builds on them.
+ * location on every platform (never a hardcoded path).
  */
-function getWorkspacesDir(): string {
+export function getWorkspacesDir(): string {
   return join(app.getPath('userData'), 'workspaces');
 }
 
@@ -73,4 +70,45 @@ export async function loadAllWorkspaceConfigs(): Promise<LoadWorkspacesResult> {
   }
 
   return { configs, errors };
+}
+
+/**
+ * Persists one workspace config to disk as `<id>.json`, creating the
+ * workspaces directory if needed. Keyed by `config.id` rather than a
+ * slugified name so: (a) renaming a workspace later never requires a
+ * file rename/migration, and (b) a future "delete workspace by id"
+ * operation is a one-line unlink(join(dir, `${id}.json`)) instead of
+ * scanning every file to find a match.
+ *
+ * Uses writeFileAtomic so a crash mid-save can never leave a
+ * truncated, unparseable config file that loadAllWorkspaceConfigs
+ * would then report as an error on every future launch.
+ */
+export async function saveWorkspaceConfig(config: WorkspaceConfig): Promise<void> {
+  const dir = getWorkspacesDir();
+  await mkdir(dir, { recursive: true });
+  const filePath = join(dir, `${config.id}.json`);
+  await writeFileAtomic(filePath, JSON.stringify(config, null, 2));
+}
+
+/**
+ * Removes `<id>.json` from the workspaces directory. Deleting an id
+ * that has no file (ENOENT) is treated as success, not an error —
+ * delete is idempotent by design: the caller's desired end state ("no
+ * saved file for this id") is already true, so surfacing an error for
+ * a file that's already gone would be a false alarm, not a bug report.
+ * Any other fs error (permissions, disk issues, EISDIR, ...) is
+ * rethrown untouched — a delete that was actually asked for and
+ * silently failed to happen must never look like success.
+ */
+export async function deleteWorkspaceConfig(id: string): Promise<void> {
+  const filePath = join(getWorkspacesDir(), `${id}.json`);
+  try {
+    await unlink(filePath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return;
+    }
+    throw err;
+  }
 }

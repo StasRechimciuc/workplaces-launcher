@@ -69,7 +69,19 @@ async function runStep(
       typeof result.durationMs === 'number' ? result.durationMs : Date.now() - startedAt;
 
     if (result.success) {
-      recordSuccessfulStepDuration(step.type, durationMs);
+      // Best-effort only: recordSuccessfulStepDuration is a synchronous
+      // electron-store write purely for future runs' adaptive timeouts
+      // (step-timing-history.ts) — it must never turn a step that
+      // actually succeeded into a reported failure just because the
+      // timing sample couldn't be persisted (e.g. a corrupted store
+      // file, a disk I/O error).
+      try {
+        recordSuccessfulStepDuration(step.type, durationMs);
+      } catch (err) {
+        console.error(
+          `Failed to record step timing for "${step.type}": ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
 
     return { ...result, durationMs };

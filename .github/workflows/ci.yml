@@ -8,7 +8,16 @@ on:
 
 jobs:
   ci:
-    runs-on: macos-latest
+    strategy:
+      matrix:
+        # windows-latest is v1's target platform and must be green
+        # unconditionally. macos-latest is kept alongside it, not
+        # dropped, because the macOS launcher is paused (Phase 3), not
+        # deleted (docs/architecture.md #1) — every test here is a
+        # mocked unit test, so running both costs little and catches a
+        # macOS regression now rather than only when Phase 3 starts.
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 

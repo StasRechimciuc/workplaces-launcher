@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadAllWorkspaceConfigs } from './loader';
+import {
+  deleteWorkspaceConfig,
+  getWorkspacesDir,
+  loadAllWorkspaceConfigs,
+  saveWorkspaceConfig,
+} from './loader';
 
 // config/loader.ts only uses app.getPath('userData') — faked with a
 // real temp directory so the rest of the test can do real file I/O
@@ -98,5 +103,87 @@ describe('loadAllWorkspaceConfigs', () => {
 
     expect(result.configs).toEqual([]);
     expect(Object.keys(result.errors)).toHaveLength(1);
+  });
+});
+
+describe('saveWorkspaceConfig', () => {
+  beforeEach(async () => {
+    testUserDataDir = await mkdtemp(join(tmpdir(), 'workspace-launcher-test-'));
+  });
+
+  afterEach(async () => {
+    await rm(testUserDataDir, { recursive: true, force: true });
+  });
+
+  it('writes a config file named after its id, loadable afterward', async () => {
+    const config = { version: 1 as const, id: 'ws-new', name: 'New workspace', steps: [] };
+    await saveWorkspaceConfig(config);
+
+    const written = await readFile(join(workspacesDir(), 'ws-new.json'), 'utf-8');
+    expect(JSON.parse(written)).toEqual(config);
+
+    const result = await loadAllWorkspaceConfigs();
+    expect(result.configs).toEqual([config]);
+  });
+
+  it('creates the workspaces directory if it does not exist yet', async () => {
+    const config = { version: 1 as const, id: 'ws-first', name: 'First', steps: [] };
+    await saveWorkspaceConfig(config);
+    expect(await readFile(join(workspacesDir(), 'ws-first.json'), 'utf-8')).toContain('ws-first');
+  });
+
+  it('overwrites an existing file for the same id', async () => {
+    const first = { version: 1 as const, id: 'ws-dup', name: 'First name', steps: [] };
+    const second = { version: 1 as const, id: 'ws-dup', name: 'Second name', steps: [] };
+    await saveWorkspaceConfig(first);
+    await saveWorkspaceConfig(second);
+
+    const written = JSON.parse(await readFile(join(workspacesDir(), 'ws-dup.json'), 'utf-8'));
+    expect(written.name).toBe('Second name');
+  });
+});
+
+describe('deleteWorkspaceConfig', () => {
+  beforeEach(async () => {
+    testUserDataDir = await mkdtemp(join(tmpdir(), 'workspace-launcher-test-'));
+  });
+
+  afterEach(async () => {
+    await rm(testUserDataDir, { recursive: true, force: true });
+  });
+
+  it('removes an existing config file', async () => {
+    const config = { version: 1 as const, id: 'ws-del', name: 'To delete', steps: [] };
+    await saveWorkspaceConfig(config);
+
+    await deleteWorkspaceConfig('ws-del');
+
+    const result = await loadAllWorkspaceConfigs();
+    expect(result.configs).toEqual([]);
+  });
+
+  it('resolves without error when the file does not exist (ENOENT)', async () => {
+    await expect(deleteWorkspaceConfig('never-existed')).resolves.toBeUndefined();
+  });
+
+  it('propagates a non-ENOENT fs error instead of treating it as success', async () => {
+    // A directory, not a file, at the expected path — unlink() on it
+    // fails with EPERM/EISDIR, not ENOENT, and must not be swallowed.
+    await mkdir(join(workspacesDir(), 'weird.json'), { recursive: true });
+    await expect(deleteWorkspaceConfig('weird')).rejects.toThrow();
+  });
+});
+
+describe('getWorkspacesDir', () => {
+  beforeEach(async () => {
+    testUserDataDir = await mkdtemp(join(tmpdir(), 'workspace-launcher-test-'));
+  });
+
+  afterEach(async () => {
+    await rm(testUserDataDir, { recursive: true, force: true });
+  });
+
+  it('returns a "workspaces" subdirectory of the userData path', () => {
+    expect(getWorkspacesDir()).toBe(join(testUserDataDir, 'workspaces'));
   });
 });

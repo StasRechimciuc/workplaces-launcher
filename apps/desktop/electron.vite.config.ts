@@ -17,5 +17,9 @@ export default defineConfig({
   },
   renderer: {
     plugins: [react(), tailwindcss()],
+    server: {
+      port: 58217,
+      strictPort: true,
+    },
   },
 });

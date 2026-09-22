@@ -6,6 +6,16 @@ directories:
 files:
   - out/**/*
   - package.json
+win:
+  target:
+    - nsis
+  # No code signing / EV cert yet — same deferral as mac's notarization
+  # below. Unsigned installers trigger SmartScreen's "Windows protected
+  # your PC" warning on first run; acceptable for internal/validation-
+  # stage builds, revisit before public distribution.
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
 mac:
   target:
     - dmg
@@ -15,4 +25,6 @@ mac:
   gatekeeperAssess: false
   # entitlements/notarization (Apple Developer account + signing
   # identity) are configured when there's an actual account to sign
-  # with — see claude.md. Not needed for local dev builds.
+  # with — see claude.md. Not needed for local dev builds. macOS
+  # packaging is paused (Phase 3), not removed — see claude.md's
+  # platform roadmap note.

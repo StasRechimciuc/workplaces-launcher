@@ -1,5 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { StepResult } from '@workspace-launcher/shared';
+import type {
+  CreateWorkspaceInput,
+  CreateWorkspaceResult,
+  DeleteWorkspaceResult,
+  StepResult,
+  UpdateWorkspaceInput,
+  UpdateWorkspaceResult,
+} from '@workspace-launcher/shared';
 
 /**
  * One step in a workspace's restore timeline, as shown in the detail
@@ -32,6 +39,15 @@ export interface WorkspaceDisplay {
   lastRestored: string;
   restoreTime: string;
   tools: WorkspaceToolStepDisplay[];
+  /**
+   * True for placeholder/mock workspaces (ipc/mock-workspaces.ts) with
+   * no backing file on disk — Edit/Delete are unavailable for these.
+   * Absent/false means a real, persisted workspace. Display-only: never
+   * sent back over IPC as update/delete input, and never trusted by the
+   * main process for the actual mutation (see handlers.ts's
+   * isMockWorkspaceId, which independently re-derives this).
+   */
+  readOnly?: boolean;
 }
 
 /**
@@ -43,9 +59,24 @@ export interface WorkspaceDisplay {
  * capability.
  */
 const api = {
+  // Plain sync property, not an IPC round trip — process.platform is
+  // available directly in a sandboxed preload script (Electron's
+  // documented subset of Node globals it still exposes there). The
+  // renderer needs this for exactly one thing: which side of the
+  // custom title bar to reserve space on for the real OS window
+  // controls (top-left traffic lights on darwin via
+  // trafficLightPosition, top-right titleBarOverlay buttons
+  // everywhere else — see main/index.ts's windowFrameOptions).
+  platform: process.platform,
   listWorkspaces: (): Promise<WorkspaceDisplay[]> => ipcRenderer.invoke('workspaces:list'),
   restoreWorkspace: (workspaceId: string): Promise<StepResult[]> =>
     ipcRenderer.invoke('workspaces:restore', workspaceId),
+  createWorkspace: (input: CreateWorkspaceInput): Promise<CreateWorkspaceResult> =>
+    ipcRenderer.invoke('workspaces:create', input),
+  updateWorkspace: (input: UpdateWorkspaceInput): Promise<UpdateWorkspaceResult> =>
+    ipcRenderer.invoke('workspaces:update', input),
+  deleteWorkspace: (workspaceId: string): Promise<DeleteWorkspaceResult> =>
+    ipcRenderer.invoke('workspaces:delete', workspaceId),
 };
 
 export type WorkspaceLauncherApi = typeof api;

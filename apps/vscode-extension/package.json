@@ -12,7 +12,7 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:workspaceLauncher.ping"
+    "onStartupFinished"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -20,6 +20,10 @@
       {
         "command": "workspaceLauncher.ping",
         "title": "Workspace Launcher: Ping"
+      },
+      {
+        "command": "workspaceLauncher.restoreTerminals",
+        "title": "Workspace Launcher: Restore Terminals"
       }
     ]
   },

@@ -1,24 +1,49 @@
-import type { StepResult, WorkspaceConfig } from '@workspace-launcher/shared';
+import type { RestoreProgressEvent, StepResult, WorkspaceConfig } from '@workspace-launcher/shared';
 import { getTool } from '../tools/registry';
 import { formatInvalidParamsError } from '../tools/validate-steps';
 import { getStepTimeoutMs, recordSuccessfulStepDuration } from './step-timing-history';
 
+export interface RunWorkspaceOptions {
+  /** Optional live per-step signal — see restore-progress.ts's own doc
+   * comment for why this is deliberately minimal. Electron-free by
+   * design: this file stays platform-agnostic and independently
+   * unit-testable, so the caller (handlers.ts) is what actually wires
+   * this into an IPC push, not anything in here. */
+  onStepProgress?: (event: RestoreProgressEvent) => void;
+}
+
 /**
  * Runs every step of a workspace config in order, via whatever tool
  * module is registered for its `type`. Sequencing details beyond plain
- * in-order execution — waiting on a prior step, per-step retry, live
- * status updates to the UI — are Tier 1 feature work (docs/build-
- * shell.md "Orchestrator logic"), not boilerplate. This stub exists to
- * prove the shape end-to-end: look up each step's tool in the registry,
- * validate its params, run it, and fail loudly (never silently) when a
- * tool type isn't registered or params are invalid — per claude.md's
- * no-silent-failure rule.
+ * in-order execution — waiting on a prior step, per-step retry — are
+ * Tier 1 feature work (docs/build-shell.md "Orchestrator logic"), not
+ * boilerplate. This stub exists to prove the shape end-to-end: look up
+ * each step's tool in the registry, validate its params, run it, and
+ * fail loudly (never silently) when a tool type isn't registered or
+ * params are invalid — per claude.md's no-silent-failure rule.
  */
-export async function runWorkspace(config: WorkspaceConfig): Promise<StepResult[]> {
+export async function runWorkspace(
+  config: WorkspaceConfig,
+  options: RunWorkspaceOptions = {},
+): Promise<StepResult[]> {
   const results: StepResult[] = [];
 
-  for (const step of config.steps) {
-    results.push(await runStep(step, config.id));
+  for (const [stepIndex, step] of config.steps.entries()) {
+    options.onStepProgress?.({
+      workspaceId: config.id,
+      stepIndex,
+      total: config.steps.length,
+      status: 'running',
+    });
+    const result = await runStep(step, config.id);
+    results.push(result);
+    options.onStepProgress?.({
+      workspaceId: config.id,
+      stepIndex,
+      total: config.steps.length,
+      status: result.success ? 'success' : 'failure',
+      message: result.message,
+    });
   }
 
   return results;

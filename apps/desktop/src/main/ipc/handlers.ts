@@ -1,13 +1,19 @@
 import { randomUUID } from 'node:crypto';
-import { ipcMain } from 'electron';
+import { BrowserWindow, ipcMain } from 'electron';
 import type {
   CreateWorkspaceResult,
   DeleteWorkspaceResult,
+  RestoreProgressEvent,
   StepResult,
   UpdateWorkspaceResult,
 } from '@workspace-launcher/shared';
-import { CURRENT_WORKSPACE_CONFIG_VERSION, parseWorkspaceConfig } from '@workspace-launcher/shared';
+import {
+  CURRENT_WORKSPACE_CONFIG_VERSION,
+  parseWorkspaceConfig,
+  RESTORE_PROGRESS_CHANNEL,
+} from '@workspace-launcher/shared';
 import { MOCK_WORKSPACES } from './mock-workspaces';
+import { startRestoreFocusSession } from './restore-focus';
 import { runWorkspace } from '../orchestrator/orchestrator';
 import { validateStepsWithRegisteredTools } from '../tools/validate-steps';
 import {
@@ -34,9 +40,15 @@ function isMockWorkspaceId(id: string): boolean {
  * Looks up a workspace by id — real saved configs first, then the mock
  * data — and runs it through the orchestrator. Kept separate from the
  * ipcMain.handle registration below so it's testable without mocking
- * Electron's ipcMain.
+ * Electron's ipcMain. `onProgress` is optional and Electron-free at
+ * this layer too (it's just threaded through to runWorkspace) — the
+ * actual IPC push and window-focus wiring live in registerIpcHandlers
+ * below, where a real Electron `event`/BrowserWindow is available.
  */
-export async function restoreWorkspace(workspaceId: unknown): Promise<StepResult[]> {
+export async function restoreWorkspace(
+  workspaceId: unknown,
+  onProgress?: (event: RestoreProgressEvent) => void,
+): Promise<StepResult[]> {
   if (typeof workspaceId !== 'string') {
     throw new Error('workspaces:restore expects a workspace id (string).');
   }
@@ -47,7 +59,7 @@ export async function restoreWorkspace(workspaceId: unknown): Promise<StepResult
   const { configs } = await loadAllWorkspaceConfigs();
   const realConfig = configs.find((config) => config.id === workspaceId);
   if (realConfig) {
-    return runWorkspace(realConfig);
+    return runWorkspace(realConfig, onProgress ? { onStepProgress: onProgress } : {});
   }
 
   const workspace = MOCK_WORKSPACES.find((ws) => ws.id === workspaceId);
@@ -71,7 +83,7 @@ export async function restoreWorkspace(workspaceId: unknown): Promise<StepResult
     throw new Error(`Built an invalid workspace config for "${workspaceId}": ${parsed.error}`);
   }
 
-  return runWorkspace(parsed.config);
+  return runWorkspace(parsed.config, onProgress ? { onStepProgress: onProgress } : {});
 }
 
 /**
@@ -238,8 +250,48 @@ export function registerIpcHandlers(): void {
     return listWorkspaces();
   });
 
-  ipcMain.handle('workspaces:restore', async (_event, workspaceId: unknown) => {
-    return restoreWorkspace(workspaceId);
+  ipcMain.handle('workspaces:restore', async (event, workspaceId: unknown) => {
+    // Derived on demand (this codebase's existing style — see
+    // second-instance's BrowserWindow.getAllWindows()[0] in main/
+    // index.ts — rather than caching a window reference in module
+    // state). event.sender is exactly the webContents that invoked
+    // this handler, so this is correct even if a future version ever
+    // has more than one window.
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const session = startRestoreFocusSession(win);
+    try {
+      return await restoreWorkspace(workspaceId, (progress) => {
+        // A destroyed webContents (the user closed the window mid-
+        // restore) makes .send() throw synchronously — that must never
+        // propagate into the orchestrator's step loop and abort a
+        // restore that's still correctly collecting results for steps
+        // that already succeeded (orchestrator.ts's own no-discard
+        // invariant).
+        try {
+          if (!event.sender.isDestroyed()) {
+            event.sender.send(RESTORE_PROGRESS_CHANNEL, progress);
+          }
+        } catch (err) {
+          console.error(
+            `Failed to send restore progress: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        // Same reasoning as the send() guard above: this callback runs
+        // directly inside orchestrator.ts's step loop with nothing else
+        // between it and runWorkspace's for-loop, so an uncaught throw
+        // here (e.g. an unexpected native error from moveTop()/focus())
+        // would abort the whole restore, not just this progress update.
+        try {
+          session.reassert(progress);
+        } catch (err) {
+          console.error(
+            `Failed to reassert restore focus: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      });
+    } finally {
+      session.end();
+    }
   });
 
   ipcMain.handle('workspaces:create', async (_event, input: unknown) => {

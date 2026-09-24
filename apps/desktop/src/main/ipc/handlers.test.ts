@@ -2,10 +2,13 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { RESTORE_PROGRESS_CHANNEL } from '@workspace-launcher/shared';
+import { ipcMain } from 'electron';
 import {
   createWorkspace,
   deleteWorkspace,
   listWorkspaces,
+  registerIpcHandlers,
   restoreWorkspace,
   updateWorkspace,
 } from './handlers';
@@ -32,9 +35,26 @@ vi.mock('../orchestrator/step-timing-history', () => ({
 // directory per test, same convention as config/loader.test.ts.
 let testUserDataDir: string;
 
+// A minimal fake BrowserWindow — just enough surface for
+// restore-focus.ts's calls (isDestroyed/isMinimized/setAlwaysOnTop/
+// moveTop/focus). Reset per test in beforeEach below.
+const mockWin = {
+  isDestroyed: vi.fn(() => false),
+  isMinimized: vi.fn(() => false),
+  setAlwaysOnTop: vi.fn(),
+  moveTop: vi.fn(),
+  focus: vi.fn(),
+};
+
 vi.mock('electron', () => ({
   app: {
     getPath: () => testUserDataDir,
+  },
+  ipcMain: {
+    handle: vi.fn(),
+  },
+  BrowserWindow: {
+    fromWebContents: vi.fn(() => mockWin),
   },
 }));
 
@@ -58,6 +78,12 @@ beforeEach(async () => {
     openInApp,
     openUrlInBrowserProfile,
   });
+  mockWin.isDestroyed.mockReset().mockReturnValue(false);
+  mockWin.isMinimized.mockReset().mockReturnValue(false);
+  mockWin.setAlwaysOnTop.mockReset();
+  mockWin.moveTop.mockReset();
+  mockWin.focus.mockReset();
+  vi.mocked(ipcMain.handle).mockReset();
 });
 
 afterEach(async () => {
@@ -107,6 +133,111 @@ describe('restoreWorkspace', () => {
     const results = await restoreWorkspace(created.config.id);
     expect(results).toHaveLength(1);
     expect(results[0]).toMatchObject({ success: true });
+  });
+
+  it('calls the optional onProgress callback for the mock-workspace path', async () => {
+    const onProgress = vi.fn();
+    await restoreWorkspace('client-a', onProgress);
+
+    // client-a has 6 steps — running + a final event per step.
+    expect(onProgress).toHaveBeenCalledTimes(12);
+    expect(onProgress).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: 'client-a', stepIndex: 0, status: 'running' }),
+    );
+  });
+
+  it('calls the optional onProgress callback for a real saved-config path too', async () => {
+    const created = await createWorkspace({
+      name: 'Real one',
+      steps: [{ type: 'vscode', params: { path: '~/real' } }],
+    });
+    if (!created.success) throw new Error('setup failed: ' + created.error);
+
+    const onProgress = vi.fn();
+    await restoreWorkspace(created.config.id, onProgress);
+
+    expect(onProgress).toHaveBeenCalledTimes(2);
+    expect(onProgress).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: created.config.id, status: 'running' }),
+    );
+  });
+});
+
+describe('registerIpcHandlers — workspaces:restore progress + focus wiring', () => {
+  function getRegisteredRestoreHandler(): (
+    event: { sender: { send: ReturnType<typeof vi.fn>; isDestroyed: ReturnType<typeof vi.fn> } },
+    workspaceId: unknown,
+  ) => Promise<unknown> {
+    registerIpcHandlers();
+    const call = vi
+      .mocked(ipcMain.handle)
+      .mock.calls.find(([channel]) => channel === 'workspaces:restore');
+    if (!call) throw new Error('workspaces:restore was never registered');
+    return call[1] as never;
+  }
+
+  it('pushes a progress event per step over the IPC channel and re-asserts window focus', async () => {
+    const handler = getRegisteredRestoreHandler();
+    const send = vi.fn();
+    const event = { sender: { send, isDestroyed: vi.fn(() => false) } };
+
+    const results = await handler(event, 'client-a');
+
+    expect(results).toHaveLength(6);
+    expect(send).toHaveBeenCalledTimes(12);
+    expect(send.mock.calls[0]).toEqual([
+      RESTORE_PROGRESS_CHANNEL,
+      expect.objectContaining({ workspaceId: 'client-a', stepIndex: 0, status: 'running' }),
+    ]);
+    // Focus lifecycle: pinned at the start, re-asserted on the first
+    // 'running' event, cleared once the whole restore has resolved.
+    expect(mockWin.setAlwaysOnTop).toHaveBeenCalledWith(true, 'floating');
+    expect(mockWin.moveTop).toHaveBeenCalled();
+    expect(mockWin.setAlwaysOnTop).toHaveBeenLastCalledWith(false);
+  });
+
+  it('never lets a destroyed webContents throw into the orchestrator, and still returns every result', async () => {
+    const handler = getRegisteredRestoreHandler();
+    const send = vi.fn(() => {
+      throw new Error('Object has been destroyed');
+    });
+    const event = { sender: { send, isDestroyed: vi.fn(() => false) } };
+
+    const results = await handler(event, 'client-a');
+
+    // The exact failure mode the adversarial review caught: a throwing
+    // send() must never abort the run or discard already-collected
+    // results.
+    expect(results).toHaveLength(6);
+  });
+
+  it('skips sending when the webContents is already destroyed, without throwing', async () => {
+    const handler = getRegisteredRestoreHandler();
+    const send = vi.fn();
+    const event = { sender: { send, isDestroyed: vi.fn(() => true) } };
+
+    const results = await handler(event, 'client-a');
+
+    expect(results).toHaveLength(6);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('never lets a throwing focus reassert abort the restore either', async () => {
+    // The first moveTop() call is startRestoreFocusSession's own
+    // begin() — let that succeed, and only fail the calls reassert()
+    // makes per step, isolating the specific try/catch this test is
+    // for from the (separately unguarded) begin() call.
+    mockWin.moveTop.mockImplementationOnce(() => {}).mockImplementation(() => {
+      throw new Error('native window error');
+    });
+    const handler = getRegisteredRestoreHandler();
+    const event = { sender: { send: vi.fn(), isDestroyed: vi.fn(() => false) } };
+
+    const results = await handler(event, 'client-a');
+
+    // Same failure class as the destroyed-webContents case above, but
+    // for restore-focus.ts's moveTop()/focus() calls instead of send().
+    expect(results).toHaveLength(6);
   });
 });
 

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { StepResult } from '@workspace-launcher/shared';
+import type { RestoreProgressEvent, StepResult } from '@workspace-launcher/shared';
 import type { WorkspaceDisplay } from '../../../preload';
 import { Icon } from '../icons';
 import { useIsMounted } from '../lib/useIsMounted';
@@ -34,6 +34,7 @@ export function Detail({
   const [isRestoring, setIsRestoring] = useState(false);
   const [restoreResults, setRestoreResults] = useState<StepResult[] | null>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<RestoreProgressEvent | null>(null);
 
   // Restoring a workspace (Docker/Tilt in particular) can take seconds.
   // If the user switches to a different workspace before it resolves,
@@ -48,6 +49,16 @@ export function Detail({
     setIsRestoring(true);
     setRestoreResults(null);
     setRestoreError(null);
+    setProgress(null);
+    // Ignoring events for a different workspace id guards against a
+    // stale/overlapping restore: switching workspaces mid-restore
+    // remounts this component (key={workspace.id} in App.tsx), but the
+    // old restore's promise — and this subscription — keeps running in
+    // the background until it resolves.
+    const unsubscribe = window.api.onRestoreProgress((event) => {
+      if (event.workspaceId !== workspace.id || !isMountedRef.current) return;
+      setProgress(event);
+    });
     try {
       const results = await window.api.restoreWorkspace(workspace.id);
       if (isMountedRef.current) {
@@ -58,8 +69,10 @@ export function Detail({
         setRestoreError(err instanceof Error ? err.message : String(err));
       }
     } finally {
+      unsubscribe();
       if (isMountedRef.current) {
         setIsRestoring(false);
+        setProgress(null);
       }
     }
   }
@@ -137,6 +150,12 @@ export function Detail({
 
       <div className="mt-6.5 mb-5.5 h-px bg-border" />
 
+      {isRestoring && progress && (
+        <p className="mb-4.5 text-[11px] font-semibold tracking-[0.07em] text-text-faint uppercase">
+          Step {progress.stepIndex + 1} of {progress.total}
+          {progress.status === 'running' ? ' — running…' : ''}
+        </p>
+      )}
       {restoreError && (
         <div className="mb-5.5 flex items-center gap-2 rounded-sm border border-border bg-bg-elevated px-2.5 py-2 text-[12.5px] text-text-muted">
           <Icon name="x" size={13} className="text-danger" />

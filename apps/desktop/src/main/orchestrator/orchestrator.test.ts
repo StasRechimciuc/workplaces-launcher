@@ -172,4 +172,56 @@ describe('runWorkspace', () => {
 
     expect(results[0]).toMatchObject({ success: true, message: 'ok', durationMs: 42 });
   });
+
+  it('calls onStepProgress with a running then a final event per step, in order', async () => {
+    const { registerTool: register } = await import('../tools/registry');
+    const { runWorkspace: run } = await import('./orchestrator');
+
+    const goodTool: ToolPlugin = {
+      type: 'good',
+      validate: () => ({ valid: true, data: {} }),
+      run: async () => ({ success: true, message: 'ok', durationMs: 5 }),
+      teardown: vi.fn(),
+    };
+    const failingTool: ToolPlugin = {
+      type: 'fails',
+      validate: () => ({ valid: true, data: {} }),
+      run: async () => ({ success: false, message: 'nope', durationMs: 5 }),
+      teardown: vi.fn(),
+    };
+    register(goodTool);
+    register(failingTool);
+
+    const onStepProgress = vi.fn();
+    await run(
+      baseConfig([
+        { type: 'good', params: {} },
+        { type: 'fails', params: {} },
+      ]),
+      { onStepProgress },
+    );
+
+    expect(onStepProgress.mock.calls.map((call) => call[0])).toEqual([
+      { workspaceId: 'ws-1', stepIndex: 0, total: 2, status: 'running' },
+      { workspaceId: 'ws-1', stepIndex: 0, total: 2, status: 'success', message: 'ok' },
+      { workspaceId: 'ws-1', stepIndex: 1, total: 2, status: 'running' },
+      { workspaceId: 'ws-1', stepIndex: 1, total: 2, status: 'failure', message: 'nope' },
+    ]);
+  });
+
+  it('never calls onStepProgress when it is omitted, and behaves exactly as before', async () => {
+    const { registerTool: register } = await import('../tools/registry');
+    const { runWorkspace: run } = await import('./orchestrator');
+
+    const goodTool: ToolPlugin = {
+      type: 'good',
+      validate: () => ({ valid: true, data: {} }),
+      run: async () => ({ success: true, message: 'ok', durationMs: 5 }),
+      teardown: vi.fn(),
+    };
+    register(goodTool);
+
+    const results = await run(baseConfig([{ type: 'good', params: {} }]));
+    expect(results).toMatchObject([{ success: true, message: 'ok' }]);
+  });
 });

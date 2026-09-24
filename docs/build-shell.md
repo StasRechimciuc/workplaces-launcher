@@ -31,6 +31,15 @@
 - [x] Sequence steps (wait where needed)
 - [x] Show per-step status (success/fail)
 - [ ] Basic retry button per failed step
+- [x] Keep the Workspace Launcher window on top / refocused during restore — minimal live "Step X of N" IPC signal (`packages/shared/src/restore-progress.ts`) + a reference-counted, self-expiring always-on-top session (`apps/desktop/src/main/ipc/restore-focus.ts`), wired through `handlers.ts`'s restore IPC handler via `BrowserWindow.fromWebContents`. Deliberately minimal — not the fuller Tier 2 "Real per-step state" UI (force-stop, manual override, rich state icons), which stays deferred. Windows/Linux focus behavior is unit-tested but not yet manually verified (still blocked on VM access).
+
+### Config UX — no manual typing (must-have before ship)
+- [ ] Replace free-text fields with real pickers across all tool steps: VS Code project path via native folder-browse dialog (+ recent list) instead of typing a path; Spotify playlist via a real account connection + picker instead of pasting a URI; Chrome profile via real on-disk profile enumeration instead of typing a folder name
+- [ ] Auto-locate each tool's real installed app path instead of relying on a hardcoded name lookup
+- Added to Tier 1 on 2026-09-24 (founder call: "people wont type each shit by themselves... its a must have for users before shipping"). Explicitly scheduled for *after* the current Edit-workspace-modal redesign ships, not blocking it. Still not started — the real tool logos shipped this session (below) are a display-only step toward the redesign, not this item.
+
+### Tool badge assets
+- [x] Real per-tool brand logos (VS Code/Spotify/Chrome/Clockify), served from `apps/desktop/src/renderer/public/tool-logos/` — see that folder's `NOTICE.md` for sources/licenses. Rendered via a new `ToolBadge` component (`apps/desktop/src/renderer/src/components/ToolBadge.tsx`) that falls back to the existing generic tinted-icon badge for any step type without a real logo (docker/terminal/slack today).
 
 ### Explicitly NOT in v1
 - No teardown of previous workspace

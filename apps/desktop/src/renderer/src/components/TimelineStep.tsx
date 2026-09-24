@@ -1,7 +1,7 @@
 import type { WorkspaceToolStepDisplay } from '../../../preload';
 import { Icon } from '../icons';
 import { cn } from '../lib/utils';
-import { toolBadgeClasses } from '../lib/tool-colors';
+import { ToolBadge } from './ToolBadge';
 
 interface TimelineStepProps {
   tool: WorkspaceToolStepDisplay;
@@ -38,14 +38,13 @@ export function TimelineStep({
           className={cn('group flex items-center gap-2.5', hasExpand && 'cursor-pointer')}
           onClick={hasExpand ? onToggle : undefined}
         >
-          <span
-            className={cn(
-              'flex h-7 w-7 shrink-0 items-center justify-center rounded-sm text-[15px]',
-              toolBadgeClasses(tool.color),
-            )}
-          >
-            <Icon name={tool.icon} size={15} />
-          </span>
+          <ToolBadge
+            type={tool.type}
+            icon={tool.icon}
+            color={tool.color}
+            size={15}
+            chipClassName="h-7 w-7 text-[15px]"
+          />
           <span className="text-[13.5px] font-medium text-text">{tool.name}</span>
           <span className="rounded-full border border-border bg-bg-elevated px-1.75 py-px text-[11px] text-text-faint">
             {tool.time}

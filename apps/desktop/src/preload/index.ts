@@ -7,6 +7,11 @@ import type {
   UpdateWorkspaceInput,
   UpdateWorkspaceResult,
 } from '@workspace-launcher/shared';
+// Deliberately NOT from the '@workspace-launcher/shared' barrel — see
+// that package's index.ts for why a value import through it would drag
+// zod into this sandboxed preload's require() and crash it silently.
+import { RESTORE_PROGRESS_CHANNEL } from '@workspace-launcher/shared/restore-progress';
+import type { RestoreProgressEvent } from '@workspace-launcher/shared/restore-progress';
 
 /**
  * One step in a workspace's restore timeline, as shown in the detail
@@ -71,6 +76,17 @@ const api = {
   listWorkspaces: (): Promise<WorkspaceDisplay[]> => ipcRenderer.invoke('workspaces:list'),
   restoreWorkspace: (workspaceId: string): Promise<StepResult[]> =>
     ipcRenderer.invoke('workspaces:restore', workspaceId),
+  // First one-directional main→renderer subscription in this codebase
+  // (no prior ipcRenderer.on precedent to follow) — returns an
+  // unsubscribe function rather than requiring the caller to manage
+  // the listener reference directly, so a component can clean up in
+  // one line the same way it already does for its other effects.
+  onRestoreProgress: (callback: (event: RestoreProgressEvent) => void): (() => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, event: RestoreProgressEvent): void =>
+      callback(event);
+    ipcRenderer.on(RESTORE_PROGRESS_CHANNEL, listener);
+    return () => ipcRenderer.removeListener(RESTORE_PROGRESS_CHANNEL, listener);
+  },
   createWorkspace: (input: CreateWorkspaceInput): Promise<CreateWorkspaceResult> =>
     ipcRenderer.invoke('workspaces:create', input),
   updateWorkspace: (input: UpdateWorkspaceInput): Promise<UpdateWorkspaceResult> =>

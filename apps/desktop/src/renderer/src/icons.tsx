@@ -1,7 +1,11 @@
 import { cn } from './lib/utils';
 
 // Minimal inline icon set (lucide-style: 24x24, stroke, round caps),
-// ported from mockup_design/index.html's ICONS map.
+// ported from mockup_design/index.html's ICONS map. One deliberate
+// exception: `dragHandle` below is filled dots (fill/no stroke), not a
+// stroke glyph — a six-dot grip reads better filled at the small sizes
+// it's used at (WorkspaceFormModal.tsx's row-index hover state) than a
+// stroked outline of the same dots would.
 const ICON_PATHS: Record<string, string> = {
   layers:
     '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
@@ -32,6 +36,8 @@ const ICON_PATHS: Record<string, string> = {
   pencil: '<path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/>',
   trash:
     '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>',
+  dragHandle:
+    '<circle cx="9" cy="6" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="6" r="1.2" fill="currentColor" stroke="none"/><circle cx="9" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="9" cy="18" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="18" r="1.2" fill="currentColor" stroke="none"/>',
 };
 
 export type IconName = keyof typeof ICON_PATHS;

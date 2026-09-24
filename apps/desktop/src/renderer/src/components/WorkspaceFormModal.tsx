@@ -8,10 +8,11 @@ import type {
 import type { WorkspaceDisplay, WorkspaceToolStepDisplay } from '../../../preload';
 import { Icon } from '../icons';
 import { CREATE_TOOL_PRESETS, type CreateToolPreset } from '../constants';
-import { cn } from '../lib/utils';
-import { toolBadgeClasses } from '../lib/tool-colors';
 import { useIsMounted } from '../lib/useIsMounted';
+import { stepRowSummary } from '../lib/step-row-summary';
+import { cn } from '../lib/utils';
 import { getStepFieldsComponent, stepFieldsHasPrimaryInput } from './step-fields/registry';
+import { ToolBadge } from './ToolBadge';
 import {
   Dialog,
   DialogClose,
@@ -37,7 +38,7 @@ interface WorkspaceFormModalProps {
 }
 
 /**
- * One row in the "Tools · runs in order added" list — a preset (icon/
+ * One row in the "Tools" list (runs in the order added) — a preset (icon/
  * color/name/type from CREATE_TOOL_PRESETS) plus whatever params the
  * user has entered for that specific row. `key` is a stable identity
  * independent of the row's position in the array: removing an earlier
@@ -125,14 +126,13 @@ function ToolPickerItem({ preset, onSelect }: ToolPickerItemProps): JSX.Element 
   return (
     <DropdownMenuItem className="flex-col items-start gap-0 py-2" onSelect={onSelect}>
       <div className="flex w-full items-center gap-2.5">
-        <span
-          className={cn(
-            'flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-[13px]',
-            toolBadgeClasses(preset.color),
-          )}
-        >
-          <Icon name={preset.icon} size={13} />
-        </span>
+        <ToolBadge
+          type={preset.type}
+          icon={preset.icon}
+          color={preset.color}
+          size={13}
+          chipClassName="h-6 w-6 text-[13px]"
+        />
         <span className="text-[12.5px] font-medium text-text">{preset.name}</span>
         {!preset.implemented && (
           <span className="ml-auto rounded-[5px] border border-border-strong px-1.25 py-0.5 text-[10px] font-semibold tracking-[0.04em] text-text-faint uppercase">
@@ -187,6 +187,15 @@ export function WorkspaceFormModal({
   );
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // Which rows show their fields expanded, keyed by CreateStepDraft.key
+  // (stable across reorders/removals, unlike an array index). Collapsed
+  // by default — both fresh defaults and an existing workspace's saved
+  // steps — since the whole point is to not force-open every row's
+  // fields just to glance at the Tools list. Only meaningful for
+  // collapsible types (stepFieldsHasPrimaryInput); a non-collapsible
+  // type's key may still end up in here (e.g. via addTool) but nothing
+  // reads it for that case.
+  const [openKeys, setOpenKeys] = useState<Set<number>>(new Set());
 
   // Populated for whichever type's row renders a primary field via
   // StepParamsFields' `registerPrimaryInputRef` prop — vscode's path,
@@ -218,6 +227,7 @@ export function WorkspaceFormModal({
     nextKeyRef.current = 0;
     setName('');
     setCreateSteps(initialDrafts(nextKeyRef));
+    setOpenKeys(new Set());
     setSaveError(null);
     setIsSaving(false);
   }, []);
@@ -238,6 +248,7 @@ export function WorkspaceFormModal({
       nextKeyRef.current = 0;
       setName(editingWorkspace.name);
       setCreateSteps(draftsFromWorkspace(editingWorkspace, nextKeyRef));
+      setOpenKeys(new Set());
       setSaveError(null);
     } else {
       resetForm();
@@ -256,8 +267,16 @@ export function WorkspaceFormModal({
   function addTool(preset: CreateToolPreset): void {
     const key = nextKeyRef.current++;
     pendingFocusKeyRef.current = key;
-    pendingFocusHasInputRef.current = stepFieldsHasPrimaryInput(preset.type);
+    const hasInput = stepFieldsHasPrimaryInput(preset.type);
+    pendingFocusHasInputRef.current = hasInput;
     setCreateSteps((steps) => [...steps, { key, preset, params: {} }]);
+    // Auto-expand a freshly-added collapsible row — otherwise its own
+    // primary input would be focused (see the effect below) while
+    // hidden behind a collapsed row, which the user would have no way
+    // to discover without already knowing to click the chevron.
+    if (hasInput) {
+      setOpenKeys((current) => new Set(current).add(key));
+    }
   }
 
   // Focuses a just-added row's input, if it has one. Runs after every
@@ -278,6 +297,24 @@ export function WorkspaceFormModal({
 
   function removeTool(key: number): void {
     setCreateSteps((steps) => steps.filter((s) => s.key !== key));
+    setOpenKeys((current) => {
+      if (!current.has(key)) return current;
+      const next = new Set(current);
+      next.delete(key);
+      return next;
+    });
+  }
+
+  function toggleOpen(key: number): void {
+    setOpenKeys((current) => {
+      const next = new Set(current);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
   }
 
   /**
@@ -343,7 +380,7 @@ export function WorkspaceFormModal({
         }
       }}
     >
-      <DialogContent showCloseButton={false}>
+      <DialogContent showCloseButton={false} className="w-190">
         <DialogHeader>
           <DialogTitle>{editingWorkspace ? 'Edit workspace' : 'New workspace'}</DialogTitle>
           <DialogClose
@@ -366,52 +403,100 @@ export function WorkspaceFormModal({
             }}
           />
 
-          <p className="mb-1.5 text-xs font-medium text-text-muted">Tools · runs in order added</p>
-          <div className="mb-3.5 flex flex-col gap-2">
-            {createSteps.map((draft) => {
+          <p className="mb-1.5 text-xs font-medium text-text-muted">Tools</p>
+          <div className="mb-3.5 flex flex-col">
+            {createSteps.map((draft, index) => {
               const { key, preset, params } = draft;
+              const isLast = index === createSteps.length - 1;
+              const collapsible = stepFieldsHasPrimaryInput(preset.type);
+              const isOpen = collapsible && openKeys.has(key);
+              const hasFields = getStepFieldsComponent(preset.type) !== undefined;
+              const subtitle = collapsible ? stepRowSummary(preset.type, params) : preset.config;
               return (
-                <div
-                  className="flex flex-col gap-2 rounded-sm border border-border bg-bg-elevated px-2.5 py-2.25"
-                  key={key}
-                >
-                  <div className="flex items-center gap-2.5">
-                    <span
-                      className={cn(
-                        'flex h-6 w-6 items-center justify-center rounded-sm text-[13px]',
-                        toolBadgeClasses(preset.color),
-                      )}
-                    >
-                      <Icon name={preset.icon} size={13} />
-                    </span>
-                    <div>
-                      <div className="text-[12.5px] font-medium text-text">{preset.name}</div>
-                      <div className="mt-px text-[11.5px] text-text-faint">{preset.config}</div>
+                <div className="flex gap-2.5" key={key}>
+                  <div className="flex shrink-0 flex-col items-center pt-0.5">
+                    <div className="group/index relative flex h-5.5 w-5.5 shrink-0 cursor-grab items-center justify-center rounded-full border border-border-strong bg-bg-elevated">
+                      <span className="text-[10.5px] font-semibold text-text-faint transition-opacity group-hover/index:opacity-0">
+                        {index + 1}
+                      </span>
+                      <span className="absolute inset-0 flex items-center justify-center text-text-muted opacity-0 transition-opacity group-hover/index:opacity-100">
+                        <Icon name="dragHandle" size={13} />
+                      </span>
                     </div>
-                    <span
-                      className="ml-auto flex h-5.5 w-5.5 shrink-0 cursor-pointer items-center justify-center rounded-[5px] text-text-faint hover:bg-bg-active hover:text-text"
-                      onClick={() => {
-                        removeTool(key);
-                      }}
-                    >
-                      <Icon name="x" size={13} />
-                    </span>
+                    {!isLast && <div className="mt-0.5 w-px flex-1 bg-border" />}
                   </div>
-
-                  <StepParamsFields
-                    preset={preset}
-                    params={params}
-                    onChange={(next) => {
-                      updateStepParams(key, next);
-                    }}
-                    registerPrimaryInputRef={(el) => {
-                      if (el) {
-                        inputRefs.current.set(key, el);
-                      } else {
-                        inputRefs.current.delete(key);
+                  <div className={cn('min-w-0 flex-1', isLast ? 'pb-0' : 'pb-3')}>
+                    <div
+                      className={cn(
+                        'flex min-h-6 items-center gap-2.25',
+                        collapsible && 'cursor-pointer',
+                      )}
+                      onClick={
+                        collapsible
+                          ? () => {
+                              toggleOpen(key);
+                            }
+                          : undefined
                       }
-                    }}
-                  />
+                    >
+                      <ToolBadge
+                        type={preset.type}
+                        icon={preset.icon}
+                        color={preset.color}
+                        size={13}
+                        chipClassName="h-6 w-6 text-[13px]"
+                      />
+                      <span className="text-[12.5px] font-medium text-text">{preset.name}</span>
+                      {subtitle && (
+                        <>
+                          <span className="text-[11.5px] text-text-faint">·</span>
+                          <span className="min-w-0 truncate text-[11.5px] text-text-faint">
+                            {subtitle}
+                          </span>
+                        </>
+                      )}
+                      <span className="ml-auto flex shrink-0 items-center gap-0.5">
+                        {collapsible && (
+                          <span
+                            className={cn(
+                              'flex h-5.5 w-5.5 items-center justify-center text-text-faint transition-transform duration-140',
+                              isOpen && 'rotate-90',
+                            )}
+                          >
+                            <Icon name="chevronRight" size={13} />
+                          </span>
+                        )}
+                        <span
+                          className="flex h-5.5 w-5.5 shrink-0 cursor-pointer items-center justify-center rounded-[5px] text-text-faint hover:bg-bg-active hover:text-text"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            removeTool(key);
+                          }}
+                        >
+                          <Icon name="x" size={13} />
+                        </span>
+                      </span>
+                    </div>
+
+                    {hasFields && (!collapsible || isOpen) && (
+                      <div className="mt-2 ml-8.5">
+                        <StepParamsFields
+                          preset={preset}
+                          params={params}
+                          onChange={(next) => {
+                            updateStepParams(key, next);
+                          }}
+                          registerPrimaryInputRef={(el) => {
+                            if (el) {
+                              inputRefs.current.set(key, el);
+                            } else {
+                              inputRefs.current.delete(key);
+                            }
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
                 </div>
               );
             })}

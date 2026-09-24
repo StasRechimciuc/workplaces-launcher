@@ -53,7 +53,11 @@ function DialogContent({
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          'fixed top-16 left-1/2 z-50 flex max-h-150 w-140 -translate-x-1/2 flex-col overflow-hidden rounded-lg border border-border-strong bg-bg shadow-[0_30px_70px_-15px_rgba(0,0,0,0.6)] focus:outline-none',
+          // True centering, not a fixed top offset — top-1/2 + -translate-y-1/2
+          // (not the old top-16) so the dialog is actually vertically
+          // centered in the window regardless of its height, instead of
+          // pinned near the top.
+          'fixed top-1/2 left-1/2 z-50 flex max-h-150 w-140 -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-border-strong bg-bg shadow-[0_30px_70px_-15px_rgba(0,0,0,0.6)] focus:outline-none',
           className,
         )}
         {...props}

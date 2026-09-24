@@ -2,12 +2,18 @@ import {
   getFirstTerminalCommands,
   mergeFirstTerminalCommands,
 } from '../../lib/vscode-terminal-params';
+import { EditableStringList } from '../EditableStringList';
 import type { StepFieldsProps } from './types';
 
 /**
- * Verbatim move of WorkspaceFormModal.tsx's old 'vscode' StepParamsFields
- * branch — no logic changes, just relocated so a new tool type's fields
- * live in their own file instead of growing one shared if-chain.
+ * Terminal commands render via EditableStringList (individual removable
+ * rows, not one multi-line textarea) — clicking "Add command" always
+ * adds an editable-but-empty row directly, rather than typing free text
+ * and having it split/parsed. An in-progress empty row is a normal,
+ * valid intermediate UI state; it only surfaces as this tool's own
+ * "each command must be a non-empty string" save-time validation error
+ * if the user tries to save before filling it in or removing it — same
+ * as any other required field in this form, not a special case.
  */
 export function VscodeFields({
   params,
@@ -15,6 +21,7 @@ export function VscodeFields({
   registerPrimaryInputRef,
 }: StepFieldsProps): JSX.Element {
   const commands = getFirstTerminalCommands(params);
+
   return (
     <div className="flex flex-col gap-1.5">
       <input
@@ -28,20 +35,18 @@ export function VscodeFields({
         }}
       />
       <p className="text-[11px] text-text-faint">
-        Optional — commands to run in a terminal when this workspace is restored (one per line).
-        Requires the Workspace Launcher VS Code extension.
+        Optional — commands to run in a terminal when this workspace is restored. Requires the
+        Workspace Launcher VS Code extension.
       </p>
-      <textarea
-        className="min-h-16 w-full resize-y rounded-sm border border-border-strong bg-bg px-2.5 py-1.5 text-[12.5px] text-text placeholder:text-text-faint focus:border-accent-border focus:outline-none"
-        placeholder={'One command per line (optional), e.g.\nnpm install\nnpm run dev'}
-        value={commands.join('\n')}
-        onChange={(e) => {
-          const nextCommands = e.target.value
-            .split('\n')
-            .map((line) => line.trim())
-            .filter((line) => line.length > 0);
-          onChange({ terminals: mergeFirstTerminalCommands(params, nextCommands) });
+      <EditableStringList
+        values={commands}
+        onChange={(next) => {
+          onChange({ terminals: mergeFirstTerminalCommands(params, next) });
         }}
+        placeholder="e.g. npm run dev"
+        addLabel="Add command"
+        removeAriaLabel="Remove command"
+        inputClassName="font-mono text-[12px]"
       />
     </div>
   );

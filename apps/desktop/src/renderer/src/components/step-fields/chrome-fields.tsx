@@ -1,8 +1,12 @@
+import { EditableStringList } from '../EditableStringList';
 import type { StepFieldsProps } from './types';
 
 /**
- * Verbatim move of WorkspaceFormModal.tsx's old 'chrome' StepParamsFields
- * branch — no logic changes, just relocated.
+ * URLs render via EditableStringList — same reasoning as
+ * vscode-fields.tsx's terminal commands: an in-progress empty row is a
+ * normal editing state, only surfaced as this tool's own "each url must
+ * be a non-empty string" save-time validation error if left blank, not
+ * a special case this component needs to handle itself.
  */
 export function ChromeFields({
   params,
@@ -12,6 +16,7 @@ export function ChromeFields({
   const urls = Array.isArray(params['urls'])
     ? params['urls'].filter((u): u is string => typeof u === 'string')
     : [];
+
   return (
     <div className="flex flex-col gap-1.5">
       <input
@@ -28,19 +33,14 @@ export function ChromeFields({
         The profile&rsquo;s on-disk directory name (e.g. &quot;Default&quot;, &quot;Profile 1&quot;)
         — not the name shown in Chrome&rsquo;s own UI.
       </p>
-      <textarea
-        className="min-h-16 w-full resize-y rounded-sm border border-border-strong bg-bg px-2.5 py-1.5 text-[12.5px] text-text placeholder:text-text-faint focus:border-accent-border focus:outline-none"
-        placeholder={
-          'One URL per line (optional), e.g.\nhttps://example.com\nhttp://localhost:3000'
-        }
-        value={urls.join('\n')}
-        onChange={(e) => {
-          const nextUrls = e.target.value
-            .split('\n')
-            .map((line) => line.trim())
-            .filter((line) => line.length > 0);
-          onChange({ urls: nextUrls });
+      <EditableStringList
+        values={urls}
+        onChange={(next) => {
+          onChange({ urls: next });
         }}
+        placeholder="e.g. https://example.com"
+        addLabel="Add URL"
+        removeAriaLabel="Remove URL"
       />
     </div>
   );

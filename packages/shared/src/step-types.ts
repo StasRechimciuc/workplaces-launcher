@@ -71,6 +71,19 @@ export const STEP_TYPES: readonly StepTypeDefinition[] = [
     configHint: 'Playlist',
     implemented: true,
   },
+  // Not on claude.md's original Tier 1 list — added after founder
+  // decision, deliberately scoped to the simplest version (launch
+  // only, no target/deep-link): Clockify has no confirmed URI scheme,
+  // and a bigger API-key/timer-auto-start version was researched and
+  // explicitly descoped.
+  {
+    type: 'clockify',
+    name: 'Clockify',
+    icon: 'clock',
+    color: 'amber',
+    configHint: 'No configuration needed',
+    implemented: true,
+  },
 ];
 
 const STEP_TYPES_BY_TYPE: ReadonlyMap<string, StepTypeDefinition> = new Map(

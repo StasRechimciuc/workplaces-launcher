@@ -11,7 +11,7 @@ import { CREATE_TOOL_PRESETS, type CreateToolPreset } from '../constants';
 import { cn } from '../lib/utils';
 import { toolBadgeClasses } from '../lib/tool-colors';
 import { useIsMounted } from '../lib/useIsMounted';
-import { getStepFieldsComponent } from './step-fields/registry';
+import { getStepFieldsComponent, stepFieldsHasPrimaryInput } from './step-fields/registry';
 import {
   Dialog,
   DialogClose,
@@ -201,9 +201,11 @@ export function WorkspaceFormModal({
   const pendingFocusKeyRef = useRef<number | null>(null);
 
   // Whether the row addTool is about to add will actually register a
-  // primary input ref — every implemented type (vscode/chrome/spotify)
-  // does, Docker/Terminal/Slack don't (StepParamsFields returns null
-  // for them). Read by the Add-tool dropdown's onCloseAutoFocus below.
+  // primary input ref — driven by step-fields/registry.ts's own
+  // `hasPrimaryInput` per type, not `preset.implemented`: an
+  // implemented type can still have no input (e.g. Clockify, which
+  // has nothing to configure). Read by the Add-tool dropdown's
+  // onCloseAutoFocus below.
   const pendingFocusHasInputRef = useRef(false);
 
   // Save is async (window.api.createWorkspace/updateWorkspace is an IPC
@@ -254,7 +256,7 @@ export function WorkspaceFormModal({
   function addTool(preset: CreateToolPreset): void {
     const key = nextKeyRef.current++;
     pendingFocusKeyRef.current = key;
-    pendingFocusHasInputRef.current = preset.implemented;
+    pendingFocusHasInputRef.current = stepFieldsHasPrimaryInput(preset.type);
     setCreateSteps((steps) => [...steps, { key, preset, params: {} }]);
   }
 
@@ -437,14 +439,17 @@ export function WorkspaceFormModal({
                 // pendingFocusKeyRef effect's own focus() call.
                 //
                 // Only suppressed when the just-picked type actually
-                // has a primary input to hand focus to instead
-                // (implemented types only) — for an unimplemented type
+                // has a primary input to hand focus to instead (types
+                // whose fields component actually registers an input —
+                // see step-fields/registry.ts's hasPrimaryInput). For a
+                // type with no input at all — an unimplemented type
                 // (Docker/Terminal/Slack, selectable but StepParamsFields
-                // renders no input for them), there's nothing for that
-                // effect to focus, so letting Radix's default refocus
-                // run keeps focus on a real, visible element instead of
-                // it silently falling through to <body> and breaking
-                // the next Tab press.
+                // renders no input for them) or an implemented-but-
+                // fieldless one (Clockify) — there's nothing for the
+                // pendingFocusKeyRef effect to focus, so letting Radix's
+                // default refocus run keeps focus on a real, visible
+                // element instead of it silently falling through to
+                // <body> and breaking the next Tab press.
                 if (pendingFocusHasInputRef.current) {
                   e.preventDefault();
                 }

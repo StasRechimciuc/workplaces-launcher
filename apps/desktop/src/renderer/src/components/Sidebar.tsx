@@ -1,7 +1,9 @@
+import { useState } from 'react';
 import type { WorkspaceDisplay } from '../../../preload';
 import { Icon } from '../icons';
 import { cn } from '../lib/utils';
 import { tagDotClasses } from '../lib/tool-colors';
+import { getStoredTheme, setStoredTheme, type Theme } from '../lib/theme';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -27,6 +29,18 @@ export function Sidebar({
   onEditWorkspace,
   onDeleteWorkspace,
 }: SidebarProps): JSX.Element {
+  // Seeded from localStorage, not a hardcoded default — theme-
+  // bootstrap.js (index.html) already applied the stored theme to the
+  // DOM before React ever mounted (avoids a flash of the wrong theme
+  // on launch), so this just needs to agree with what's already there.
+  const [theme, setTheme] = useState<Theme>(() => getStoredTheme());
+
+  function toggleTheme(): void {
+    const next: Theme = theme === 'dark' ? 'light' : 'dark';
+    setStoredTheme(next);
+    setTheme(next);
+  }
+
   return (
     <aside className="flex min-h-0 w-72 shrink-0 flex-col border-r border-border px-3 py-4">
       <div className="mb-3.5 flex items-center gap-2.25 px-1.5 pt-0.5 pb-1">
@@ -75,12 +89,7 @@ export function Sidebar({
           >
             <span className={cn('mt-1.25 h-2 w-2 shrink-0 rounded-full', tagDotClasses(ws.tag))} />
             <div className="min-w-0 flex-1">
-              <div
-                className={cn(
-                  'overflow-hidden text-[13px] font-medium text-ellipsis whitespace-nowrap',
-                  ws.id === activeId ? 'text-white' : 'text-text',
-                )}
-              >
+              <div className="overflow-hidden text-[13px] font-medium text-ellipsis whitespace-nowrap text-text">
                 {ws.name}
               </div>
               <div className="mt-0.5 overflow-hidden text-[11.5px] text-ellipsis whitespace-nowrap text-text-faint">
@@ -141,12 +150,18 @@ export function Sidebar({
       </div>
 
       <div className="mt-1.5 shrink-0 border-t border-border pt-2.5">
+        {/* Was a dead "Settings" button (no onClick, nothing else in
+            the app needs a settings surface yet) — repurposed as the
+            one real preference this app has: light/dark. A proper
+            Settings surface can absorb this control later if more
+            preferences show up; splitting a single toggle into its own
+            page now would be the half-finished kind of thing. */}
         <button
-          className="flex w-full items-center gap-2.25 rounded-md px-2.5 py-2 text-left text-[12.5px] text-text-muted hover:bg-bg-hover hover:text-text"
+          className="flex items-center gap-2.25 rounded-md px-2.5 py-2 text-left text-[12.5px] text-text-muted hover:bg-bg-hover hover:text-text"
           type="button"
+          onClick={toggleTheme}
         >
-          <Icon name="settings" size={15} />
-          Settings
+          <Icon name={theme === 'dark' ? 'moon' : 'sun'} size={15} />
         </button>
       </div>
     </aside>

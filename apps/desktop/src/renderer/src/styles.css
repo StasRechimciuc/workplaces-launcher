@@ -23,6 +23,10 @@
   --color-accent-border: rgba(99, 102, 241, 0.4);
   --color-success: #4ade80;
   --color-danger: #f87171;
+  /* Not a Tailwind-utility-driven value — the ::-webkit-scrollbar-thumb
+     rule below references this directly, since there's no className to
+     attach a bg-* utility to a pseudo-element. */
+  --color-scrollbar-thumb: rgba(255, 255, 255, 0.1);
 
   /* Per-tool badge colors (VS Code, Docker, Terminal, ...) — a fixed,
      known set keyed by the `color` string on workspace/tool data. Each
@@ -66,11 +70,64 @@
  */
 
 :root {
-  /* This app is dark-only (no light theme exists) — without this,
-     Chromium defaults to light, and native controls (text selection,
-     autofill, an eventual date picker) render light-mode chrome inside
-     an otherwise all-dark UI. */
+  /* Dark is the default/only theme this app has ever shipped — no
+     attribute means dark, same as before this file gained a light
+     variant. Without this, Chromium defaults to light, and native
+     controls (text selection, autofill, an eventual date picker) would
+     render light-mode chrome inside an otherwise dark UI. */
   color-scheme: dark;
+}
+
+/*
+ * Light theme — overrides the @theme block's tokens above by redefining
+ * the same CSS custom properties under this selector. Every component
+ * is already styled through Tailwind utilities that reference these
+ * variables (bg-bg, text-text, border-border, ...), so this is the only
+ * place a component needs touching to support both themes — no
+ * per-component light/dark branching anywhere else.
+ *
+ * Applied via a `data-theme="light"` attribute on <html>, toggled from
+ * Sidebar.tsx's theme control (see lib/theme.ts) and set before first
+ * paint by theme-bootstrap.js (a plain same-origin script, not an
+ * inline one — this app's CSP is script-src 'self' with no
+ * 'unsafe-inline', so an inline bootstrap script would be silently
+ * blocked and never run).
+ *
+ * Known gap, not fixed here: the Windows/Linux custom title bar's
+ * native overlay buttons (main/index.ts's titleBarOverlay) are
+ * main-process state, set once at window creation — they don't read
+ * this CSS at all and stay dark-styled regardless of in-app theme
+ * until that's separately wired via IPC. Cosmetic only (the content
+ * area itself is correct); deliberately out of scope for this pass.
+ *
+ * Tool-badge colors (--color-tool-* and --color-tag-*) are NOT redefined
+ * here — each is a saturated foreground paired with a low-opacity
+ * "-soft" tint background, which stays legible against either a light
+ * or dark page background by construction, the same reason tinted
+ * badge systems are commonly designed this way.
+ */
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --color-bg-page: #f0f0f2;
+  --color-bg: #ffffff;
+  --color-bg-elevated: #f5f5f7;
+  --color-bg-hover: #ececef;
+  --color-bg-active: #e4e4e8;
+  --color-border: rgba(0, 0, 0, 0.08);
+  --color-border-strong: rgba(0, 0, 0, 0.14);
+  --color-text: #1a1a1e;
+  --color-text-muted: #5f5f68;
+  --color-text-faint: #8d8d96;
+  --color-accent-soft: rgba(99, 102, 241, 0.12);
+  --color-accent-border: rgba(99, 102, 241, 0.35);
+  /* Darkened from the dark-theme values (#4ade80/#f87171) — those are
+     tuned for contrast against a near-black page background and read
+     as low-contrast/washed-out on white. --color-accent/-hover are
+     unchanged; the indigo already has enough contrast on both. */
+  --color-success: #16a34a;
+  --color-danger: #dc2626;
+  --color-scrollbar-thumb: rgba(0, 0, 0, 0.14);
 }
 
 html,
@@ -95,7 +152,7 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--color-scrollbar-thumb);
   border-radius: 999px;
   border: 2px solid transparent;
   background-clip: content-box;

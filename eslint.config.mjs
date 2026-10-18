@@ -36,6 +36,17 @@ export default tseslint.config(
     },
   },
   {
+    // Plain browser scripts referenced directly from renderer/index.html
+    // (not bundled/imported by any TS module) — theme-bootstrap.js is
+    // the one example: it has to run before React/Vite's module graph
+    // loads, so it can't be a .ts file picked up by the TS-aware config
+    // above (which is what otherwise supplies DOM globals here).
+    files: ['apps/desktop/src/renderer/**/*.js'],
+    languageOptions: {
+      globals: globals.browser,
+    },
+  },
+  {
     // React renderer code only — rules-of-hooks/exhaustive-deps and the
     // Vite-HMR "only export components" rule don't apply to main/
     // preload/shared, which have no React.

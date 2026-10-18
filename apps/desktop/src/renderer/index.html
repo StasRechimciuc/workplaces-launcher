@@ -8,6 +8,10 @@
       content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';"
     />
     <title>Workspace Launcher</title>
+    <!-- Non-module, runs synchronously before anything else parses —
+         applies the persisted theme (theme-bootstrap.js) before first
+         paint, so there's no flash of the wrong theme on launch. -->
+    <script src="./theme-bootstrap.js"></script>
   </head>
   <body>
     <div id="root"></div>

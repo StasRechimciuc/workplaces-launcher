@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { BrowserWindow, dialog, ipcMain } from 'electron';
 import type {
+  ChromeListProfilesResult,
   CreateWorkspaceResult,
   DeleteWorkspaceResult,
   RestoreProgressEvent,
@@ -26,6 +27,7 @@ import { toWorkspaceDisplay } from '../config/workspace-display';
 import * as spotifyAuth from '../spotify/auth';
 import { SpotifyReauthRequiredError } from '../spotify/auth';
 import { listPlaylists as listSpotifyPlaylists } from '../spotify/playlists';
+import { listChromeProfiles } from '../platform/chrome-profiles';
 import type { WorkspaceDisplay } from '../../preload';
 
 // The single source of truth for "is this id a placeholder, not a real
@@ -341,6 +343,14 @@ export function registerIpcHandlers(): void {
       if (err instanceof SpotifyReauthRequiredError) {
         return { success: false, error: 'reauth-required' };
       }
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  ipcMain.handle('chrome:listProfiles', async (): Promise<ChromeListProfilesResult> => {
+    try {
+      return { success: true, profiles: await listChromeProfiles() };
+    } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : String(err) };
     }
   });

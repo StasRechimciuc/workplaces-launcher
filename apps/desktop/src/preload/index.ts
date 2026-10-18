@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type {
+  ChromeListProfilesResult,
   CreateWorkspaceInput,
   CreateWorkspaceResult,
   DeleteWorkspaceResult,
@@ -109,6 +110,10 @@ const api = {
   disconnectSpotify: (): Promise<void> => ipcRenderer.invoke('spotify:disconnect'),
   listSpotifyPlaylists: (): Promise<SpotifyListPlaylistsResult> =>
     ipcRenderer.invoke('spotify:listPlaylists'),
+  // Reads Chrome's own Local State file — no network, no connection
+  // state, just a local file read (see main/platform/chrome-profiles.ts).
+  listChromeProfiles: (): Promise<ChromeListProfilesResult> =>
+    ipcRenderer.invoke('chrome:listProfiles'),
 };
 
 export type WorkspaceLauncherApi = typeof api;

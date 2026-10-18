@@ -6,8 +6,8 @@ import {
 } from './registry';
 
 describe('stepFieldsHasPrimaryInput', () => {
-  it.each(['vscode', 'chrome'])('is true for %s', (type) => {
-    expect(stepFieldsHasPrimaryInput(type)).toBe(true);
+  it('is true for vscode', () => {
+    expect(stepFieldsHasPrimaryInput('vscode')).toBe(true);
   });
 
   it('is false for clockify (registered, but no primary input)', () => {
@@ -21,9 +21,12 @@ describe('stepFieldsHasPrimaryInput', () => {
     expect(stepFieldsHasPrimaryInput('clockify')).toBe(false);
   });
 
-  it('is false for spotify (collapsible, but its UI is buttons/a picker, not a plain input)', () => {
-    expect(stepFieldsHasPrimaryInput('spotify')).toBe(false);
-  });
+  it.each(['spotify', 'chrome'])(
+    'is false for %s (collapsible, but its UI is buttons/a picker, not a plain input)',
+    (type) => {
+      expect(stepFieldsHasPrimaryInput(type)).toBe(false);
+    },
+  );
 
   it.each(['docker', 'terminal', 'slack', 'unknown-type'])(
     'is false for %s (no registry entry)',

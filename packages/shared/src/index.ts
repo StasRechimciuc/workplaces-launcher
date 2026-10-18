@@ -3,12 +3,13 @@ export * from './config-schema';
 export * from './step-types';
 export * from './tool-validation';
 export * from './restore-progress';
-// spotify.ts is type-only (no runtime values) — safe through this
-// barrel for every consumer, including preload, unlike
+// spotify.ts and chrome.ts are type-only (no runtime values) — safe
+// through this barrel for every consumer, including preload, unlike
 // restore-progress.ts's RESTORE_PROGRESS_CHANNEL below: a type-only
 // import is fully erased at compile time, so it can never drag in
 // config-schema.ts's zod dependency the way a real value import would.
 export * from './spotify';
+export * from './chrome';
 
 // write-file-atomic.ts and vscode-restore.ts are deliberately NOT
 // re-exported here: both use real Node built-ins (node:fs, node:crypto,

@@ -38,6 +38,13 @@ describe('stepRowSummary', () => {
         stepRowSummary('chrome', { profile: 'Default', urls: ['https://a.com', 'https://b.com'] }),
       ).toBe('Default, 2 tabs');
     });
+
+    it('shows the human profileName instead of the raw folder name when set', () => {
+      expect(stepRowSummary('chrome', { profile: 'Profile 2', profileName: 'Work' })).toBe('Work');
+      expect(
+        stepRowSummary('chrome', { profile: 'Profile 2', profileName: 'Work', urls: ['https://a.com'] }),
+      ).toBe('Work, 1 tab');
+    });
   });
 
   describe('spotify', () => {

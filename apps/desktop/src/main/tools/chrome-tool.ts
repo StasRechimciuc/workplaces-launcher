@@ -10,6 +10,12 @@ import { getPlatformLauncher } from '../platform';
 
 const ChromeStepParamsSchema = z.object({
   profile: z.string().min(1, 'profile must be a non-empty string'),
+  // Display-only — the human-readable name of the Chrome profile
+  // `profile` points to (chrome-fields.tsx captures it once at
+  // picker-selection time, platform/chrome-profiles.ts's own source).
+  // run() never reads this; only `profile` (the real on-disk folder
+  // name) drives the actual launch.
+  profileName: z.string().optional(),
   // Defaults to [] rather than being required: a profile-only launch
   // (no urls at all) is a real, supported case (see
   // platform/*/launcher.ts's optional `url` param), and the UI's urls
@@ -103,16 +109,23 @@ export const chromeTool: ToolPlugin<ChromeStepParams> = {
   // this operates on raw, possibly-invalid saved params, unlike run()).
   detail(params) {
     const profile = typeof params['profile'] === 'string' ? params['profile'] : undefined;
+    const profileName =
+      typeof params['profileName'] === 'string' && params['profileName'].length > 0
+        ? params['profileName']
+        : undefined;
     const urls = Array.isArray(params['urls'])
       ? params['urls'].filter((u): u is string => typeof u === 'string')
       : [];
     if (!profile) {
       return 'Opens Chrome — no profile configured yet.';
     }
+    // Prefers the real display name; falls back to the raw folder name
+    // for a config saved before profileName existed, or hand-edited.
+    const label = profileName ?? profile;
     if (urls.length === 0) {
-      return `Opens Chrome (profile: ${profile}).`;
+      return `Opens Chrome (profile: ${label}).`;
     }
-    return `Opens ${urls.length} tab${urls.length === 1 ? '' : 's'} in Chrome (profile: ${profile}).`;
+    return `Opens ${urls.length} tab${urls.length === 1 ? '' : 's'} in Chrome (profile: ${label}).`;
   },
 
   expand(params): StepDisplayRow[] | undefined {
@@ -120,11 +133,15 @@ export const chromeTool: ToolPlugin<ChromeStepParams> = {
     if (!profile) {
       return undefined;
     }
+    const profileName =
+      typeof params['profileName'] === 'string' && params['profileName'].length > 0
+        ? params['profileName']
+        : undefined;
     const urls = Array.isArray(params['urls'])
       ? params['urls'].filter((u): u is string => typeof u === 'string')
       : [];
     return [
-      { i: 'globe', label: 'Profile', mono: profile },
+      { i: 'globe', label: 'Profile', mono: profileName ?? profile },
       ...urls.map((url) => ({ i: 'check', label: 'Tab', mono: url })),
     ];
   },

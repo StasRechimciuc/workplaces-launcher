@@ -56,6 +56,13 @@ describe('chromeTool', () => {
     it('rejects non-object input', () => {
       expect(chromeTool.validate('Work').valid).toBe(false);
     });
+
+    it('accepts an optional profileName alongside profile', () => {
+      expect(chromeTool.validate({ profile: 'Profile 2', profileName: 'Work', urls: [] })).toEqual({
+        valid: true,
+        data: { profile: 'Profile 2', profileName: 'Work', urls: [] },
+      });
+    });
   });
 
   describe('run', () => {
@@ -189,6 +196,18 @@ describe('chromeTool', () => {
       expect(chromeTool.detail?.({ urls: [] })).toBe('Opens Chrome — no profile configured yet.');
       expect(chromeTool.detail?.({})).toBe('Opens Chrome — no profile configured yet.');
     });
+
+    it('prefers the human profileName over the raw folder name when present', () => {
+      expect(chromeTool.detail?.({ profile: 'Profile 2', profileName: 'Work', urls: [] })).toBe(
+        'Opens Chrome (profile: Work).',
+      );
+    });
+
+    it('falls back to the raw folder name when no profileName is set (legacy config)', () => {
+      expect(chromeTool.detail?.({ profile: 'Profile 2', urls: [] })).toBe(
+        'Opens Chrome (profile: Profile 2).',
+      );
+    });
   });
 
   describe('expand', () => {
@@ -208,6 +227,12 @@ describe('chromeTool', () => {
     it('returns undefined when profile is missing/invalid raw input', () => {
       expect(chromeTool.expand?.({ urls: [] })).toBeUndefined();
       expect(chromeTool.expand?.({})).toBeUndefined();
+    });
+
+    it('uses the human profileName in the Profile row when present', () => {
+      expect(chromeTool.expand?.({ profile: 'Profile 2', profileName: 'Work', urls: [] })).toEqual([
+        { i: 'globe', label: 'Profile', mono: 'Work' },
+      ]);
     });
   });
 });

@@ -12,10 +12,11 @@ interface StepFieldsRegistryEntry {
    * whether there's a real input for WorkspaceFormModal.tsx's
    * pendingFocusKeyRef effect to focus after this type is picked from
    * the Add-tool dropdown. Independent of `collapsible` below —
-   * spotify is collapsible (real, state-dependent content worth
-   * summarizing/hiding) but has no plain <input> to focus (its UI is
-   * entirely buttons/a picker), which Clockify's "neither collapsible
-   * nor has an input" case didn't need to distinguish until now.
+   * spotify and chrome are both collapsible (real, state-dependent
+   * content worth summarizing/hiding) but have no plain <input> to
+   * focus (their UI is entirely buttons/a picker), which Clockify's
+   * "neither collapsible nor has an input" case didn't need to
+   * distinguish until now.
    */
   hasPrimaryInput: boolean;
   /**
@@ -36,7 +37,7 @@ interface StepFieldsRegistryEntry {
  */
 const STEP_FIELDS: Record<string, StepFieldsRegistryEntry> = {
   vscode: { Component: VscodeFields, hasPrimaryInput: true, collapsible: true },
-  chrome: { Component: ChromeFields, hasPrimaryInput: true, collapsible: true },
+  chrome: { Component: ChromeFields, hasPrimaryInput: false, collapsible: true },
   spotify: { Component: SpotifyFields, hasPrimaryInput: false, collapsible: true },
   clockify: { Component: ClockifyFields, hasPrimaryInput: false, collapsible: false },
 };

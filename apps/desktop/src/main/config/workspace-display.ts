@@ -76,8 +76,11 @@ function toWorkspaceToolStepDisplay(step: WorkspaceStep): WorkspaceToolStepDispl
     color: def?.color ?? 'zinc',
     name: def?.name ?? step.type,
     // No real per-step timing exists before a workspace's first
-    // restore — an honest placeholder beats a fabricated number.
-    time: '—',
+    // restore — '0s' is a deliberate placeholder (not a real
+    // measurement), per the founder's own call overriding the prior
+    // '—' placeholder. TimelineStep.tsx's badge tooltip is keyed off
+    // this exact literal to explain it on hover.
+    time: '0s',
     detail,
     // Spread conditionally, not `expand: expand`: exactOptionalPropertyTypes
     // treats an explicit `undefined` value differently from the key

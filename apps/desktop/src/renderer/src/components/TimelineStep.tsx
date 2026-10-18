@@ -46,7 +46,24 @@ export function TimelineStep({
             chipClassName="h-7 w-7 text-[15px]"
           />
           <span className="text-[13.5px] font-medium text-text">{tool.name}</span>
-          <span className="rounded-full border border-border bg-bg-elevated px-1.75 py-px text-[11px] text-text-faint">
+          {/* tool.time is this step's restore duration — '0s' is a
+              deliberate placeholder, not a real measurement
+              (workspace-display.ts only ever fills in a real-looking
+              value for the mock/demo workspaces today; a real workspace
+              always shows '0s' until per-step timing capture is built).
+              A bare number with no icon/label gave no hint it was about
+              timing at all, let alone a placeholder — the clock icon +
+              title tooltip make that explicit without needing real
+              data to exist. */}
+          <span
+            className="flex items-center gap-1 rounded-full border border-border bg-bg-elevated px-1.75 py-px text-[11px] text-text-faint"
+            title={
+              tool.time === '0s'
+                ? 'Restore duration — not measured yet; run a restore to record it'
+                : `Restore duration: ${tool.time}`
+            }
+          >
+            <Icon name="clock" size={10} />
             {tool.time}
           </span>
           {hasExpand && (

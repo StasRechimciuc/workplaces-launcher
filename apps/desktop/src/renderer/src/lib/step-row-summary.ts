@@ -23,9 +23,13 @@ export function stepRowSummary(type: string, params: Record<string, unknown>): s
     case 'chrome': {
       const profile = typeof params['profile'] === 'string' ? params['profile'].trim() : '';
       if (!profile) return 'No profile set';
+      // Prefers the real display name; falls back to the raw folder
+      // name for a config saved before profileName existed.
+      const name = typeof params['profileName'] === 'string' ? params['profileName'].trim() : '';
+      const label = name || profile;
       const urls = Array.isArray(params['urls']) ? params['urls'] : [];
       const count = urls.length;
-      return count > 0 ? `${profile}, ${count} tab${count === 1 ? '' : 's'}` : profile;
+      return count > 0 ? `${label}, ${count} tab${count === 1 ? '' : 's'}` : label;
     }
     case 'spotify': {
       const name = typeof params['playlistName'] === 'string' ? params['playlistName'].trim() : '';

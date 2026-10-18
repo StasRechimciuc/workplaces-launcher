@@ -17,6 +17,7 @@ import { getPlatformLauncher } from '../platform';
 import * as spotifyAuth from '../spotify/auth';
 import { SpotifyReauthRequiredError } from '../spotify/auth';
 import { listPlaylists as listSpotifyPlaylists } from '../spotify/playlists';
+import { listChromeProfiles } from '../platform/chrome-profiles';
 
 vi.mock('../platform', () => ({
   getPlatformLauncher: vi.fn(),
@@ -50,6 +51,14 @@ vi.mock('../spotify/auth', () => {
 
 vi.mock('../spotify/playlists', () => ({
   listPlaylists: vi.fn(),
+}));
+
+// '../platform' (the barrel, mocked above for getPlatformLauncher) and
+// '../platform/chrome-profiles' are distinct module specifiers to
+// Vitest's mock resolver — mocking the barrel does not also mock this
+// sibling file, so it needs its own entry.
+vi.mock('../platform/chrome-profiles', () => ({
+  listChromeProfiles: vi.fn(),
 }));
 
 // config/loader.ts (used by restoreWorkspace to check for a real saved
@@ -115,6 +124,7 @@ beforeEach(async () => {
   vi.mocked(spotifyAuth.getConnectionStatus).mockReset();
   vi.mocked(spotifyAuth.disconnect).mockReset();
   vi.mocked(listSpotifyPlaylists).mockReset();
+  vi.mocked(listChromeProfiles).mockReset();
 });
 
 afterEach(async () => {
@@ -381,6 +391,37 @@ describe('registerIpcHandlers — spotify:*', () => {
     const handler = getRegisteredSpotifyHandler('spotify:listPlaylists');
 
     expect(await handler({ sender: {} })).toEqual({ success: false, error: 'network down' });
+  });
+});
+
+describe('registerIpcHandlers — chrome:listProfiles', () => {
+  function getRegisteredChromeHandler(): (event: { sender: unknown }) => Promise<unknown> {
+    registerIpcHandlers();
+    const call = vi
+      .mocked(ipcMain.handle)
+      .mock.calls.find(([channel]) => channel === 'chrome:listProfiles');
+    if (!call) throw new Error('chrome:listProfiles was never registered');
+    return call[1] as never;
+  }
+
+  it('returns {success:true, profiles} on success', async () => {
+    const profiles = [{ folder: 'Default', name: 'Work' }];
+    vi.mocked(listChromeProfiles).mockResolvedValueOnce(profiles);
+    const handler = getRegisteredChromeHandler();
+
+    expect(await handler({ sender: {} })).toEqual({ success: true, profiles });
+  });
+
+  it('maps a failure to {success:false, error}, not a thrown exception', async () => {
+    vi.mocked(listChromeProfiles).mockRejectedValueOnce(
+      new Error("Chrome doesn't appear to be installed"),
+    );
+    const handler = getRegisteredChromeHandler();
+
+    expect(await handler({ sender: {} })).toEqual({
+      success: false,
+      error: "Chrome doesn't appear to be installed",
+    });
   });
 });
 

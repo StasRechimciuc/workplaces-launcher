@@ -28,6 +28,9 @@ export function stepRowSummary(type: string, params: Record<string, unknown>): s
       return count > 0 ? `${profile}, ${count} tab${count === 1 ? '' : 's'}` : profile;
     }
     case 'spotify': {
+      const name = typeof params['playlistName'] === 'string' ? params['playlistName'].trim() : '';
+      if (name) return name;
+      // Legacy/hand-edited config with a URI but no name captured yet.
       const playlist = typeof params['playlist'] === 'string' ? params['playlist'].trim() : '';
       return playlist ? 'Playlist configured' : 'No playlist set';
     }

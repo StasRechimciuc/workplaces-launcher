@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   CreateWorkspaceResult,
   UpdateWorkspaceResult,
@@ -9,9 +9,16 @@ import type { WorkspaceDisplay, WorkspaceToolStepDisplay } from '../../../preloa
 import { Icon } from '../icons';
 import { CREATE_TOOL_PRESETS, type CreateToolPreset } from '../constants';
 import { useIsMounted } from '../lib/useIsMounted';
+import { getRecentProjectPaths } from '../lib/recent-project-paths';
+import { useSpotifyConnection } from '../lib/useSpotifyConnection';
 import { stepRowSummary } from '../lib/step-row-summary';
 import { cn } from '../lib/utils';
-import { getStepFieldsComponent, stepFieldsHasPrimaryInput } from './step-fields/registry';
+import {
+  getStepFieldsComponent,
+  stepFieldsHasPrimaryInput,
+  stepFieldsIsCollapsible,
+} from './step-fields/registry';
+import type { StepFieldsProps } from './step-fields/types';
 import { ToolBadge } from './ToolBadge';
 import {
   Dialog,
@@ -32,6 +39,10 @@ interface WorkspaceFormModalProps {
   open: boolean;
   /** null = create mode; a workspace = editing that one. */
   editingWorkspace: WorkspaceDisplay | null;
+  /** All saved workspaces (including the one being edited, if any) —
+   * used only to derive the VS Code step's "Recent" folder suggestions
+   * (see lib/recent-project-paths.ts). */
+  workspaces: WorkspaceDisplay[];
   onClose: () => void;
   /** Fires on a successful save in either mode. */
   onSaved: (config: WorkspaceConfig) => void;
@@ -150,6 +161,12 @@ interface StepParamsFieldsProps {
   params: Record<string, unknown>;
   onChange: (params: Record<string, unknown>) => void;
   registerPrimaryInputRef: (el: HTMLInputElement | null) => void;
+  /** See step-fields/types.ts's StepFieldsProps — forwarded verbatim,
+   * only vscode-fields.tsx currently reads it. */
+  recentFolders?: string[];
+  /** See step-fields/types.ts's StepFieldsProps — forwarded verbatim,
+   * only spotify-fields.tsx currently reads it. */
+  spotify?: StepFieldsProps['spotify'];
 }
 
 /**
@@ -164,19 +181,28 @@ function StepParamsFields({
   params,
   onChange,
   registerPrimaryInputRef,
+  recentFolders,
+  spotify,
 }: StepParamsFieldsProps): JSX.Element | null {
   const Fields = getStepFieldsComponent(preset.type);
   if (!Fields) {
     return null;
   }
   return (
-    <Fields params={params} onChange={onChange} registerPrimaryInputRef={registerPrimaryInputRef} />
+    <Fields
+      params={params}
+      onChange={onChange}
+      registerPrimaryInputRef={registerPrimaryInputRef}
+      {...(recentFolders !== undefined ? { recentFolders } : {})}
+      {...(spotify !== undefined ? { spotify } : {})}
+    />
   );
 }
 
 export function WorkspaceFormModal({
   open,
   editingWorkspace,
+  workspaces,
   onClose,
   onSaved,
 }: WorkspaceFormModalProps): JSX.Element {
@@ -192,10 +218,22 @@ export function WorkspaceFormModal({
   // by default — both fresh defaults and an existing workspace's saved
   // steps — since the whole point is to not force-open every row's
   // fields just to glance at the Tools list. Only meaningful for
-  // collapsible types (stepFieldsHasPrimaryInput); a non-collapsible
+  // collapsible types (stepFieldsIsCollapsible); a non-collapsible
   // type's key may still end up in here (e.g. via addTool) but nothing
   // reads it for that case.
   const [openKeys, setOpenKeys] = useState<Set<number>>(new Set());
+
+  // Base list of every distinct VS Code path already saved across all
+  // workspaces — computed once per workspaces change, not per row.
+  // Each row further excludes its OWN current path at the render call
+  // site below (a cheap inline filter, not a second memo — createSteps
+  // rows already get fresh params every render).
+  const recentFolders = useMemo(() => getRecentProjectPaths(workspaces), [workspaces]);
+
+  // Instantiated once per modal mount, not per row — see
+  // lib/useSpotifyConnection.ts's own doc comment for why connection
+  // state can't live at SpotifyFields' own (per-row) altitude.
+  const spotify = useSpotifyConnection();
 
   // Populated for whichever type's row renders a primary field via
   // StepParamsFields' `registerPrimaryInputRef` prop — vscode's path,
@@ -267,14 +305,15 @@ export function WorkspaceFormModal({
   function addTool(preset: CreateToolPreset): void {
     const key = nextKeyRef.current++;
     pendingFocusKeyRef.current = key;
-    const hasInput = stepFieldsHasPrimaryInput(preset.type);
-    pendingFocusHasInputRef.current = hasInput;
+    pendingFocusHasInputRef.current = stepFieldsHasPrimaryInput(preset.type);
     setCreateSteps((steps) => [...steps, { key, preset, params: {} }]);
-    // Auto-expand a freshly-added collapsible row — otherwise its own
-    // primary input would be focused (see the effect below) while
-    // hidden behind a collapsed row, which the user would have no way
-    // to discover without already knowing to click the chevron.
-    if (hasInput) {
+    // Auto-expand a freshly-added collapsible row — otherwise its
+    // content (an input to focus, or e.g. spotify's Connect button)
+    // would be hidden behind a collapsed row, which the user would have
+    // no way to discover without already knowing to click the chevron.
+    // Driven by collapsibility, not by whether there's an input to
+    // focus — those are independent (see step-fields/registry.ts).
+    if (stepFieldsIsCollapsible(preset.type)) {
       setOpenKeys((current) => new Set(current).add(key));
     }
   }
@@ -408,7 +447,7 @@ export function WorkspaceFormModal({
             {createSteps.map((draft, index) => {
               const { key, preset, params } = draft;
               const isLast = index === createSteps.length - 1;
-              const collapsible = stepFieldsHasPrimaryInput(preset.type);
+              const collapsible = stepFieldsIsCollapsible(preset.type);
               const isOpen = collapsible && openKeys.has(key);
               const hasFields = getStepFieldsComponent(preset.type) !== undefined;
               const subtitle = collapsible ? stepRowSummary(preset.type, params) : preset.config;
@@ -493,6 +532,8 @@ export function WorkspaceFormModal({
                               inputRefs.current.delete(key);
                             }
                           }}
+                          recentFolders={recentFolders.filter((p) => p !== params['path'])}
+                          spotify={spotify}
                         />
                       </div>
                     )}

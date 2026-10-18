@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RESTORE_PROGRESS_CHANNEL } from '@workspace-launcher/shared';
-import { ipcMain } from 'electron';
+import { dialog, ipcMain } from 'electron';
 import {
   createWorkspace,
   deleteWorkspace,
@@ -14,6 +14,9 @@ import {
 } from './handlers';
 import { registerBuiltInTools } from '../tools';
 import { getPlatformLauncher } from '../platform';
+import * as spotifyAuth from '../spotify/auth';
+import { SpotifyReauthRequiredError } from '../spotify/auth';
+import { listPlaylists as listSpotifyPlaylists } from '../spotify/playlists';
 
 vi.mock('../platform', () => ({
   getPlatformLauncher: vi.fn(),
@@ -27,6 +30,26 @@ vi.mock('../platform', () => ({
 vi.mock('../orchestrator/step-timing-history', () => ({
   getStepTimeoutMs: () => 5000,
   recordSuccessfulStepDuration: () => {},
+}));
+
+// spotify/auth.ts (transitively) constructs an electron-store Store at
+// module import time, same hazard step-timing-history.ts's own comment
+// above describes — mocked wholesale here for the same reason, rather
+// than mocking electron-store/safeStorage individually. Its own
+// encrypt/decrypt/token logic is covered by token-store.test.ts and
+// auth.test.ts instead.
+vi.mock('../spotify/auth', () => {
+  class SpotifyReauthRequiredError extends Error {}
+  return {
+    connect: vi.fn(),
+    getConnectionStatus: vi.fn(),
+    disconnect: vi.fn(),
+    SpotifyReauthRequiredError,
+  };
+});
+
+vi.mock('../spotify/playlists', () => ({
+  listPlaylists: vi.fn(),
 }));
 
 // config/loader.ts (used by restoreWorkspace to check for a real saved
@@ -56,6 +79,9 @@ vi.mock('electron', () => ({
   BrowserWindow: {
     fromWebContents: vi.fn(() => mockWin),
   },
+  dialog: {
+    showOpenDialog: vi.fn(),
+  },
 }));
 
 const mockedGetPlatformLauncher = vi.mocked(getPlatformLauncher);
@@ -84,6 +110,11 @@ beforeEach(async () => {
   mockWin.moveTop.mockReset();
   mockWin.focus.mockReset();
   vi.mocked(ipcMain.handle).mockReset();
+  vi.mocked(dialog.showOpenDialog).mockReset();
+  vi.mocked(spotifyAuth.connect).mockReset();
+  vi.mocked(spotifyAuth.getConnectionStatus).mockReset();
+  vi.mocked(spotifyAuth.disconnect).mockReset();
+  vi.mocked(listSpotifyPlaylists).mockReset();
 });
 
 afterEach(async () => {
@@ -238,6 +269,118 @@ describe('registerIpcHandlers — workspaces:restore progress + focus wiring', (
     // Same failure class as the destroyed-webContents case above, but
     // for restore-focus.ts's moveTop()/focus() calls instead of send().
     expect(results).toHaveLength(6);
+  });
+});
+
+describe('registerIpcHandlers — dialog:selectProjectFolder', () => {
+  function getRegisteredDialogHandler(): (event: {
+    sender: unknown;
+  }) => Promise<string | null> {
+    registerIpcHandlers();
+    const call = vi
+      .mocked(ipcMain.handle)
+      .mock.calls.find(([channel]) => channel === 'dialog:selectProjectFolder');
+    if (!call) throw new Error('dialog:selectProjectFolder was never registered');
+    return call[1] as never;
+  }
+
+  it('returns the picked path on success', async () => {
+    vi.mocked(dialog.showOpenDialog).mockResolvedValueOnce({
+      canceled: false,
+      filePaths: ['/Users/stas/projects/client-a'],
+    });
+    const handler = getRegisteredDialogHandler();
+
+    const result = await handler({ sender: {} });
+
+    expect(result).toBe('/Users/stas/projects/client-a');
+  });
+
+  it('returns null when the user cancels the dialog', async () => {
+    vi.mocked(dialog.showOpenDialog).mockResolvedValueOnce({ canceled: true, filePaths: [] });
+    const handler = getRegisteredDialogHandler();
+
+    expect(await handler({ sender: {} })).toBeNull();
+  });
+
+  it('returns null when filePaths is empty even if not marked canceled', async () => {
+    vi.mocked(dialog.showOpenDialog).mockResolvedValueOnce({ canceled: false, filePaths: [] });
+    const handler = getRegisteredDialogHandler();
+
+    expect(await handler({ sender: {} })).toBeNull();
+  });
+
+  it('falls back to the no-window overload when BrowserWindow.fromWebContents returns null', async () => {
+    const { BrowserWindow } = await import('electron');
+    vi.mocked(BrowserWindow.fromWebContents).mockReturnValueOnce(null);
+    vi.mocked(dialog.showOpenDialog).mockResolvedValueOnce({
+      canceled: false,
+      filePaths: ['/some/path'],
+    });
+    const handler = getRegisteredDialogHandler();
+
+    const result = await handler({ sender: {} });
+
+    expect(result).toBe('/some/path');
+    expect(dialog.showOpenDialog).toHaveBeenCalledWith({ properties: ['openDirectory'] });
+  });
+});
+
+describe('registerIpcHandlers — spotify:*', () => {
+  function getRegisteredSpotifyHandler(
+    channel: 'spotify:connect' | 'spotify:status' | 'spotify:disconnect' | 'spotify:listPlaylists',
+  ): (event: { sender: unknown }) => Promise<unknown> {
+    registerIpcHandlers();
+    const call = vi.mocked(ipcMain.handle).mock.calls.find(([ch]) => ch === channel);
+    if (!call) throw new Error(`${channel} was never registered`);
+    return call[1] as never;
+  }
+
+  it('spotify:connect delegates to auth.connect() and returns its result unchanged', async () => {
+    vi.mocked(spotifyAuth.connect).mockResolvedValueOnce({ success: true, displayName: 'Stas' });
+    const handler = getRegisteredSpotifyHandler('spotify:connect');
+
+    expect(await handler({ sender: {} })).toEqual({ success: true, displayName: 'Stas' });
+  });
+
+  it('spotify:status delegates to auth.getConnectionStatus() and returns its result unchanged', async () => {
+    vi.mocked(spotifyAuth.getConnectionStatus).mockResolvedValueOnce({
+      connected: true,
+      displayName: 'Stas',
+    });
+    const handler = getRegisteredSpotifyHandler('spotify:status');
+
+    expect(await handler({ sender: {} })).toEqual({ connected: true, displayName: 'Stas' });
+  });
+
+  it('spotify:disconnect calls auth.disconnect()', async () => {
+    const handler = getRegisteredSpotifyHandler('spotify:disconnect');
+
+    await handler({ sender: {} });
+
+    expect(spotifyAuth.disconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('spotify:listPlaylists returns {success:true, playlists} on success', async () => {
+    const playlists = [{ id: '1', name: 'Deep Focus', uri: 'spotify:playlist:1', ownedByCurrentUser: true }];
+    vi.mocked(listSpotifyPlaylists).mockResolvedValueOnce(playlists);
+    const handler = getRegisteredSpotifyHandler('spotify:listPlaylists');
+
+    expect(await handler({ sender: {} })).toEqual({ success: true, playlists });
+  });
+
+  it('spotify:listPlaylists maps SpotifyReauthRequiredError to a specific reauth-required error', async () => {
+    vi.mocked(listSpotifyPlaylists).mockRejectedValueOnce(new SpotifyReauthRequiredError());
+    const handler = getRegisteredSpotifyHandler('spotify:listPlaylists');
+
+    expect(await handler({ sender: {} })).toEqual({ success: false, error: 'reauth-required' });
+  });
+
+  it('spotify:listPlaylists maps any other failure to its message, not a thrown exception', async () => {
+    vi.mocked(listSpotifyPlaylists).mockRejectedValueOnce(new Error('network down'));
+    const handler = getRegisteredSpotifyHandler('spotify:listPlaylists');
+
+    expect(await handler({ sender: {} })).toEqual({ success: false, error: 'network down' });
   });
 });
 

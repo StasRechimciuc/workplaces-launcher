@@ -3,6 +3,9 @@ import type {
   CreateWorkspaceInput,
   CreateWorkspaceResult,
   DeleteWorkspaceResult,
+  SpotifyConnectResult,
+  SpotifyListPlaylistsResult,
+  SpotifyStatus,
   StepResult,
   UpdateWorkspaceInput,
   UpdateWorkspaceResult,
@@ -93,6 +96,19 @@ const api = {
     ipcRenderer.invoke('workspaces:update', input),
   deleteWorkspace: (workspaceId: string): Promise<DeleteWorkspaceResult> =>
     ipcRenderer.invoke('workspaces:delete', workspaceId),
+  // Resolves to the picked folder's absolute path, or null if the user
+  // cancelled the native dialog.
+  selectProjectFolder: (): Promise<string | null> =>
+    ipcRenderer.invoke('dialog:selectProjectFolder'),
+  // Opens the system browser to Spotify's consent page and resolves
+  // once the OAuth round trip completes (or fails) — see
+  // main/spotify/auth.ts's connect().
+  connectSpotify: (): Promise<SpotifyConnectResult> => ipcRenderer.invoke('spotify:connect'),
+  // Cheap, no-network — reads the persisted token store only.
+  getSpotifyStatus: (): Promise<SpotifyStatus> => ipcRenderer.invoke('spotify:status'),
+  disconnectSpotify: (): Promise<void> => ipcRenderer.invoke('spotify:disconnect'),
+  listSpotifyPlaylists: (): Promise<SpotifyListPlaylistsResult> =>
+    ipcRenderer.invoke('spotify:listPlaylists'),
 };
 
 export type WorkspaceLauncherApi = typeof api;

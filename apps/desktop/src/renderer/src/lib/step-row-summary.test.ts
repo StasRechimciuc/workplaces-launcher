@@ -45,10 +45,16 @@ describe('stepRowSummary', () => {
       expect(stepRowSummary('spotify', {})).toBe('No playlist set');
     });
 
-    it('reports playlist configured when set', () => {
+    it('falls back to "Playlist configured" for a URI with no name (legacy config)', () => {
       expect(stepRowSummary('spotify', { playlist: 'spotify:playlist:abc' })).toBe(
         'Playlist configured',
       );
+    });
+
+    it('shows the human playlist name when set', () => {
+      expect(
+        stepRowSummary('spotify', { playlist: 'spotify:playlist:abc', playlistName: 'Deep Focus' }),
+      ).toBe('Deep Focus');
     });
   });
 

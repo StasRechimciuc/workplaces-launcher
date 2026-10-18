@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { BrowserWindow, ipcMain } from 'electron';
+import { BrowserWindow, dialog, ipcMain } from 'electron';
 import type {
   CreateWorkspaceResult,
   DeleteWorkspaceResult,
   RestoreProgressEvent,
+  SpotifyListPlaylistsResult,
   StepResult,
   UpdateWorkspaceResult,
 } from '@workspace-launcher/shared';
@@ -22,6 +23,9 @@ import {
   saveWorkspaceConfig,
 } from '../config/loader';
 import { toWorkspaceDisplay } from '../config/workspace-display';
+import * as spotifyAuth from '../spotify/auth';
+import { SpotifyReauthRequiredError } from '../spotify/auth';
+import { listPlaylists as listSpotifyPlaylists } from '../spotify/playlists';
 import type { WorkspaceDisplay } from '../../preload';
 
 // The single source of truth for "is this id a placeholder, not a real
@@ -304,5 +308,40 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('workspaces:delete', async (_event, workspaceId: unknown) => {
     return deleteWorkspace(workspaceId);
+  });
+
+  ipcMain.handle('dialog:selectProjectFolder', async (event): Promise<string | null> => {
+    // BrowserWindow.fromWebContents can return null (same case
+    // restore-focus.ts's startRestoreFocusSession already guards) —
+    // dialog.showOpenDialog has no overload accepting `BrowserWindow |
+    // null`, only a real window or no window argument at all.
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const result = win
+      ? await dialog.showOpenDialog(win, { properties: ['openDirectory'] })
+      : await dialog.showOpenDialog({ properties: ['openDirectory'] });
+    return result.canceled ? null : (result.filePaths[0] ?? null);
+  });
+
+  ipcMain.handle('spotify:connect', async () => {
+    return spotifyAuth.connect();
+  });
+
+  ipcMain.handle('spotify:status', async () => {
+    return spotifyAuth.getConnectionStatus();
+  });
+
+  ipcMain.handle('spotify:disconnect', async () => {
+    spotifyAuth.disconnect();
+  });
+
+  ipcMain.handle('spotify:listPlaylists', async (): Promise<SpotifyListPlaylistsResult> => {
+    try {
+      return { success: true, playlists: await listSpotifyPlaylists() };
+    } catch (err) {
+      if (err instanceof SpotifyReauthRequiredError) {
+        return { success: false, error: 'reauth-required' };
+      }
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
   });
 }

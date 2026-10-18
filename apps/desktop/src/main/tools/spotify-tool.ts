@@ -25,6 +25,12 @@ const SpotifyStepParamsSchema = z.object({
       message:
         "playlist must be a spotify: URI or an https://open.spotify.com/ link (a bare playlist name can't be resolved without Spotify's own API)",
     }),
+  // Display-only — the human-readable name of the playlist `playlist`
+  // points to, captured once at picker-selection time (step-fields/
+  // spotify-fields.tsx) so detail()/expand() and the edit modal can show
+  // a real name instead of the raw URI without a live API call. run()
+  // never reads this; only `playlist` (the real URI) drives the restore.
+  playlistName: z.string().optional(),
 });
 
 export type SpotifyStepParams = z.infer<typeof SpotifyStepParamsSchema>;
@@ -75,7 +81,17 @@ export const spotifyTool: ToolPlugin<SpotifyStepParams> = {
       typeof params['playlist'] === 'string' && params['playlist'].length > 0
         ? params['playlist']
         : undefined;
-    return playlist ? `Opens ${playlist} in Spotify.` : 'Opens Spotify.';
+    const playlistName =
+      typeof params['playlistName'] === 'string' && params['playlistName'].length > 0
+        ? params['playlistName']
+        : undefined;
+    if (!playlist) {
+      return 'Opens Spotify.';
+    }
+    // Prefers the human name (quoted, since it's a readable title);
+    // falls back to the raw URI, unquoted, for a config saved before
+    // playlistName existed, or one hand-edited/imported without it.
+    return playlistName ? `Opens "${playlistName}" in Spotify.` : `Opens ${playlist} in Spotify.`;
   },
 
   expand(params): StepDisplayRow[] | undefined {
@@ -83,6 +99,10 @@ export const spotifyTool: ToolPlugin<SpotifyStepParams> = {
       typeof params['playlist'] === 'string' && params['playlist'].length > 0
         ? params['playlist']
         : undefined;
-    return playlist ? [{ i: 'music', label: 'Playlist', mono: playlist }] : undefined;
+    const playlistName =
+      typeof params['playlistName'] === 'string' && params['playlistName'].length > 0
+        ? params['playlistName']
+        : undefined;
+    return playlist ? [{ i: 'music', label: 'Playlist', mono: playlistName ?? playlist }] : undefined;
   },
 };

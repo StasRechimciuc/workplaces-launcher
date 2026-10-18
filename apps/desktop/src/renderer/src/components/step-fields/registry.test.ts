@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { getStepFieldsComponent, stepFieldsHasPrimaryInput } from './registry';
+import {
+  getStepFieldsComponent,
+  stepFieldsHasPrimaryInput,
+  stepFieldsIsCollapsible,
+} from './registry';
 
 describe('stepFieldsHasPrimaryInput', () => {
-  it.each(['vscode', 'chrome', 'spotify'])('is true for %s', (type) => {
+  it.each(['vscode', 'chrome'])('is true for %s', (type) => {
     expect(stepFieldsHasPrimaryInput(type)).toBe(true);
   });
 
@@ -17,10 +21,31 @@ describe('stepFieldsHasPrimaryInput', () => {
     expect(stepFieldsHasPrimaryInput('clockify')).toBe(false);
   });
 
+  it('is false for spotify (collapsible, but its UI is buttons/a picker, not a plain input)', () => {
+    expect(stepFieldsHasPrimaryInput('spotify')).toBe(false);
+  });
+
   it.each(['docker', 'terminal', 'slack', 'unknown-type'])(
     'is false for %s (no registry entry)',
     (type) => {
       expect(stepFieldsHasPrimaryInput(type)).toBe(false);
+    },
+  );
+});
+
+describe('stepFieldsIsCollapsible', () => {
+  it.each(['vscode', 'chrome', 'spotify'])('is true for %s', (type) => {
+    expect(stepFieldsIsCollapsible(type)).toBe(true);
+  });
+
+  it('is false for clockify (nothing to configure at all)', () => {
+    expect(stepFieldsIsCollapsible('clockify')).toBe(false);
+  });
+
+  it.each(['docker', 'terminal', 'slack', 'unknown-type'])(
+    'is false for %s (no registry entry)',
+    (type) => {
+      expect(stepFieldsIsCollapsible(type)).toBe(false);
     },
   );
 });

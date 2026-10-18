@@ -69,6 +69,18 @@ describe('spotifyTool', () => {
     it('rejects non-object input', () => {
       expect(spotifyTool.validate('Deep Focus').valid).toBe(false);
     });
+
+    it('accepts an optional playlistName alongside the URI', () => {
+      expect(
+        spotifyTool.validate({
+          playlist: 'spotify:playlist:37i9dQZF1DWZeKCadgRdKQ',
+          playlistName: 'Deep Focus',
+        }),
+      ).toEqual({
+        valid: true,
+        data: { playlist: 'spotify:playlist:37i9dQZF1DWZeKCadgRdKQ', playlistName: 'Deep Focus' },
+      });
+    });
   });
 
   describe('run', () => {
@@ -125,10 +137,16 @@ describe('spotifyTool', () => {
   });
 
   describe('detail', () => {
-    it('names the playlist when present', () => {
+    it('falls back to the raw URI when no playlistName is set (legacy/hand-edited config)', () => {
       expect(spotifyTool.detail?.({ playlist: 'spotify:playlist:abc' })).toBe(
         'Opens spotify:playlist:abc in Spotify.',
       );
+    });
+
+    it('prefers the human playlist name, quoted, when present', () => {
+      expect(
+        spotifyTool.detail?.({ playlist: 'spotify:playlist:abc', playlistName: 'Deep Focus' }),
+      ).toBe('Opens "Deep Focus" in Spotify.');
     });
 
     it('falls back to a generic message when playlist is absent/blank/invalid raw input', () => {
@@ -136,13 +154,23 @@ describe('spotifyTool', () => {
       expect(spotifyTool.detail?.({ playlist: '' })).toBe('Opens Spotify.');
       expect(spotifyTool.detail?.({ playlist: 42 })).toBe('Opens Spotify.');
     });
+
+    it('ignores a playlistName with no accompanying playlist URI', () => {
+      expect(spotifyTool.detail?.({ playlistName: 'Deep Focus' })).toBe('Opens Spotify.');
+    });
   });
 
   describe('expand', () => {
-    it('returns a Playlist row when present', () => {
+    it('returns a Playlist row using the raw URI when no playlistName is set', () => {
       expect(spotifyTool.expand?.({ playlist: 'spotify:playlist:abc' })).toEqual([
         { i: 'music', label: 'Playlist', mono: 'spotify:playlist:abc' },
       ]);
+    });
+
+    it('returns a Playlist row using the human name when playlistName is set', () => {
+      expect(
+        spotifyTool.expand?.({ playlist: 'spotify:playlist:abc', playlistName: 'Deep Focus' }),
+      ).toEqual([{ i: 'music', label: 'Playlist', mono: 'Deep Focus' }]);
     });
 
     it('returns undefined when playlist is absent/blank', () => {

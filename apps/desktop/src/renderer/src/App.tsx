@@ -131,6 +131,7 @@ export function App(): JSX.Element {
       <WorkspaceFormModal
         open={isCreateModalOpen || editingWorkspace !== null}
         editingWorkspace={editingWorkspace}
+        workspaces={workspaces}
         onClose={() => {
           setCreateModalOpen(false);
           setEditingWorkspace(null);

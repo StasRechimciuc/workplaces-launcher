@@ -11,13 +11,21 @@ interface StepFieldsRegistryEntry {
    * registerPrimaryInputRef (StepFieldsProps' own doc comment) — i.e.
    * whether there's a real input for WorkspaceFormModal.tsx's
    * pendingFocusKeyRef effect to focus after this type is picked from
-   * the Add-tool dropdown. Explicit per entry, not inferred from
-   * STEP_TYPES' `implemented` flag: those are different facts that
-   * happened to coincide for every type built so far (vscode/chrome/
-   * spotify all render an input) until Clockify — implemented, but
-   * with nothing to focus.
+   * the Add-tool dropdown. Independent of `collapsible` below —
+   * spotify is collapsible (real, state-dependent content worth
+   * summarizing/hiding) but has no plain <input> to focus (its UI is
+   * entirely buttons/a picker), which Clockify's "neither collapsible
+   * nor has an input" case didn't need to distinguish until now.
    */
   hasPrimaryInput: boolean;
+  /**
+   * Whether this type's row in WorkspaceFormModal.tsx's Tools list is
+   * collapsible (chevron, click-to-expand/collapse, a dynamic subtitle
+   * from step-row-summary.ts) vs. always shown inline with the preset's
+   * static `config` hint as its subtitle. False for a type with
+   * genuinely nothing to configure (Clockify).
+   */
+  collapsible: boolean;
 }
 
 /**
@@ -27,10 +35,10 @@ interface StepFieldsRegistryEntry {
  * component itself.
  */
 const STEP_FIELDS: Record<string, StepFieldsRegistryEntry> = {
-  vscode: { Component: VscodeFields, hasPrimaryInput: true },
-  chrome: { Component: ChromeFields, hasPrimaryInput: true },
-  spotify: { Component: SpotifyFields, hasPrimaryInput: true },
-  clockify: { Component: ClockifyFields, hasPrimaryInput: false },
+  vscode: { Component: VscodeFields, hasPrimaryInput: true, collapsible: true },
+  chrome: { Component: ChromeFields, hasPrimaryInput: true, collapsible: true },
+  spotify: { Component: SpotifyFields, hasPrimaryInput: false, collapsible: true },
+  clockify: { Component: ClockifyFields, hasPrimaryInput: false, collapsible: false },
 };
 
 export function getStepFieldsComponent(type: string): StepFieldsComponent | undefined {
@@ -43,8 +51,18 @@ export function getStepFieldsComponent(type: string): StepFieldsComponent | unde
  * type with no registry entry at all (Docker/Terminal/Slack today —
  * StepParamsFields already renders nothing for them via
  * getStepFieldsComponent returning undefined), same as it is for a
- * type that has an entry but no input (Clockify).
+ * type that has an entry but no input (Clockify, Spotify).
  */
 export function stepFieldsHasPrimaryInput(type: string): boolean {
   return STEP_FIELDS[type]?.hasPrimaryInput ?? false;
+}
+
+/**
+ * Whether `type`'s row should render collapsed/expandable — see
+ * WorkspaceFormModal.tsx's `collapsible` derivation and addTool's
+ * auto-expand-on-add logic. False for a type with no registry entry at
+ * all, same as stepFieldsHasPrimaryInput.
+ */
+export function stepFieldsIsCollapsible(type: string): boolean {
+  return STEP_FIELDS[type]?.collapsible ?? false;
 }

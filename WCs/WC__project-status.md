@@ -444,12 +444,14 @@ regardless. Fix proposed once, declined once; still open, no urgency.
 
 ## Verified state as of the last real check
 
-Lint / typecheck (4 workspaces) / test (**526/526**) / build (main,
+Lint / typecheck (4 workspaces) / test (**527/527**) / build (main,
 preload, renderer, vscode-extension) all clean as of 2026-10-20
 (489 after removing the mock-workspace feature and its now-obsolete
 tests plus a new multi-active-workspace Switch regression test, +35
 for the real launch-time display, +2 from an 8-agent review pass
-across every change in this batch — see "What's shipped since
+across every change in this batch, +1 net from folding
+`step-row-summary.ts` into `step-fields/registry.ts` — see "What's
+shipped since
 2026-09-22" above). Three
 full multi-agent review rounds ran against this codebase earlier
 (round 1-2: 2026-09-18, round 3: 2026-09-22 — 12+ review-agent passes
@@ -485,11 +487,32 @@ incremental features rather than a pre-ship audit.
       Electron's documented API, never visually confirmed.
 2. **The next tool plugin** — Docker, Terminal, or Slack, following the
    now-three-times-proven `vscode-tool.ts`/`chrome-tool.ts`/
-   `spotify-tool.ts` pattern. Worth restructuring `WorkspaceFormModal.tsx`'s
-   `StepParamsFields` and `workspace-display.ts`'s `detailForStep` from
-   per-type `if` branches into a lookup table _before_ the 4th type
-   lands — flagged by multiple review passes now as the right moment,
-   not premature.
+   `spotify-tool.ts` pattern. The per-type-branching refactor this item
+   used to call for (2026-10-20) turned out mostly already done by
+   earlier work in the same round: `WorkspaceFormModal.tsx`'s
+   `StepParamsFields` and `workspace-display.ts`'s `describeStep`
+   already dispatch through a type-keyed lookup, not an `if` chain
+   (confirmed by a fresh Explore pass before touching anything, rather
+   than trusting this stale note). The one real piece that was still a
+   bare `switch (type)` — `step-row-summary.ts`'s per-row collapsed
+   summary — has been folded into `step-fields/registry.ts` as a third
+   per-type field (`summary`, alongside `Component`/`hasPrimaryInput`/
+   `collapsible`), with each type's actual summary logic moved into a
+   new pure `step-fields/step-summaries.ts` (kept out of the
+   `*-fields.tsx` component files deliberately — mixing a non-component
+   export into one broke Fast Refresh, caught by lint). A few
+   deliberate, scoped single-type exceptions remain on purpose, not
+   growing chains: the generic 'app' type's dynamic display name
+   (`workspace-display.ts`'s `stepDisplayName`, `WorkspaceFormModal.tsx`'s
+   `rowName`, `ToolBadge.tsx`'s icon sizing) — each is a one-off
+   override for a type that genuinely isn't one fixed thing, not
+   evidence of a chain to eliminate. Real remaining architectural note,
+   not fixed (and not obviously fixable): `step-fields/registry.ts`
+   (renderer-only) and `main/tools/registry.ts`'s `ToolPlugin` registry
+   are two independent, unconnected registries with no shared method —
+   inherent to Electron's main/renderer process split (main can't hand
+   the renderer a live React component reference across that
+   boundary), not a DRY violation to force-unify.
 3. Everything in `claude.md`'s "ship-readiness" list (code signing,
    licensing, auto-update, crash reporting) — explicitly deferred until
    there's something real to actually ship.

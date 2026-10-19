@@ -12,12 +12,12 @@ import { CREATE_TOOL_PRESETS, type CreateToolPreset } from '../constants';
 import { useIsMounted } from '../lib/useIsMounted';
 import { getRecentProjectPaths } from '../lib/recent-project-paths';
 import { useSpotifyConnection } from '../lib/useSpotifyConnection';
-import { stepRowSummary } from '../lib/step-row-summary';
 import { cn } from '../lib/utils';
 import {
   getStepFieldsComponent,
   stepFieldsHasPrimaryInput,
   stepFieldsIsCollapsible,
+  stepRowSummary,
 } from './step-fields/registry';
 import type { StepFieldsProps } from './step-fields/types';
 import { ToolBadge } from './ToolBadge';

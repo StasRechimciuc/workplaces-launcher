@@ -5,8 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;"
     />
+    <!-- img-src explicitly allows data: on top of 'self' — needed for
+         the generic "App" step type's real icon (lib/useAppIcon.ts),
+         fetched as a data URL since it's extracted per-app at runtime
+         rather than being a static bundled asset like every other
+         step type's logo. A data: image can't execute script or load
+         further external resources, so this doesn't weaken script-src
+         or any other directive. -->
+
     <title>Workspace Launcher</title>
     <!-- Non-module, runs synchronously before anything else parses —
          applies the persisted theme (theme-bootstrap.js) before first

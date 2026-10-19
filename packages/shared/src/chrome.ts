@@ -10,4 +10,4 @@ export interface ChromeProfileInfo {
 
 export type ChromeListProfilesResult =
   | { success: true; profiles: ChromeProfileInfo[] }
-  | { success: false; error: string };
+  | { success: false; error: string; code: string };

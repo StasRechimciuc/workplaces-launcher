@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ERROR_CODES } from '@workspace-launcher/shared';
 import { spotifyTool } from './spotify-tool';
 import { getPlatformLauncher } from '../platform';
 
@@ -126,6 +127,7 @@ describe('spotifyTool', () => {
 
       expect(result.success).toBe(false);
       expect(result.message).toContain('Spotify not installed');
+      expect(result.code).toBe(ERROR_CODES.APP_LAUNCH_FAILED.code);
     });
   });
 

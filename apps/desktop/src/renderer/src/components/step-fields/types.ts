@@ -20,8 +20,7 @@ export interface StepFieldsProps {
    * Optional, type-specific quick-pick suggestions (currently only
    * populated for vscode's project-path field — see WorkspaceFormModal
    * .tsx's StepParamsFields). Every other field component simply never
-   * reads it, same precedent as registerPrimaryInputRef already being
-   * received-but-unused by ClockifyFields.
+   * reads it.
    */
   recentFolders?: string[];
   /**

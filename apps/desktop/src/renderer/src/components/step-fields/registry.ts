@@ -1,7 +1,7 @@
 import { VscodeFields } from './vscode-fields';
 import { ChromeFields } from './chrome-fields';
 import { SpotifyFields } from './spotify-fields';
-import { ClockifyFields } from './clockify-fields';
+import { AppFields } from './app-fields';
 import type { StepFieldsComponent } from './types';
 
 interface StepFieldsRegistryEntry {
@@ -14,17 +14,16 @@ interface StepFieldsRegistryEntry {
    * the Add-tool dropdown. Independent of `collapsible` below —
    * spotify and chrome are both collapsible (real, state-dependent
    * content worth summarizing/hiding) but have no plain <input> to
-   * focus (their UI is entirely buttons/a picker), which Clockify's
-   * "neither collapsible nor has an input" case didn't need to
-   * distinguish until now.
+   * focus (their UI is entirely buttons/a picker).
    */
   hasPrimaryInput: boolean;
   /**
    * Whether this type's row in WorkspaceFormModal.tsx's Tools list is
    * collapsible (chevron, click-to-expand/collapse, a dynamic subtitle
    * from step-row-summary.ts) vs. always shown inline with the preset's
-   * static `config` hint as its subtitle. False for a type with
-   * genuinely nothing to configure (Clockify).
+   * static `config` hint as its subtitle. False for a type with no
+   * registry entry at all (Clockify included — see the comment above
+   * STEP_FIELDS).
    */
   collapsible: boolean;
 }
@@ -35,11 +34,18 @@ interface StepFieldsRegistryEntry {
  * with its own fields component means adding it here, not editing that
  * component itself.
  */
+// Clockify has no entry here at all — same as docker/terminal/slack
+// (no registered tool yet) — because it genuinely has nothing to
+// configure, so there's nothing a fields component could ever show.
+// Its one-line explanation lives in STEP_TYPES' configHint instead,
+// shown as the Tools-list row's header subtitle — not a dedicated
+// component. `implemented: true` (STEP_TYPES) still distinguishes it
+// from docker/terminal/slack's "not built yet."
 const STEP_FIELDS: Record<string, StepFieldsRegistryEntry> = {
   vscode: { Component: VscodeFields, hasPrimaryInput: true, collapsible: true },
   chrome: { Component: ChromeFields, hasPrimaryInput: false, collapsible: true },
   spotify: { Component: SpotifyFields, hasPrimaryInput: false, collapsible: true },
-  clockify: { Component: ClockifyFields, hasPrimaryInput: false, collapsible: false },
+  app: { Component: AppFields, hasPrimaryInput: false, collapsible: true },
 };
 
 export function getStepFieldsComponent(type: string): StepFieldsComponent | undefined {
@@ -49,10 +55,10 @@ export function getStepFieldsComponent(type: string): StepFieldsComponent | unde
 /**
  * Whether `type`'s fields component registers a primary input to focus
  * — see WorkspaceFormModal.tsx's addTool/onCloseAutoFocus. False for a
- * type with no registry entry at all (Docker/Terminal/Slack today —
- * StepParamsFields already renders nothing for them via
+ * type with no registry entry at all (Docker/Terminal/Slack/Clockify
+ * today — StepParamsFields already renders nothing for them via
  * getStepFieldsComponent returning undefined), same as it is for a
- * type that has an entry but no input (Clockify, Spotify).
+ * type that has an entry but no input (Spotify, Chrome).
  */
 export function stepFieldsHasPrimaryInput(type: string): boolean {
   return STEP_FIELDS[type]?.hasPrimaryInput ?? false;

@@ -5,7 +5,7 @@ import type {
   ToolPlugin,
   ValidationResult,
 } from '@workspace-launcher/shared';
-import { zodValidate } from '@workspace-launcher/shared';
+import { ERROR_CODES, zodValidate } from '@workspace-launcher/shared';
 import { getPlatformLauncher } from '../platform';
 
 // A `spotify:` URI (e.g. "spotify:playlist:37i9dQZF1DWZeKCadgRdKQ") or an
@@ -35,7 +35,10 @@ const SpotifyStepParamsSchema = z.object({
 
 export type SpotifyStepParams = z.infer<typeof SpotifyStepParamsSchema>;
 
-const SPOTIFY_APP_NAME = 'Spotify';
+// Exported for tool-identity.ts (workspace activity tracking — see
+// WCs/WC__workspace-activity.md) — single source of truth for the
+// macOS app name this step type launches.
+export const SPOTIFY_APP_NAME = 'Spotify';
 
 export const spotifyTool: ToolPlugin<SpotifyStepParams> = {
   type: 'spotify',
@@ -65,7 +68,12 @@ export const spotifyTool: ToolPlugin<SpotifyStepParams> = {
         ? await launcher.openInApp(SPOTIFY_APP_NAME, playlist)
         : await launcher.launchApp(SPOTIFY_APP_NAME);
 
-    return { success: result.success, message: result.message, durationMs: Date.now() - startedAt };
+    return {
+      success: result.success,
+      message: result.message,
+      durationMs: Date.now() - startedAt,
+      ...(result.success ? {} : { code: ERROR_CODES.APP_LAUNCH_FAILED.code }),
+    };
   },
 
   async teardown(): Promise<StepResult> {

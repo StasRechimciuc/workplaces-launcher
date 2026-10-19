@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ERROR_CODES } from '@workspace-launcher/shared';
 import { clockifyTool } from './clockify-tool';
 import { getPlatformLauncher } from '../platform';
 
@@ -64,6 +65,7 @@ describe('clockifyTool', () => {
 
       expect(result.success).toBe(false);
       expect(result.message).toContain('Clockify Desktop not installed');
+      expect(result.code).toBe(ERROR_CODES.APP_LAUNCH_FAILED.code);
     });
   });
 

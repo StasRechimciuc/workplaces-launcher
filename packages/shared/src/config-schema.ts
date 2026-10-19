@@ -88,7 +88,8 @@ export interface CreateWorkspaceInput {
  * during normal use of the Save button, not an exceptional condition.
  */
 export type CreateWorkspaceResult =
-  { success: true; config: WorkspaceConfig } | { success: false; error: string };
+  | { success: true; config: WorkspaceConfig }
+  | { success: false; error: string; code: string };
 
 /**
  * What the renderer sends to update an existing workspace. Unlike
@@ -106,11 +107,14 @@ export interface UpdateWorkspaceInput {
 
 /** Mirrors CreateWorkspaceResult's exact shape/spirit. */
 export type UpdateWorkspaceResult =
-  { success: true; config: WorkspaceConfig } | { success: false; error: string };
+  | { success: true; config: WorkspaceConfig }
+  | { success: false; error: string; code: string };
 
 /**
  * Mirrors CreateWorkspaceResult/UpdateWorkspaceResult's shape, minus a
  * payload — a successful delete has nothing further to hand back
  * beyond "it's gone."
  */
-export type DeleteWorkspaceResult = { success: true } | { success: false; error: string };
+export type DeleteWorkspaceResult =
+  | { success: true }
+  | { success: false; error: string; code: string };

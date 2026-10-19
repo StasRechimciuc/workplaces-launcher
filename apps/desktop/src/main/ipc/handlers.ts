@@ -2,21 +2,31 @@ import { randomUUID } from 'node:crypto';
 import { BrowserWindow, dialog, ipcMain } from 'electron';
 import type {
   ChromeListProfilesResult,
+  CloseResult,
   CreateWorkspaceResult,
   DeleteWorkspaceResult,
   RestoreProgressEvent,
   SpotifyListPlaylistsResult,
   StepResult,
+  SwitchResult,
   UpdateWorkspaceResult,
+  WorkspaceConfig,
 } from '@workspace-launcher/shared';
 import {
   CURRENT_WORKSPACE_CONFIG_VERSION,
+  ERROR_CODES,
   parseWorkspaceConfig,
   RESTORE_PROGRESS_CHANNEL,
 } from '@workspace-launcher/shared';
-import { MOCK_WORKSPACES } from './mock-workspaces';
 import { startRestoreFocusSession } from './restore-focus';
-import { runWorkspace } from '../orchestrator/orchestrator';
+import {
+  buildRunningAppNameMap,
+  closeWorkspace,
+  isConfigActive,
+  retryStep,
+  runWorkspace,
+  switchToWorkspace,
+} from '../orchestrator/orchestrator';
 import { validateStepsWithRegisteredTools } from '../tools/validate-steps';
 import {
   deleteWorkspaceConfig,
@@ -28,28 +38,49 @@ import * as spotifyAuth from '../spotify/auth';
 import { SpotifyReauthRequiredError } from '../spotify/auth';
 import { listPlaylists as listSpotifyPlaylists } from '../spotify/playlists';
 import { listChromeProfiles } from '../platform/chrome-profiles';
+import { getAppIconDataUrl } from '../platform/app-icon';
 import type { WorkspaceDisplay } from '../../preload';
 
-// The single source of truth for "is this id a placeholder, not a real
-// saved workspace" — used both to tag WorkspaceDisplay.readOnly
-// (listWorkspaces) and to independently re-verify, server-side, before
-// mutating anything (updateWorkspace, deleteWorkspace). Never trust a
-// renderer-supplied flag for this — same philosophy as createWorkspace's
-// own validation never trusting the renderer's shape alone.
-const MOCK_WORKSPACE_IDS = new Set(MOCK_WORKSPACES.map((ws) => ws.id));
-
-function isMockWorkspaceId(id: string): boolean {
-  return MOCK_WORKSPACE_IDS.has(id);
+/**
+ * Resolves a workspace id to a real, persisted, runnable WorkspaceConfig.
+ * Shared by restoreWorkspace and retryWorkspaceStep below — both need
+ * the exact same workspace before they can run any step of it.
+ */
+async function resolveWorkspaceConfig(workspaceId: string): Promise<WorkspaceConfig> {
+  const { configs } = await loadAllWorkspaceConfigs();
+  const config = configs.find((c) => c.id === workspaceId);
+  if (!config) {
+    throw new Error(`No workspace found with id "${workspaceId}".`);
+  }
+  return config;
 }
 
 /**
- * Looks up a workspace by id — real saved configs first, then the mock
- * data — and runs it through the orchestrator. Kept separate from the
- * ipcMain.handle registration below so it's testable without mocking
- * Electron's ipcMain. `onProgress` is optional and Electron-free at
- * this layer too (it's just threaded through to runWorkspace) — the
- * actual IPC push and window-focus wiring live in registerIpcHandlers
- * below, where a real Electron `event`/BrowserWindow is available.
+ * Every runnable WorkspaceConfig on disk. Needed by
+ * switchWorkspace/closeWorkspaceStep below, which (unlike
+ * restoreWorkspace) have to reason about every OTHER workspace's
+ * current activity, not just the one being acted on.
+ */
+async function resolveAllWorkspaceConfigs(): Promise<WorkspaceConfig[]> {
+  return (await loadAllWorkspaceConfigs()).configs;
+}
+
+// Workspace activity tracking (Restore/Switch/Close — see
+// WCs/WC__workspace-activity.md) is macOS-only v1: there's no
+// Windows equivalent of the name-based AppleScript liveness/close
+// primitives. On any other platform, `active` is always false and the
+// new handlers below return a harmless no-op rather than attempting
+// an osascript call that could never work.
+const SUPPORTS_WORKSPACE_ACTIVITY = process.platform === 'darwin';
+
+/**
+ * Looks up a workspace by id and runs it through the orchestrator.
+ * Kept separate from the ipcMain.handle registration below so it's
+ * testable without mocking Electron's ipcMain. `onProgress` is optional
+ * and Electron-free at this layer too (it's just threaded through to
+ * runWorkspace) — the actual IPC push and window-focus wiring live in
+ * registerIpcHandlers below, where a real Electron `event`/BrowserWindow
+ * is available.
  */
 export async function restoreWorkspace(
   workspaceId: unknown,
@@ -59,37 +90,71 @@ export async function restoreWorkspace(
     throw new Error('workspaces:restore expects a workspace id (string).');
   }
 
-  // Real, persisted configs take priority — the whole point of this
-  // feature is that a saved workspace is genuinely restorable, not
-  // just visible in the sidebar.
-  const { configs } = await loadAllWorkspaceConfigs();
-  const realConfig = configs.find((config) => config.id === workspaceId);
-  if (realConfig) {
-    return runWorkspace(realConfig, onProgress ? { onStepProgress: onProgress } : {});
+  const config = await resolveWorkspaceConfig(workspaceId);
+  return runWorkspace(config, onProgress ? { onStepProgress: onProgress } : {});
+}
+
+/**
+ * Re-resolves the workspace by id and retries exactly one of its steps
+ * — the handler behind the Detail view's per-failed-step Retry button.
+ * Deliberately has no onProgress/focus-session wiring at all (unlike
+ * restoreWorkspace) — retry only ever fires after a restore has already
+ * finished (this app's settled UX for it), so there's no multi-step run
+ * in progress to keep the user oriented through. workspaceId/stepIndex
+ * come straight from the renderer over IPC, so both are validated here
+ * rather than trusted — the index gates a real array index into
+ * `config.steps`, not just advisory input.
+ */
+export async function retryWorkspaceStep(
+  workspaceId: unknown,
+  stepIndex: unknown,
+): Promise<StepResult> {
+  if (typeof workspaceId !== 'string') {
+    throw new Error('workspaces:retryStep expects a workspace id (string).');
+  }
+  if (typeof stepIndex !== 'number' || !Number.isInteger(stepIndex) || stepIndex < 0) {
+    throw new Error('workspaces:retryStep expects a non-negative integer step index.');
   }
 
-  const workspace = MOCK_WORKSPACES.find((ws) => ws.id === workspaceId);
-  if (!workspace) {
-    throw new Error(`No workspace found with id "${workspaceId}".`);
-  }
+  const config = await resolveWorkspaceConfig(workspaceId);
+  return retryStep(config, stepIndex);
+}
 
-  // Routed through the same parseWorkspaceConfig() gate config/loader.ts
-  // uses for on-disk configs — this is currently the only call site
-  // feeding the orchestrator, and keeping it on the one sanctioned
-  // validation path (rather than trusting the mock data's shape by
-  // construction) means it won't silently drift from
-  // WorkspaceConfigSchema if that schema gains stricter rules later.
-  const parsed = parseWorkspaceConfig({
-    version: CURRENT_WORKSPACE_CONFIG_VERSION,
-    id: workspace.id,
-    name: workspace.name,
-    steps: workspace.tools.map((tool) => ({ type: tool.type, params: tool.params })),
-  });
-  if (!parsed.success) {
-    throw new Error(`Built an invalid workspace config for "${workspaceId}": ${parsed.error}`);
+/**
+ * Full context change: closes whatever's running that this workspace
+ * doesn't need (skipping Chrome and anything another active workspace
+ * still needs), then restores this one — see orchestrator.ts's
+ * switchToWorkspace for the actual close/open logic. A no-op on any
+ * platform but macOS (SUPPORTS_WORKSPACE_ACTIVITY), since there's
+ * nothing reliable to close there yet — falls back to a plain restore
+ * so the button still does *something* useful if it's ever reached.
+ */
+export async function switchWorkspace(workspaceId: unknown): Promise<SwitchResult> {
+  if (typeof workspaceId !== 'string') {
+    throw new Error('workspaces:switchTo expects a workspace id (string).');
   }
+  const target = await resolveWorkspaceConfig(workspaceId);
+  if (!SUPPORTS_WORKSPACE_ACTIVITY) {
+    return { stepResults: await runWorkspace(target), closed: [], leftOpen: [] };
+  }
+  const allConfigs = await resolveAllWorkspaceConfigs();
+  return switchToWorkspace(target, allConfigs);
+}
 
-  return runWorkspace(parsed.config, onProgress ? { onStepProgress: onProgress } : {});
+/**
+ * Closes only this workspace's own apps — see orchestrator.ts's
+ * closeWorkspace. A no-op on any platform but macOS: nothing to close.
+ */
+export async function closeWorkspaceStep(workspaceId: unknown): Promise<CloseResult> {
+  if (typeof workspaceId !== 'string') {
+    throw new Error('workspaces:close expects a workspace id (string).');
+  }
+  if (!SUPPORTS_WORKSPACE_ACTIVITY) {
+    return { closed: [], leftOpen: [] };
+  }
+  const target = await resolveWorkspaceConfig(workspaceId);
+  const allConfigs = await resolveAllWorkspaceConfigs();
+  return closeWorkspace(target, allConfigs);
 }
 
 /**
@@ -125,12 +190,16 @@ export async function createWorkspace(input: unknown): Promise<CreateWorkspaceRe
     steps,
   });
   if (!parsed.success) {
-    return { success: false, error: parsed.error };
+    return { success: false, error: parsed.error, code: ERROR_CODES.WORKSPACE_INVALID.code };
   }
 
   const validationError = validateStepsWithRegisteredTools(parsed.config.steps);
   if (validationError) {
-    return { success: false, error: validationError };
+    return {
+      success: false,
+      error: validationError,
+      code: ERROR_CODES.WORKSPACE_INVALID.code,
+    };
   }
 
   await saveWorkspaceConfig(parsed.config);
@@ -139,10 +208,9 @@ export async function createWorkspace(input: unknown): Promise<CreateWorkspaceRe
 
 /**
  * Validates and overwrites an existing real workspace in place (its id
- * never changes). Rejects a mock id or an unknown id with a specific,
- * honest message before touching validation/disk at all. Reuses
- * saveWorkspaceConfig as-is — it already overwrites `<id>.json`
- * unconditionally.
+ * never changes). Rejects an unknown id with a specific, honest message
+ * before touching validation/disk at all. Reuses saveWorkspaceConfig
+ * as-is — it already overwrites `<id>.json` unconditionally.
  */
 export async function updateWorkspace(input: unknown): Promise<UpdateWorkspaceResult> {
   if (typeof input !== 'object' || input === null) {
@@ -153,16 +221,13 @@ export async function updateWorkspace(input: unknown): Promise<UpdateWorkspaceRe
     throw new Error('workspaces:update expects a non-empty string "id".');
   }
 
-  if (isMockWorkspaceId(id)) {
-    return {
-      success: false,
-      error: `Cannot edit "${id}" — sample workspaces aren't saved to disk and can't be edited.`,
-    };
-  }
-
   const { configs } = await loadAllWorkspaceConfigs();
   if (!configs.some((config) => config.id === id)) {
-    return { success: false, error: `No workspace found with id "${id}".` };
+    return {
+      success: false,
+      error: `No workspace found with id "${id}".`,
+      code: ERROR_CODES.WORKSPACE_NOT_FOUND.code,
+    };
   }
 
   const parsed = parseWorkspaceConfig({
@@ -172,12 +237,16 @@ export async function updateWorkspace(input: unknown): Promise<UpdateWorkspaceRe
     steps,
   });
   if (!parsed.success) {
-    return { success: false, error: parsed.error };
+    return { success: false, error: parsed.error, code: ERROR_CODES.WORKSPACE_INVALID.code };
   }
 
   const validationError = validateStepsWithRegisteredTools(parsed.config.steps);
   if (validationError) {
-    return { success: false, error: validationError };
+    return {
+      success: false,
+      error: validationError,
+      code: ERROR_CODES.WORKSPACE_INVALID.code,
+    };
   }
 
   await saveWorkspaceConfig(parsed.config);
@@ -185,29 +254,26 @@ export async function updateWorkspace(input: unknown): Promise<UpdateWorkspaceRe
 }
 
 /**
- * Rejects a mock id or an unknown id with the same shape of honest
- * message updateWorkspace uses. Existence is checked here (not just
- * left to deleteWorkspaceConfig's own ENOENT-tolerance) specifically so
- * a *second* delete of the same real id reports "No workspace found"
- * rather than silently succeeding again — deleteWorkspaceConfig's own
- * idempotency is what makes it a safe, reusable loader primitive, not
- * what should shape this handler's user-facing behavior.
+ * Rejects an unknown id with a specific, honest message. Existence is
+ * checked here (not just left to deleteWorkspaceConfig's own
+ * ENOENT-tolerance) specifically so a *second* delete of the same id
+ * reports "No workspace found" rather than silently succeeding again —
+ * deleteWorkspaceConfig's own idempotency is what makes it a safe,
+ * reusable loader primitive, not what should shape this handler's
+ * user-facing behavior.
  */
 export async function deleteWorkspace(workspaceId: unknown): Promise<DeleteWorkspaceResult> {
   if (typeof workspaceId !== 'string' || workspaceId.length === 0) {
     throw new Error('workspaces:delete expects a non-empty workspace id (string).');
   }
 
-  if (isMockWorkspaceId(workspaceId)) {
-    return {
-      success: false,
-      error: `Cannot delete "${workspaceId}" — sample workspaces aren't saved to disk and can't be deleted.`,
-    };
-  }
-
   const { configs } = await loadAllWorkspaceConfigs();
   if (!configs.some((config) => config.id === workspaceId)) {
-    return { success: false, error: `No workspace found with id "${workspaceId}".` };
+    return {
+      success: false,
+      error: `No workspace found with id "${workspaceId}".`,
+      code: ERROR_CODES.WORKSPACE_NOT_FOUND.code,
+    };
   }
 
   await deleteWorkspaceConfig(workspaceId);
@@ -215,35 +281,30 @@ export async function deleteWorkspace(workspaceId: unknown): Promise<DeleteWorks
 }
 
 /**
- * Real persisted workspaces first, then the mock demo data (see
- * mock-workspaces.ts — slated for full removal once every Tier 1 tool
- * is built), tagged `readOnly: true` so the renderer can hide/disable
- * Edit and Delete for them. A per-file load error (malformed JSON,
- * failed schema, duplicate id) is logged, not thrown or surfaced as a
- * total failure — loadAllWorkspaceConfigs already returns everything
- * that *did* load successfully, and one bad file shouldn't blank the
- * whole sidebar.
+ * Every real, persisted workspace. A per-file load error (malformed
+ * JSON, failed schema, duplicate id) is logged, not thrown or surfaced
+ * as a total failure — loadAllWorkspaceConfigs already returns
+ * everything that *did* load successfully, and one bad file shouldn't
+ * blank the whole sidebar.
  */
 export async function listWorkspaces(): Promise<WorkspaceDisplay[]> {
   const { configs, errors } = await loadAllWorkspaceConfigs();
   for (const [file, message] of Object.entries(errors)) {
     console.error(`Failed to load workspace config "${file}": ${message}`);
   }
-  const realIds = new Set(configs.map((config) => config.id));
-  return [
-    ...configs.map(toWorkspaceDisplay),
-    // Real, persisted configs always take priority — mirrors
-    // restoreWorkspace's own real-before-mock precedence above.
-    // Excluding a colliding mock id here (not just resolving it at
-    // restore-time) avoids ever showing two list rows with the same
-    // id, which would violate React's key uniqueness in Sidebar.tsx
-    // and let a click land on either row unpredictably. Not reachable
-    // through this app's own UI today (createWorkspace always mints a
-    // fresh randomUUID()), but config-schema.ts's id regex doesn't
-    // forbid a hand-placed or future-imported config from choosing one
-    // of the hardcoded mock ids.
-    ...MOCK_WORKSPACES.filter((ws) => !realIds.has(ws.id)).map((ws) => ({ ...ws, readOnly: true })),
-  ];
+
+  // Workspace activity (Restore/Switch/Close — see
+  // WCs/WC__workspace-activity.md) is macOS-only v1 — skip every
+  // osascript call on any other platform rather than attempt one that
+  // could never work.
+  const runningAppNames = SUPPORTS_WORKSPACE_ACTIVITY
+    ? await buildRunningAppNameMap(configs)
+    : new Map<string, boolean>();
+  function activeFor(config: WorkspaceConfig): boolean {
+    return SUPPORTS_WORKSPACE_ACTIVITY && isConfigActive(config, runningAppNames);
+  }
+
+  return configs.map((config) => ({ ...toWorkspaceDisplay(config), active: activeFor(config) }));
 }
 
 /**
@@ -300,6 +361,13 @@ export function registerIpcHandlers(): void {
     }
   });
 
+  ipcMain.handle(
+    'workspaces:retryStep',
+    async (_event, workspaceId: unknown, stepIndex: unknown) => {
+      return retryWorkspaceStep(workspaceId, stepIndex);
+    },
+  );
+
   ipcMain.handle('workspaces:create', async (_event, input: unknown) => {
     return createWorkspace(input);
   });
@@ -312,6 +380,14 @@ export function registerIpcHandlers(): void {
     return deleteWorkspace(workspaceId);
   });
 
+  ipcMain.handle('workspaces:switchTo', async (_event, workspaceId: unknown) => {
+    return switchWorkspace(workspaceId);
+  });
+
+  ipcMain.handle('workspaces:close', async (_event, workspaceId: unknown) => {
+    return closeWorkspaceStep(workspaceId);
+  });
+
   ipcMain.handle('dialog:selectProjectFolder', async (event): Promise<string | null> => {
     // BrowserWindow.fromWebContents can return null (same case
     // restore-focus.ts's startRestoreFocusSession already guards) —
@@ -321,6 +397,24 @@ export function registerIpcHandlers(): void {
     const result = win
       ? await dialog.showOpenDialog(win, { properties: ['openDirectory'] })
       : await dialog.showOpenDialog({ properties: ['openDirectory'] });
+    return result.canceled ? null : (result.filePaths[0] ?? null);
+  });
+
+  ipcMain.handle('dialog:selectApp', async (event): Promise<string | null> => {
+    // `openFile`, not `openDirectory` — a `.app` bundle is technically a
+    // directory, but macOS's own NSOpenPanel (what this dialog is under
+    // the hood) already presents `.app` bundles as selectable, non-
+    // navigable items in openFile mode, same as Finder does. The
+    // `extensions: ['app']` filter narrows the dialog to just those.
+    const options: Electron.OpenDialogOptions = {
+      properties: ['openFile'],
+      filters: [{ name: 'Applications', extensions: ['app'] }],
+      defaultPath: '/Applications',
+    };
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const result = win
+      ? await dialog.showOpenDialog(win, options)
+      : await dialog.showOpenDialog(options);
     return result.canceled ? null : (result.filePaths[0] ?? null);
   });
 
@@ -341,9 +435,17 @@ export function registerIpcHandlers(): void {
       return { success: true, playlists: await listSpotifyPlaylists() };
     } catch (err) {
       if (err instanceof SpotifyReauthRequiredError) {
-        return { success: false, error: 'reauth-required' };
+        return {
+          success: false,
+          error: 'reauth-required',
+          code: ERROR_CODES.SPOTIFY_REAUTH_REQUIRED.code,
+        };
       }
-      return { success: false, error: err instanceof Error ? err.message : String(err) };
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : String(err),
+        code: ERROR_CODES.SPOTIFY_PLAYLISTS_FAILED.code,
+      };
     }
   });
 
@@ -351,7 +453,22 @@ export function registerIpcHandlers(): void {
     try {
       return { success: true, profiles: await listChromeProfiles() };
     } catch (err) {
-      return { success: false, error: err instanceof Error ? err.message : String(err) };
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : String(err),
+        code: ERROR_CODES.CHROME_PROFILES_UNAVAILABLE.code,
+      };
     }
+  });
+
+  ipcMain.handle('app:getIcon', async (_event, appPath: unknown): Promise<string | null> => {
+    // A soft, best-effort display enhancement, not user input being
+    // validated for a mutation — an invalid/missing path just means
+    // "no icon," the same honest outcome as a real path that fails to
+    // resolve, never a thrown error the renderer would need to handle.
+    if (typeof appPath !== 'string' || appPath.length === 0) {
+      return null;
+    }
+    return getAppIconDataUrl(appPath);
   });
 }

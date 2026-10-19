@@ -12,9 +12,6 @@ import type { WorkspaceDisplay } from '../../../preload';
  * can legitimately appear as two separate entries. No normalization
  * utility exists in this codebase to borrow, and inventing one is out
  * of scope for this feature.
- *
- * Includes mock/readOnly workspace paths as a source — readOnly only
- * gates mutation (edit/delete), not read-usage as a suggestion source.
  */
 export function getRecentProjectPaths(
   workspaces: WorkspaceDisplay[],

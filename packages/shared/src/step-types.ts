@@ -81,7 +81,20 @@ export const STEP_TYPES: readonly StepTypeDefinition[] = [
     name: 'Clockify',
     icon: 'clock',
     color: 'amber',
-    configHint: 'No configuration needed',
+    configHint: 'Nothing to configure',
+    implemented: true,
+  },
+  // The non-dev-persona unlock (claude.md's working-decisions round,
+  // item 4): not hardcoded to one specific app like every type above —
+  // picks any installed app via a native file picker and just launches
+  // it. macOS only for now; `open -a` has no Windows equivalent (see
+  // app-tool.ts's own doc comment).
+  {
+    type: 'app',
+    name: 'App',
+    icon: 'appWindow',
+    color: 'teal',
+    configHint: 'Pick an app',
     implemented: true,
   },
 ];

@@ -1,0 +1,38 @@
+import { describe, expect, it } from 'vitest';
+import { formatDuration } from './format-duration';
+
+describe('formatDuration', () => {
+  it('formats whole seconds under a minute', () => {
+    expect(formatDuration(3000)).toBe('3s');
+    expect(formatDuration(59000)).toBe('59s');
+  });
+
+  it('formats exact minutes with no leftover seconds', () => {
+    expect(formatDuration(60000)).toBe('1m');
+    expect(formatDuration(3_600_000)).toBe('60m');
+  });
+
+  it('formats minutes with leftover seconds', () => {
+    expect(formatDuration(80000)).toBe('1m 20s');
+  });
+
+  it('floors any genuinely positive duration to "1s", never "0s" — even one that would otherwise round down', () => {
+    expect(formatDuration(500)).toBe('1s');
+    expect(formatDuration(499)).toBe('1s');
+    expect(formatDuration(1)).toBe('1s');
+    expect(formatDuration(200)).toBe('1s');
+  });
+
+  it('returns "0s" for zero', () => {
+    expect(formatDuration(0)).toBe('0s');
+  });
+
+  it('returns "0s" for non-finite input instead of propagating NaN/Infinity', () => {
+    expect(formatDuration(NaN)).toBe('0s');
+    expect(formatDuration(Infinity)).toBe('0s');
+  });
+
+  it('treats a negative value as zero', () => {
+    expect(formatDuration(-500)).toBe('0s');
+  });
+});

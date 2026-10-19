@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-09-22. Snapshot of what's real, what's scaffolded, and
+Last updated: 2026-10-20. Snapshot of what's real, what's scaffolded, and
 what's next — for picking the project back up after time away. This is
 the single source of truth for build status; `claude.md`'s own "Current
 Status" section is a short pointer here, not a duplicate — update this
@@ -84,11 +84,10 @@ identically once Windows becomes primary again.
   actually writes a config (`config/loader.ts`'s `saveWorkspaceConfig`)
   that `workspaces:list`/`workspaces:restore` read back.
 - **Full CRUD**: Edit and Delete are real, via kebab menus in the
-  sidebar and the detail header (Radix `DropdownMenu`). Mock demo
-  workspaces are correctly read-only (no kebab at all — `readOnly: true`,
-  can't be edited/deleted, both client- and server-side enforced), and
-  now correctly lose to a same-id real config if one is ever hand-placed
-  or imported (fixed this round).
+  sidebar and the detail header (Radix `DropdownMenu`), for every
+  workspace. The bundled demo/mock workspace feature (and its
+  `readOnly` concept) has been removed entirely — see "What's shipped
+  since 2026-09-22" below.
 - **Real "Add tool" picker**: a dropdown listing all 6 Tier-1 step
   types (icon, name, hint), a "Soon" badge for the 3 still-unbuilt types
   (Docker, Terminal, Slack) without blocking you from adding one anyway,
@@ -110,7 +109,8 @@ identically once Windows becomes primary again.
   followed before they were built. ("Terminal" here means a standalone
   step type with its own pane(s); the VS Code step's own narrower
   terminal-restore feature above is a different, already-built thing.)
-- Search bar, Settings button — still decorative only.
+- ~~Search bar, Settings button — still decorative only.~~ Both real now
+  — see "What's shipped since 2026-09-22" below.
 - **Real end-to-end Windows verification** — blocked on VM access (see
   Platform roadmap above); the Windows launcher itself is built and
   unit-tested, just not yet run for real on a real Windows machine.
@@ -269,6 +269,137 @@ versioning/TTL, activation triggers, all failure paths, known
 limitations, manual test plan) — too substantial to keep re-summarizing
 in this file.
 
+## What's shipped since 2026-09-22
+
+Several rounds of real feature work, not just fixes. Each has its own WC
+doc for full depth — this section is a pointer, not a re-summary,
+matching the precedent `WC__vscode-terminal-restore.md` already set.
+
+- **Config UX pickers** (the Tier 1 "no manual typing" item, build-shell.md):
+  VS Code project path via native folder dialog + Recent list, Chrome
+  profile via real on-disk enumeration, Spotify playlist via a real
+  OAuth connection + picker. All three real, no free-text fields left for
+  any of them.
+- **Light theme** support alongside the original dark theme.
+- **A full, user-customizable keyboard shortcut system** — not just a
+  Cmd+K wire-up. Real search (live-filters the sidebar), a Settings page
+  (the gear icon was decorative until now), per-shortcut rebinding with
+  conflict/reserved-combo blocking, `localStorage` persistence. See
+  `WCs/WC__keyboard-shortcuts.md`.
+- **Inline quick-edit from the Detail view** — expanding a step shows the
+  same real editing UI the "Edit workspace" modal uses, no need to leave
+  Detail to change a step's params. See `WCs/WC__quick-edit.md`.
+- **Retry per failed step** (the Tier 1 checklist item, build-shell.md) —
+  a failed step can be re-run individually after a restore, without
+  re-running the whole workspace. See `WCs/WC__retry-per-step.md`.
+- **A generic "App" step type** — not hardcoded to one app like
+  vscode/chrome/spotify/clockify; picks any installed macOS app via a
+  native dialog and launches it, with that app's own real icon and name
+  shown (not a generic placeholder). The actual unlock for non-dev
+  personas (office/design) to use this tool without a hand-written
+  `*-tool.ts` per app. Real debugging saga behind the icon rendering —
+  worth reading in full if this area breaks again. See
+  `WCs/WC__app-launcher.md`.
+- **Netflix-style error codes + a searchable Errors page.** Every
+  surfaced failure (restore step, Chrome/Spotify error, workspace save
+  error) now shows a stable `ER-<CATEGORY>-<NN>` code with a "Learn more
+  about this error" link into a dedicated catalog — reachable only via
+  that link, not Settings/Sidebar. See `WCs/WC__error-codes.md`.
+- **Restore / Switch / Close workspace activity tracking** (Tier 2
+  "Teardown," consciously pulled forward — `docs/build-shell.md`). Two
+  new actions beyond the existing (unchanged) Restore: "Switch to this
+  workspace" reconciles everything currently running to match just one
+  target; "Close this workspace" drops only its own apps. No PID
+  tracking anywhere — name-based AppleScript liveness/quit, intent +
+  liveness drives the sidebar's "Active" badge. Chrome excluded from
+  auto-close; VS Code's liveness is app-level, not per-window — both
+  flagged, not solved. macOS only, v1. See
+  `WCs/WC__workspace-activity.md`.
+- **Removed the bundled demo/mock workspace feature entirely.** Root
+  cause: it was the direct cause of a live bug the founder hit right
+  after the activity-tracking round above — a never-restored mock
+  workspace's `vscode` step matched the founder's own real, unrelated
+  VS Code window, and Switch closed it. That specific bug was already
+  fixed via candidate-scoping (only an app belonging to another
+  workspace that is itself currently active is ever eligible to be
+  closed), but the founder asked for the demo data gone outright so
+  this whole class of surprise can't recur. Deleted
+  `mock-workspaces.ts` and all its wiring in `handlers.ts`
+  (`resolveWorkspaceConfig`, `listWorkspaces`, the edit/delete
+  read-only guards); removed the now-dead `readOnly` field from
+  `WorkspaceDisplay` and every UI branch on it (`Sidebar.tsx`,
+  `Detail.tsx`, `TimelineStep.tsx`); removed the now-dead
+  `WORKSPACE_READONLY` error code. The app now only ever shows
+  workspaces the user actually created.
+- **Real launch-time display**, replacing the old hardcoded `'0s'`/`'—'`
+  placeholders. Went through a full `/judge` round (parallel research +
+  an adversarial plan review) after the founder flagged the numbers as
+  fake and asked why a Proton launch (process-exists ~3s, visually idle
+  ~6s) showed nothing real. Deliberately scoped to "launch," never
+  "restore"/"ready" — true app-idle detection would need a new macOS
+  Accessibility/TCC permission or a native helper binary, both of which
+  would directly contradict this project's own prior decision to defer
+  that exact complexity class (see "Platform roadmap" above). What
+  shipped: on macOS, after a GUI-launch step (vscode/chrome/spotify/
+  clockify/app) succeeds, a detached, un-awaited poll (`process-control.ts`'s
+  `waitForAppRunning`, bounded at 2 minutes) checks for the app actually
+  coming up and records the improved duration into the existing
+  `step-timing-history.ts` store — detached specifically so a
+  slow-to-launch app never slows down the restore itself (Windows is
+  unaffected either way). The UI (`TimingDisplay`, a typed
+  `{ display, state }` shape replacing the old sentinel-string checks)
+  shows "Not yet measured" below 3 samples, an approximate "~Xs" once
+  there's enough history, and an honest partial total
+  ("~8s · 2/3 steps timed") when only some of a workspace's steps have
+  data yet. Known, deliberately accepted limitation: the generic 'app'
+  step type's history bucket is still shared across every distinct app
+  using it (keyed by bare step type, same as the existing adaptive-
+  timeout feature) — re-keying it per-app was considered and explicitly
+  not done, since it would silently break that existing timeout
+  feature's own lookups without separate dedicated review.
+
+## Review round: today's full batch (2026-10-20)
+
+8 review agents ran against every change in this session's batch (mock
+removal: 2 agents; the Active-badge focus-refresh fix: 1; the
+`lastRestored` removal: 1; the launch-time feature: 4, covering
+async/race correctness, security, UX wording, and test coverage). Real
+issues found and fixed:
+
+- The focus-refresh fix (window regains focus → re-check workspace
+  activity) was firing on every single restore step, not just when the
+  user actually tabbed back in — `restore-focus.ts` reasserts window
+  focus per step, which re-triggered the listener each time, contending
+  with the restore's own `osascript` shell-outs. Fixed with a 2s
+  debounce in `App.tsx`.
+- The `lastRestored` removal missed a sibling instance of the exact same
+  "fake honesty placeholder" pattern: `workspace-display.ts`'s subtitle
+  unconditionally said "· never restored" regardless of real restore
+  history. Removed.
+- Two stale comments in `orchestrator.ts`/`TimelineStep.tsx` still
+  referenced the now-deleted mock-workspace feature.
+- Launch-time UX copy leaked "restore" wording in two tooltips (should
+  only ever say "launch"); the workspace-level pill appended "to launch"
+  for the zero-steps case, contradicting its own tooltip ("nothing to
+  time"); the per-step badge was missing the "to launch" suffix the
+  workspace-level pill has, so the same `full` state read inconsistently
+  between the two. All fixed — added a `stepLaunchTimeLabel` helper
+  mirroring the workspace-level one.
+- Added 2 tests the coverage review flagged as real, cheap gaps worth
+  closing: the generic `'app'` type's shared-history-bucket limitation
+  (documents the known behavior rather than papering over it), and a
+  workspace with two steps of the same type (proves the total sums each
+  occurrence, not once per distinct type).
+
+Explicitly **not** fixed, flagged as optional by the reviewers
+themselves, not acted on without a separate decision: no dedup across
+concurrent same-app-name pollers within one restore (security review,
+Low severity); a rapid-retry-while-still-polling double-sample
+nuisance (async review, measurement-skew only, not a correctness bug);
+a deeper integration test exercising the detached record path's real
+store round-trip rather than a mocked one (test-coverage review,
+Medium/optional).
+
 ## Known issues, not yet fixed (deliberately deferred — architecture/DRY, no live bug)
 
 - `orchestrator.ts` passes each tool's _raw_ `step.params` to `run()`,
@@ -313,17 +444,25 @@ regardless. Fix proposed once, declined once; still open, no urgency.
 
 ## Verified state as of the last real check
 
-Lint / typecheck (4 workspaces) / test (**214/214**) / build (main,
-preload, renderer, vscode-extension) / format all clean. Three full
-multi-agent review rounds have now run against this codebase (round 1-2:
-2026-09-18, round 3: 2026-09-22 — 12+ review-agent passes total across
-all three) plus real manual end-to-end testing in the actual running
-app. Every real, concrete bug found across all three rounds has been
-fixed with a regression test; every unverified-and-can't-verify-without-
+Lint / typecheck (4 workspaces) / test (**526/526**) / build (main,
+preload, renderer, vscode-extension) all clean as of 2026-10-20
+(489 after removing the mock-workspace feature and its now-obsolete
+tests plus a new multi-active-workspace Switch regression test, +35
+for the real launch-time display, +2 from an 8-agent review pass
+across every change in this batch — see "What's shipped since
+2026-09-22" above). Three
+full multi-agent review rounds ran against this codebase earlier
+(round 1-2: 2026-09-18, round 3: 2026-09-22 — 12+ review-agent passes
+total); every real, concrete bug found across all three has been fixed
+with a regression test; every unverified-and-can't-verify-without-
 disrupting-something risk (Windows already-running-app behavior, the
 Chrome cold-start multi-tab race, the Windows titlebar overlay, Spotify's
 Windows URI handling) is explicitly flagged in the code and here, not
-silently assumed fine.
+silently assumed fine. Everything built since 2026-09-22 (see that
+section above) was live-verified via Playwright driving the real built
+app rather than a full multi-agent review round — a lighter-weight
+verification bar than rounds 1-3, appropriate for founder-reviewed
+incremental features rather than a pre-ship audit.
 
 ## Natural next steps, in order of what unlocks the most
 

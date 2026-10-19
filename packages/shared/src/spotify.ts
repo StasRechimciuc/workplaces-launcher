@@ -17,7 +17,7 @@ export interface SpotifyPlaylist {
 
 export type SpotifyConnectResult =
   | { success: true; displayName: string }
-  | { success: false; error: string };
+  | { success: false; error: string; code: string };
 
 export interface SpotifyStatus {
   connected: boolean;
@@ -26,4 +26,4 @@ export interface SpotifyStatus {
 
 export type SpotifyListPlaylistsResult =
   | { success: true; playlists: SpotifyPlaylist[] }
-  | { success: false; error: 'reauth-required' | string };
+  | { success: false; error: 'reauth-required' | string; code: string };

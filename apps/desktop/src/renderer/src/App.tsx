@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { WorkspaceConfig } from '@workspace-launcher/shared';
 import type { WorkspaceDisplay } from '../../preload';
 import { Icon } from './icons';
@@ -6,7 +6,19 @@ import { Sidebar } from './components/Sidebar';
 import { Detail } from './components/Detail';
 import { WorkspaceFormModal } from './components/WorkspaceFormModal';
 import { DeleteWorkspaceConfirm } from './components/DeleteWorkspaceConfirm';
+import { SettingsModal } from './components/SettingsModal';
+import { ErrorsModal } from './components/ErrorsModal';
 import { resolveActiveWorkspaceId } from './lib/workspace-selection';
+import { SHORTCUTS, formatCombo, getEffectiveShortcuts, getStoredOverrides } from './lib/shortcuts';
+import { useGlobalShortcuts } from './lib/useGlobalShortcuts';
+
+const DEFAULT_SEARCH_COMBO =
+  SHORTCUTS.find((s) => s.id === 'search.focus')?.defaultCombo ?? 'CommandOrControl+K';
+
+function currentSearchCombo(): string {
+  const effective = getEffectiveShortcuts(SHORTCUTS, getStoredOverrides());
+  return effective.find((s) => s.id === 'search.focus')?.combo ?? DEFAULT_SEARCH_COMBO;
+}
 
 // main/index.ts's windowFrameOptions puts the real OS window controls
 // on different sides per platform: macOS's traffic lights top-left
@@ -23,12 +35,24 @@ export function App(): JSX.Element {
   const [editingWorkspace, setEditingWorkspace] = useState<WorkspaceDisplay | null>(null);
   const [deletingWorkspace, setDeletingWorkspace] = useState<WorkspaceDisplay | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isSettingsOpen, setSettingsOpen] = useState(false);
+  // Opened only via a "Learn more about this error" link (RestoreResults/
+  // Detail/TimelineStep/WorkspaceFormModal) — never from Settings or the
+  // Sidebar, per the founder's explicit "hidden from settings" design.
+  const [errorsModalCode, setErrorsModalCode] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  // The pill shown next to the search box — reflects the EFFECTIVE
+  // combo (default or user override), not just the hardcoded default,
+  // and is refreshed when Settings closes (the only place a rebind can
+  // happen) rather than ever going stale after a user customizes it.
+  const [searchCombo, setSearchCombo] = useState(() => currentSearchCombo());
 
   /**
-   * Fetches the merged real+mock workspace list (see
-   * src/main/ipc/handlers.ts's listWorkspaces) and applies it to
-   * state. Shared by the initial load, "a workspace was just created/
-   * edited," and "a workspace was just deleted" — all need the same
+   * Fetches the real workspace list (see src/main/ipc/handlers.ts's
+   * listWorkspaces) and applies it to state. Shared by the initial
+   * load, "a workspace was just created/edited," "a workspace was just
+   * deleted," and the window-focus refresh below — all need the same
    * behavior, kept in one place instead of near-duplicate blocks that
    * could drift.
    *
@@ -39,7 +63,10 @@ export function App(): JSX.Element {
    * `current` verbatim even if it no longer existed, leaving Detail
    * unrendered with nothing selected.
    */
+  const lastRefreshAtRef = useRef(0);
+
   const refreshWorkspaces = useCallback((selectId?: string): Promise<void> => {
+    lastRefreshAtRef.current = Date.now();
     return window.api
       .listWorkspaces()
       .then((loaded) => {
@@ -58,7 +85,50 @@ export function App(): JSX.Element {
     void refreshWorkspaces();
   }, [refreshWorkspaces]);
 
+  // A workspace's `active` badge (intent + liveness, see
+  // WCs/WC__workspace-activity.md) can go stale the moment the user
+  // quits an app the OS's own way — Cmd+Q, the Dock, the app's own
+  // menu — entirely outside this app's Restore/Switch/Close buttons,
+  // which are the only other places a refresh fires. Re-checking on
+  // window focus catches that the next time the user actually looks at
+  // this app again, without a polling interval running the whole time
+  // it's in the background.
+  //
+  // Debounced against any refresh in the last 2s: restore-focus.ts
+  // reasserts this window's focus on every single restore step (each
+  // launched app briefly steals OS focus, then this window refocuses),
+  // so a multi-step restore would otherwise fire one real,
+  // osascript-backed listWorkspaces() call per step — contending with
+  // the restore's own shell-outs for no benefit, since nothing external
+  // could have changed between steps a fraction of a second apart.
+  useEffect(() => {
+    const handleFocus = (): void => {
+      if (Date.now() - lastRefreshAtRef.current < 2000) return;
+      void refreshWorkspaces();
+    };
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [refreshWorkspaces]);
+
   const activeWorkspace = workspaces.find((ws) => ws.id === activeId);
+
+  const filteredWorkspaces = useMemo(
+    () => workspaces.filter((w) => w.name.toLowerCase().includes(searchQuery.toLowerCase())),
+    [workspaces, searchQuery],
+  );
+
+  const shortcutHandlers = useMemo(
+    () => ({
+      'search.focus': () => {
+        searchInputRef.current?.focus();
+      },
+      'settings.open': () => {
+        setSettingsOpen(true);
+      },
+    }),
+    [],
+  );
+  useGlobalShortcuts(shortcutHandlers);
 
   return (
     <div className="flex h-screen w-full flex-col overflow-hidden bg-bg">
@@ -81,13 +151,22 @@ export function App(): JSX.Element {
         </div>
 
         <div
-          className="mx-auto flex h-7.5 max-w-85 flex-1 items-center gap-1.75 rounded-sm border border-border bg-bg px-2.5 text-[12.5px] text-text-faint"
+          className="mx-auto flex h-7.5 max-w-85 flex-1 items-center gap-1.75 rounded-sm border border-border bg-bg px-2.5 text-[12.5px] text-text-faint focus-within:border-accent-border"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
           <Icon name="search" size={13} />
-          <span>Search workspaces</span>
-          <span className="ml-auto rounded-[4px] border border-border-strong px-1.25 py-px text-[10.5px] leading-[1.4] text-text-faint">
-            ⌘K
+          <input
+            ref={searchInputRef}
+            className="min-w-0 flex-1 bg-transparent text-text placeholder:text-text-faint focus:outline-none"
+            type="text"
+            placeholder="Search workspaces"
+            value={searchQuery}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+            }}
+          />
+          <span className="ml-auto shrink-0 rounded-[4px] border border-border-strong px-1.25 py-px text-[10.5px] leading-[1.4] text-text-faint">
+            {formatCombo(searchCombo, isDarwin)}
           </span>
         </div>
 
@@ -108,7 +187,7 @@ export function App(): JSX.Element {
 
       <div className="relative flex min-h-0 flex-1">
         <Sidebar
-          workspaces={workspaces}
+          workspaces={filteredWorkspaces}
           activeId={activeId}
           onSelect={setActiveId}
           onNewWorkspace={() => {
@@ -116,14 +195,26 @@ export function App(): JSX.Element {
           }}
           onEditWorkspace={setEditingWorkspace}
           onDeleteWorkspace={setDeletingWorkspace}
+          onOpenSettings={() => {
+            setSettingsOpen(true);
+          }}
+          searchQuery={searchQuery}
         />
 
         {activeWorkspace && (
           <Detail
             key={activeWorkspace.id}
             workspace={activeWorkspace}
+            allWorkspaces={workspaces}
             onEditWorkspace={setEditingWorkspace}
             onDeleteWorkspace={setDeletingWorkspace}
+            onQuickEditSaved={(config) => {
+              void refreshWorkspaces(config.id);
+            }}
+            onShowErrorCode={setErrorsModalCode}
+            onWorkspaceActivityChanged={() => {
+              void refreshWorkspaces();
+            }}
           />
         )}
       </div>
@@ -141,6 +232,7 @@ export function App(): JSX.Element {
           setEditingWorkspace(null);
           void refreshWorkspaces(config.id);
         }}
+        onShowErrorCode={setErrorsModalCode}
       />
 
       <DeleteWorkspaceConfirm
@@ -155,6 +247,23 @@ export function App(): JSX.Element {
           // deleted, not whatever a later-opened dialog is showing now.
           setDeletingWorkspace((current) => (current?.id === id ? null : current));
           void refreshWorkspaces();
+        }}
+      />
+
+      <SettingsModal
+        open={isSettingsOpen}
+        onClose={() => {
+          setSettingsOpen(false);
+          // Settings is the only place a shortcut can be rebound — pick
+          // up anything that changed while it was open.
+          setSearchCombo(currentSearchCombo());
+        }}
+      />
+
+      <ErrorsModal
+        code={errorsModalCode}
+        onClose={() => {
+          setErrorsModalCode(null);
         }}
       />
     </div>

@@ -30,7 +30,7 @@
 - [x] Windows GUI-app launch — built as direct `.exe` resolution + spawn (`platform/windows/`), deliberately *not* `start`/ShellExecute (both route through `cmd.exe`, the same risk class as Node's CVE-2024-27980 for `.cmd`/`.bat` shims — see that file's own doc comment); replaces the old macOS `open -a`/AppleScript step
 - [x] Sequence steps (wait where needed)
 - [x] Show per-step status (success/fail)
-- [ ] Basic retry button per failed step
+- [x] Basic retry button per failed step — `orchestrator.ts`'s `retryStep` + `ipc/handlers.ts`'s `retryWorkspaceStep`, reachable post-restore only, replaces the failed row in place; see `WCs/WC__retry-per-step.md`
 - [x] Keep the Workspace Launcher window on top / refocused during restore — minimal live "Step X of N" IPC signal (`packages/shared/src/restore-progress.ts`) + a reference-counted, self-expiring always-on-top session (`apps/desktop/src/main/ipc/restore-focus.ts`), wired through `handlers.ts`'s restore IPC handler via `BrowserWindow.fromWebContents`. Deliberately minimal — not the fuller Tier 2 "Real per-step state" UI (force-stop, manual override, rich state icons), which stays deferred. Windows/Linux focus behavior is unit-tested but not yet manually verified (still blocked on VM access).
 
 ### Config UX — no manual typing (must-have before ship)

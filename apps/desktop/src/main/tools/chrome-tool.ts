@@ -5,7 +5,7 @@ import type {
   ToolPlugin,
   ValidationResult,
 } from '@workspace-launcher/shared';
-import { zodValidate } from '@workspace-launcher/shared';
+import { ERROR_CODES, zodValidate } from '@workspace-launcher/shared';
 import { getPlatformLauncher } from '../platform';
 
 const ChromeStepParamsSchema = z.object({
@@ -26,7 +26,10 @@ const ChromeStepParamsSchema = z.object({
 
 export type ChromeStepParams = z.infer<typeof ChromeStepParamsSchema>;
 
-const CHROME_APP_NAME = 'Google Chrome';
+// Exported for tool-identity.ts (workspace activity tracking — see
+// WCs/WC__workspace-activity.md) — single source of truth for the
+// macOS app name this step type launches.
+export const CHROME_APP_NAME = 'Google Chrome';
 
 export const chromeTool: ToolPlugin<ChromeStepParams> = {
   type: 'chrome',
@@ -52,6 +55,7 @@ export const chromeTool: ToolPlugin<ChromeStepParams> = {
         success: result.success,
         message: result.message,
         durationMs: Date.now() - startedAt,
+        ...(result.success ? {} : { code: ERROR_CODES.CHROME_TABS_FAILED.code }),
       };
     }
 
@@ -94,6 +98,7 @@ export const chromeTool: ToolPlugin<ChromeStepParams> = {
       success: false,
       message: `Opened ${urls.length - failed.length} of ${urls.length} tab(s) in ${CHROME_APP_NAME} (profile: ${params.profile}); failed: ${failed.join(', ')}.`,
       durationMs: Date.now() - startedAt,
+      code: ERROR_CODES.CHROME_TABS_FAILED.code,
     };
   },
 

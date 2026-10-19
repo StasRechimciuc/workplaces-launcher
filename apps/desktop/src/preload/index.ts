@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type {
   ChromeListProfilesResult,
+  CloseResult,
   CreateWorkspaceInput,
   CreateWorkspaceResult,
   DeleteWorkspaceResult,
@@ -8,6 +9,7 @@ import type {
   SpotifyListPlaylistsResult,
   SpotifyStatus,
   StepResult,
+  SwitchResult,
   UpdateWorkspaceInput,
   UpdateWorkspaceResult,
 } from '@workspace-launcher/shared';
@@ -18,19 +20,44 @@ import { RESTORE_PROGRESS_CHANNEL } from '@workspace-launcher/shared/restore-pro
 import type { RestoreProgressEvent } from '@workspace-launcher/shared/restore-progress';
 
 /**
+ * Pre-formatted launch-time display for one step or a whole workspace —
+ * `display` is ready to render as-is (the renderer interpolates it
+ * directly and never re-parses or pattern-matches it); `state` is the
+ * only thing branching logic (tooltip/suffix choice) keys off. Replaces
+ * the old '0s' / '—' sentinel-string conventions, matching this
+ * codebase's existing string-literal-union idiom for exactly this shape
+ * (see LeftOpenEntry.reason in @workspace-launcher/shared).
+ *
+ * - 'no-steps': the workspace has zero steps — nothing to time
+ *   (workspace-level only).
+ * - 'unmeasured': fewer than 3 historical samples exist yet for every
+ *   relevant step type.
+ * - 'partial': some but not all of a workspace's steps have enough
+ *   history (workspace-level only).
+ * - 'full': enough history exists for a clean estimate.
+ *
+ * A single step (TimelineStep.tsx) only ever produces 'unmeasured' |
+ * 'full' in practice — 'no-steps'/'partial' are workspace-level-only
+ * outcomes, but the type is shared so both sides can defensively
+ * exhaust all four without a second parallel type.
+ */
+export interface TimingDisplay {
+  display: string;
+  state: 'no-steps' | 'unmeasured' | 'partial' | 'full';
+}
+
+/**
  * One step in a workspace's restore timeline, as shown in the detail
  * view. Carries both what's displayed (icon, color, human-readable
  * timing) and what actually runs (type/params — the same shape as
  * WorkspaceStep in @workspace-launcher/shared) — see
- * src/main/ipc/mock-workspaces.ts. The display and executable halves
- * converge once the UI is driven by real persisted configs instead of
- * this mock data (Tier 1 feature work: saving a created workspace).
+ * src/main/config/workspace-display.ts's toWorkspaceDisplay.
  */
 export interface WorkspaceToolStepDisplay {
   icon: string;
   color: string;
   name: string;
-  time: string;
+  launchTime: TimingDisplay;
   detail: string;
   expand?: { i: string; label: string; mono?: string }[];
   /** The tool type this step actually runs as — looked up in the tool registry. */
@@ -45,18 +72,17 @@ export interface WorkspaceDisplay {
   tag: string;
   subtitle: string;
   description: string;
-  lastRestored: string;
-  restoreTime: string;
+  launchTime: TimingDisplay;
   tools: WorkspaceToolStepDisplay[];
   /**
-   * True for placeholder/mock workspaces (ipc/mock-workspaces.ts) with
-   * no backing file on disk — Edit/Delete are unavailable for these.
-   * Absent/false means a real, persisted workspace. Display-only: never
-   * sent back over IPC as update/delete input, and never trusted by the
-   * main process for the actual mutation (see handlers.ts's
-   * isMockWorkspaceId, which independently re-derives this).
+   * Explicitly Restored/Switched-to and not yet Closed, AND something
+   * it needs is actually still running (see
+   * WCs/WC__workspace-activity.md) — always false/absent on any
+   * platform but macOS (v1 scope). Optional/computed: absent in
+   * `toWorkspaceDisplay`'s own return type, always present once
+   * `listWorkspaces()` is done with it.
    */
-  readOnly?: boolean;
+  active?: boolean;
 }
 
 /**
@@ -91,16 +117,36 @@ const api = {
     ipcRenderer.on(RESTORE_PROGRESS_CHANNEL, listener);
     return () => ipcRenderer.removeListener(RESTORE_PROGRESS_CHANNEL, listener);
   },
+  // Re-runs exactly one step of an already-restored workspace — the
+  // Detail view's per-failed-step Retry button. Deliberately lighter
+  // than restoreWorkspace: no onRestoreProgress events fire for this,
+  // since retry only runs after a restore has already finished.
+  retryWorkspaceStep: (workspaceId: string, stepIndex: number): Promise<StepResult> =>
+    ipcRenderer.invoke('workspaces:retryStep', workspaceId, stepIndex),
   createWorkspace: (input: CreateWorkspaceInput): Promise<CreateWorkspaceResult> =>
     ipcRenderer.invoke('workspaces:create', input),
   updateWorkspace: (input: UpdateWorkspaceInput): Promise<UpdateWorkspaceResult> =>
     ipcRenderer.invoke('workspaces:update', input),
   deleteWorkspace: (workspaceId: string): Promise<DeleteWorkspaceResult> =>
     ipcRenderer.invoke('workspaces:delete', workspaceId),
+  // Full context change: closes whatever's running that this workspace
+  // doesn't need, then restores it — see orchestrator.ts's
+  // switchToWorkspace. macOS-only v1; a no-op elsewhere that still
+  // restores (WorkspaceDisplay.active is always false off-macOS, so
+  // the renderer never shows this button there).
+  switchToWorkspace: (workspaceId: string): Promise<SwitchResult> =>
+    ipcRenderer.invoke('workspaces:switchTo', workspaceId),
+  // Closes only this workspace's own apps — see orchestrator.ts's
+  // closeWorkspace. macOS-only v1.
+  closeWorkspace: (workspaceId: string): Promise<CloseResult> =>
+    ipcRenderer.invoke('workspaces:close', workspaceId),
   // Resolves to the picked folder's absolute path, or null if the user
   // cancelled the native dialog.
   selectProjectFolder: (): Promise<string | null> =>
     ipcRenderer.invoke('dialog:selectProjectFolder'),
+  // Resolves to the picked .app bundle's absolute path, or null if the
+  // user cancelled — the generic "App" step type's only input.
+  selectApp: (): Promise<string | null> => ipcRenderer.invoke('dialog:selectApp'),
   // Opens the system browser to Spotify's consent page and resolves
   // once the OAuth round trip completes (or fails) — see
   // main/spotify/auth.ts's connect().
@@ -114,6 +160,11 @@ const api = {
   // state, just a local file read (see main/platform/chrome-profiles.ts).
   listChromeProfiles: (): Promise<ChromeListProfilesResult> =>
     ipcRenderer.invoke('chrome:listProfiles'),
+  // Resolves to a data URL of the given .app bundle's own real icon, or
+  // null if it can't be read (app moved/deleted, or any other failure)
+  // — the generic "App" step type's badge (see lib/useAppIcon.ts).
+  getAppIcon: (appPath: string): Promise<string | null> =>
+    ipcRenderer.invoke('app:getIcon', appPath),
 };
 
 export type WorkspaceLauncherApi = typeof api;

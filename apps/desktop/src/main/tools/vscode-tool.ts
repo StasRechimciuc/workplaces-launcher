@@ -5,7 +5,7 @@ import type {
   ToolPlugin,
   ValidationResult,
 } from '@workspace-launcher/shared';
-import { zodValidate } from '@workspace-launcher/shared';
+import { ERROR_CODES, zodValidate } from '@workspace-launcher/shared';
 import {
   deletePendingVscodeRestore,
   writePendingVscodeRestore,
@@ -52,7 +52,11 @@ const VSCodeStepParamsSchema = z.object({
 
 export type VSCodeStepParams = z.infer<typeof VSCodeStepParamsSchema>;
 
-const VSCODE_APP_NAME = 'Visual Studio Code';
+// Exported for tool-identity.ts (workspace activity tracking — see
+// WCs/WC__workspace-activity.md), so that module never retypes
+// this string — it's a single source of truth for the macOS app name
+// this step type launches.
+export const VSCODE_APP_NAME = 'Visual Studio Code';
 
 export const vscodeTool: ToolPlugin<VSCodeStepParams> = {
   type: 'vscode',
@@ -87,6 +91,7 @@ export const vscodeTool: ToolPlugin<VSCodeStepParams> = {
             err instanceof Error ? err.message : String(err)
           }. VS Code was not opened.`,
           durationMs: Date.now() - startedAt,
+          code: ERROR_CODES.VSCODE_TERMINAL_RESTORE_FAILED.code,
         };
       }
     }
@@ -113,7 +118,12 @@ export const vscodeTool: ToolPlugin<VSCodeStepParams> = {
         ? `${result.message} If VS Code was already open for this folder, run "Workspace Launcher: Restore Terminals" from its Command Palette to apply the terminal restore.`
         : result.message;
 
-    return { success: result.success, message, durationMs: Date.now() - startedAt };
+    return {
+      success: result.success,
+      message,
+      durationMs: Date.now() - startedAt,
+      ...(result.success ? {} : { code: ERROR_CODES.APP_LAUNCH_FAILED.code }),
+    };
   },
 
   async teardown(): Promise<StepResult> {

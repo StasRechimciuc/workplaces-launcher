@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ERROR_CODES } from '@workspace-launcher/shared';
 import { chromeTool } from './chrome-tool';
 import { getPlatformLauncher } from '../platform';
 
@@ -151,6 +152,7 @@ describe('chromeTool', () => {
       expect(result.message).toContain('https://b.com');
       expect(result.message).toContain('Chrome not found.');
       expect(result.message).toContain('2 of 3');
+      expect(result.code).toBe(ERROR_CODES.CHROME_TABS_FAILED.code);
     });
 
     it('surfaces a platform-launcher failure as a failed StepResult for the zero-urls case', async () => {
@@ -163,6 +165,7 @@ describe('chromeTool', () => {
 
       expect(result.success).toBe(false);
       expect(result.message).toContain('profile not found');
+      expect(result.code).toBe(ERROR_CODES.CHROME_TABS_FAILED.code);
     });
   });
 

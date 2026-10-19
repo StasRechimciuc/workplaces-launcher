@@ -3,7 +3,15 @@ import type { WorkspaceDisplay, WorkspaceToolStepDisplay } from '../../../preloa
 import { getRecentProjectPaths } from './recent-project-paths';
 
 function makeTool(type: string, params: Record<string, unknown>): WorkspaceToolStepDisplay {
-  return { icon: 'box', color: 'blue', name: type, time: '', detail: '', type, params };
+  return {
+    icon: 'box',
+    color: 'blue',
+    name: type,
+    launchTime: { display: '', state: 'unmeasured' },
+    detail: '',
+    type,
+    params,
+  };
 }
 
 function makeWorkspace(tools: WorkspaceToolStepDisplay[], id = 'ws'): WorkspaceDisplay {
@@ -13,8 +21,7 @@ function makeWorkspace(tools: WorkspaceToolStepDisplay[], id = 'ws'): WorkspaceD
     tag: '',
     subtitle: '',
     description: '',
-    lastRestored: '',
-    restoreTime: '',
+    launchTime: { display: '', state: 'no-steps' },
     tools,
   };
 }

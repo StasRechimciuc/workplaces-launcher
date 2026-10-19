@@ -1,4 +1,5 @@
 import { shell } from 'electron';
+import { ERROR_CODES } from '@workspace-launcher/shared';
 import type { SpotifyConnectResult, SpotifyStatus } from '@workspace-launcher/shared';
 import { generateCodeChallenge, generateCodeVerifier } from './pkce';
 import { runLoopbackAuth } from './oauth-server';
@@ -143,9 +144,13 @@ export async function connect(): Promise<SpotifyConnectResult> {
   } catch (err) {
     cancelAuth?.();
     if (err instanceof SpotifyReauthRequiredError) {
-      return { success: false, error: err.message };
+      return { success: false, error: err.message, code: ERROR_CODES.SPOTIFY_REAUTH_REQUIRED.code };
     }
-    return { success: false, error: err instanceof Error ? err.message : String(err) };
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+      code: ERROR_CODES.SPOTIFY_CONNECT_FAILED.code,
+    };
   }
 }
 

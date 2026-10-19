@@ -2,25 +2,39 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { RESTORE_PROGRESS_CHANNEL } from '@workspace-launcher/shared';
+import { ERROR_CODES, RESTORE_PROGRESS_CHANNEL } from '@workspace-launcher/shared';
 import { dialog, ipcMain } from 'electron';
 import {
+  closeWorkspaceStep,
   createWorkspace,
   deleteWorkspace,
   listWorkspaces,
   registerIpcHandlers,
   restoreWorkspace,
+  retryWorkspaceStep,
+  switchWorkspace,
   updateWorkspace,
 } from './handlers';
+import * as processControl from '../platform/macos/process-control';
+import * as activityStore from '../orchestrator/workspace-activity-store';
 import { registerBuiltInTools } from '../tools';
 import { getPlatformLauncher } from '../platform';
 import * as spotifyAuth from '../spotify/auth';
 import { SpotifyReauthRequiredError } from '../spotify/auth';
 import { listPlaylists as listSpotifyPlaylists } from '../spotify/playlists';
 import { listChromeProfiles } from '../platform/chrome-profiles';
+import { getAppIconDataUrl } from '../platform/app-icon';
 
 vi.mock('../platform', () => ({
   getPlatformLauncher: vi.fn(),
+}));
+
+// app-icon.ts shells out to plutil/sips and does real file I/O — its
+// own extraction logic (Info.plist parsing, sips conversion, the
+// fallback chain) is covered by app-icon.test.ts directly; mocked
+// wholesale here, same precedent as chrome-profiles.ts below.
+vi.mock('../platform/app-icon', () => ({
+  getAppIconDataUrl: vi.fn(),
 }));
 
 // step-timing-history.ts (used by the orchestrator this transitively
@@ -31,6 +45,28 @@ vi.mock('../platform', () => ({
 vi.mock('../orchestrator/step-timing-history', () => ({
   getStepTimeoutMs: () => 5000,
   recordSuccessfulStepDuration: () => {},
+  getTypicalStepDurationMs: () => undefined,
+}));
+
+// Same electron-store hazard as step-timing-history.ts above — mocked
+// wholesale here so listWorkspaces()'s `active` computation (which
+// transitively calls into this via orchestrator.ts) never touches a
+// real store. Its own get/set logic is covered directly by
+// workspace-activity-store.test.ts.
+vi.mock('../orchestrator/workspace-activity-store', () => ({
+  isIntentActive: vi.fn(() => false),
+  setIntentActive: vi.fn(),
+}));
+
+// process-control.ts shells out to real osascript — every
+// listWorkspaces() call now transitively computes `active` via this,
+// so it must never run for real in a test (slow, non-deterministic,
+// and would fail outright off-macOS). Its own parsing/success-shape
+// logic is covered directly by process-control.test.ts.
+vi.mock('../platform/macos/process-control', () => ({
+  isAppRunning: vi.fn().mockResolvedValue(false),
+  quitApp: vi.fn().mockResolvedValue({ success: true, message: '' }),
+  waitForAppRunning: vi.fn().mockResolvedValue({ detected: false, elapsedMs: 0 }),
 }));
 
 // spotify/auth.ts (transitively) constructs an electron-store Store at
@@ -120,6 +156,7 @@ beforeEach(async () => {
   mockWin.focus.mockReset();
   vi.mocked(ipcMain.handle).mockReset();
   vi.mocked(dialog.showOpenDialog).mockReset();
+  vi.mocked(getAppIconDataUrl).mockReset();
   vi.mocked(spotifyAuth.connect).mockReset();
   vi.mocked(spotifyAuth.getConnectionStatus).mockReset();
   vi.mocked(spotifyAuth.disconnect).mockReset();
@@ -131,6 +168,30 @@ afterEach(async () => {
   await rm(testUserDataDir, { recursive: true, force: true });
 });
 
+/**
+ * A real, saved workspace mixing registered tool types (vscode, chrome,
+ * spotify — run for real) with unregistered ones (docker, terminal,
+ * slack — no plugin built yet, so they report a graceful per-step
+ * failure). Mirrors the shape the old bundled demo workspace used to
+ * cover in these tests, now built fresh per test via the real
+ * createWorkspace path instead of hardcoded fixture data.
+ */
+async function createMixedWorkspace(): Promise<string> {
+  const result = await createWorkspace({
+    name: 'Mixed test workspace',
+    steps: [
+      { type: 'vscode', params: { path: '~/real' } },
+      { type: 'docker', params: {} },
+      { type: 'terminal', params: {} },
+      { type: 'chrome', params: { profile: 'Default', urls: ['https://example.com'] } },
+      { type: 'spotify', params: { playlist: 'spotify:playlist:abc' } },
+      { type: 'slack', params: {} },
+    ],
+  });
+  if (!result.success) throw new Error('setup failed: ' + result.error);
+  return result.config.id;
+}
+
 describe('restoreWorkspace', () => {
   it('throws for a non-string workspace id', async () => {
     await expect(restoreWorkspace(123)).rejects.toThrow(/workspace id/);
@@ -140,11 +201,10 @@ describe('restoreWorkspace', () => {
     await expect(restoreWorkspace('does-not-exist')).rejects.toThrow(/No workspace found/);
   });
 
-  it("runs a known mock workspace's steps through the orchestrator", async () => {
-    const results = await restoreWorkspace('client-a');
+  it("runs a workspace's mixed registered/unregistered steps through the orchestrator", async () => {
+    const id = await createMixedWorkspace();
+    const results = await restoreWorkspace(id);
 
-    // client-a has 6 mock steps: vscode/chrome/spotify (registered) +
-    // docker/terminal/slack (no plugin built yet).
     expect(results).toHaveLength(6);
     // vscode's path + spotify's playlist both go through openInApp.
     expect(openInApp).toHaveBeenCalledTimes(2);
@@ -153,18 +213,20 @@ describe('restoreWorkspace', () => {
   });
 
   it('runs the registered vscode step as a real success, not a stub', async () => {
-    const results = await restoreWorkspace('client-a');
+    const id = await createMixedWorkspace();
+    const results = await restoreWorkspace(id);
     expect(results[0]).toMatchObject({ success: true });
   });
 
   it('reports a not-yet-built tool type as a failed step, not a crash', async () => {
-    const results = await restoreWorkspace('client-a');
+    const id = await createMixedWorkspace();
+    const results = await restoreWorkspace(id);
     const dockerResult = results[1];
     expect(dockerResult?.success).toBe(false);
     expect(dockerResult?.message).toContain('docker');
   });
 
-  it('restores a real saved workspace loaded from disk, not just the mock ones', async () => {
+  it('restores a real saved workspace loaded from disk', async () => {
     const created = await createWorkspace({
       name: 'Real one',
       steps: [{ type: 'vscode', params: { path: '~/real' } }],
@@ -176,35 +238,132 @@ describe('restoreWorkspace', () => {
     expect(results[0]).toMatchObject({ success: true });
   });
 
-  it('calls the optional onProgress callback for the mock-workspace path', async () => {
+  it('calls the optional onProgress callback with a running+final event per step', async () => {
+    const id = await createMixedWorkspace();
     const onProgress = vi.fn();
-    await restoreWorkspace('client-a', onProgress);
+    await restoreWorkspace(id, onProgress);
 
-    // client-a has 6 steps — running + a final event per step.
     expect(onProgress).toHaveBeenCalledTimes(12);
     expect(onProgress).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceId: 'client-a', stepIndex: 0, status: 'running' }),
+      expect.objectContaining({ workspaceId: id, stepIndex: 0, status: 'running' }),
     );
   });
+});
 
-  it('calls the optional onProgress callback for a real saved-config path too', async () => {
+describe('retryWorkspaceStep', () => {
+  it('throws for a non-string workspace id', async () => {
+    await expect(retryWorkspaceStep(123, 0)).rejects.toThrow(/workspace id/);
+  });
+
+  it('throws for a non-integer step index', async () => {
+    await expect(retryWorkspaceStep('client-a', 1.5)).rejects.toThrow(/step index/);
+  });
+
+  it('throws for a negative step index', async () => {
+    await expect(retryWorkspaceStep('client-a', -1)).rejects.toThrow(/step index/);
+  });
+
+  it('throws for a non-number step index', async () => {
+    await expect(retryWorkspaceStep('client-a', '0')).rejects.toThrow(/step index/);
+  });
+
+  it('throws for an unknown workspace id', async () => {
+    await expect(retryWorkspaceStep('does-not-exist', 0)).rejects.toThrow(/No workspace found/);
+  });
+
+  it("retries a workspace's registered step as a real run, not a stub", async () => {
+    const id = await createMixedWorkspace();
+    // step 0 is vscode, a registered tool.
+    const result = await retryWorkspaceStep(id, 0);
+    expect(result).toMatchObject({ success: true });
+    expect(openInApp).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a not-yet-built tool type as a failed step, not a crash', async () => {
+    const id = await createMixedWorkspace();
+    // step 1 is docker — no plugin registered for it.
+    const result = await retryWorkspaceStep(id, 1);
+    expect(result.success).toBe(false);
+    expect(result.message).toContain('docker');
+  });
+
+  it('retries a step on a real saved workspace loaded from disk', async () => {
     const created = await createWorkspace({
       name: 'Real one',
       steps: [{ type: 'vscode', params: { path: '~/real' } }],
     });
     if (!created.success) throw new Error('setup failed: ' + created.error);
 
-    const onProgress = vi.fn();
-    await restoreWorkspace(created.config.id, onProgress);
+    const result = await retryWorkspaceStep(created.config.id, 0);
+    expect(result).toMatchObject({ success: true });
+  });
 
-    expect(onProgress).toHaveBeenCalledTimes(2);
-    expect(onProgress).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceId: created.config.id, status: 'running' }),
-    );
+  it('reports a failed result, not a throw, for an out-of-range step index', async () => {
+    const id = await createMixedWorkspace();
+    const result = await retryWorkspaceStep(id, 999);
+    expect(result.success).toBe(false);
+    expect(result.message).toContain('No step at index 999');
+  });
+});
+
+describe('switchWorkspace', () => {
+  it('throws for a non-string workspace id', async () => {
+    await expect(switchWorkspace(123)).rejects.toThrow(/workspace id/);
+  });
+
+  it('throws for an unknown workspace id', async () => {
+    await expect(switchWorkspace('does-not-exist')).rejects.toThrow(/No workspace found/);
+  });
+
+  it('restores the target workspace (closing/opening bookkeeping covered by orchestrator.test.ts)', async () => {
+    const id = await createMixedWorkspace();
+    const result = await switchWorkspace(id);
+    expect(result.stepResults.length).toBeGreaterThan(0);
+  });
+});
+
+describe('closeWorkspaceStep', () => {
+  it('throws for a non-string workspace id', async () => {
+    await expect(closeWorkspaceStep(123)).rejects.toThrow(/workspace id/);
+  });
+
+  it('throws for an unknown workspace id', async () => {
+    await expect(closeWorkspaceStep('does-not-exist')).rejects.toThrow(/No workspace found/);
+  });
+
+  it('resolves without throwing for a known workspace', async () => {
+    const id = await createMixedWorkspace();
+    const result = await closeWorkspaceStep(id);
+    expect(result).toHaveProperty('closed');
+    expect(result).toHaveProperty('leftOpen');
+  });
+});
+
+describe('registerIpcHandlers — workspaces:retryStep', () => {
+  it('registers the channel and delegates to retryWorkspaceStep', async () => {
+    const id = await createMixedWorkspace();
+    registerIpcHandlers();
+    const call = vi
+      .mocked(ipcMain.handle)
+      .mock.calls.find(([channel]) => channel === 'workspaces:retryStep');
+    if (!call) throw new Error('workspaces:retryStep was never registered');
+    const handler = call[1] as (
+      event: unknown,
+      workspaceId: unknown,
+      stepIndex: unknown,
+    ) => Promise<unknown>;
+
+    const result = await handler({}, id, 0);
+    expect(result).toMatchObject({ success: true });
   });
 });
 
 describe('registerIpcHandlers — workspaces:restore progress + focus wiring', () => {
+  let mixedWorkspaceId: string;
+  beforeEach(async () => {
+    mixedWorkspaceId = await createMixedWorkspace();
+  });
+
   function getRegisteredRestoreHandler(): (
     event: { sender: { send: ReturnType<typeof vi.fn>; isDestroyed: ReturnType<typeof vi.fn> } },
     workspaceId: unknown,
@@ -222,13 +381,13 @@ describe('registerIpcHandlers — workspaces:restore progress + focus wiring', (
     const send = vi.fn();
     const event = { sender: { send, isDestroyed: vi.fn(() => false) } };
 
-    const results = await handler(event, 'client-a');
+    const results = await handler(event, mixedWorkspaceId);
 
     expect(results).toHaveLength(6);
     expect(send).toHaveBeenCalledTimes(12);
     expect(send.mock.calls[0]).toEqual([
       RESTORE_PROGRESS_CHANNEL,
-      expect.objectContaining({ workspaceId: 'client-a', stepIndex: 0, status: 'running' }),
+      expect.objectContaining({ workspaceId: mixedWorkspaceId, stepIndex: 0, status: 'running' }),
     ]);
     // Focus lifecycle: pinned at the start, re-asserted on the first
     // 'running' event, cleared once the whole restore has resolved.
@@ -244,7 +403,7 @@ describe('registerIpcHandlers — workspaces:restore progress + focus wiring', (
     });
     const event = { sender: { send, isDestroyed: vi.fn(() => false) } };
 
-    const results = await handler(event, 'client-a');
+    const results = await handler(event, mixedWorkspaceId);
 
     // The exact failure mode the adversarial review caught: a throwing
     // send() must never abort the run or discard already-collected
@@ -257,7 +416,7 @@ describe('registerIpcHandlers — workspaces:restore progress + focus wiring', (
     const send = vi.fn();
     const event = { sender: { send, isDestroyed: vi.fn(() => true) } };
 
-    const results = await handler(event, 'client-a');
+    const results = await handler(event, mixedWorkspaceId);
 
     expect(results).toHaveLength(6);
     expect(send).not.toHaveBeenCalled();
@@ -274,7 +433,7 @@ describe('registerIpcHandlers — workspaces:restore progress + focus wiring', (
     const handler = getRegisteredRestoreHandler();
     const event = { sender: { send: vi.fn(), isDestroyed: vi.fn(() => false) } };
 
-    const results = await handler(event, 'client-a');
+    const results = await handler(event, mixedWorkspaceId);
 
     // Same failure class as the destroyed-webContents case above, but
     // for restore-focus.ts's moveTop()/focus() calls instead of send().
@@ -336,6 +495,72 @@ describe('registerIpcHandlers — dialog:selectProjectFolder', () => {
   });
 });
 
+describe('registerIpcHandlers — dialog:selectApp', () => {
+  function getRegisteredSelectAppHandler(): (event: {
+    sender: unknown;
+  }) => Promise<string | null> {
+    registerIpcHandlers();
+    const call = vi
+      .mocked(ipcMain.handle)
+      .mock.calls.find(([channel]) => channel === 'dialog:selectApp');
+    if (!call) throw new Error('dialog:selectApp was never registered');
+    return call[1] as never;
+  }
+
+  it('returns the picked .app bundle path on success', async () => {
+    vi.mocked(dialog.showOpenDialog).mockResolvedValueOnce({
+      canceled: false,
+      filePaths: ['/Applications/Figma.app'],
+    });
+    const handler = getRegisteredSelectAppHandler();
+
+    expect(await handler({ sender: {} })).toBe('/Applications/Figma.app');
+  });
+
+  it('returns null when the user cancels the dialog', async () => {
+    vi.mocked(dialog.showOpenDialog).mockResolvedValueOnce({ canceled: true, filePaths: [] });
+    const handler = getRegisteredSelectAppHandler();
+
+    expect(await handler({ sender: {} })).toBeNull();
+  });
+
+  it('filters to .app bundles and defaults to /Applications', async () => {
+    vi.mocked(dialog.showOpenDialog).mockResolvedValueOnce({
+      canceled: false,
+      filePaths: ['/Applications/Figma.app'],
+    });
+    const handler = getRegisteredSelectAppHandler();
+
+    await handler({ sender: {} });
+
+    expect(dialog.showOpenDialog).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        properties: ['openFile'],
+        filters: [{ name: 'Applications', extensions: ['app'] }],
+        defaultPath: '/Applications',
+      }),
+    );
+  });
+
+  it('falls back to the no-window overload when BrowserWindow.fromWebContents returns null', async () => {
+    const { BrowserWindow } = await import('electron');
+    vi.mocked(BrowserWindow.fromWebContents).mockReturnValueOnce(null);
+    vi.mocked(dialog.showOpenDialog).mockResolvedValueOnce({
+      canceled: false,
+      filePaths: ['/Applications/Figma.app'],
+    });
+    const handler = getRegisteredSelectAppHandler();
+
+    const result = await handler({ sender: {} });
+
+    expect(result).toBe('/Applications/Figma.app');
+    expect(dialog.showOpenDialog).toHaveBeenCalledWith(
+      expect.objectContaining({ properties: ['openFile'] }),
+    );
+  });
+});
+
 describe('registerIpcHandlers — spotify:*', () => {
   function getRegisteredSpotifyHandler(
     channel: 'spotify:connect' | 'spotify:status' | 'spotify:disconnect' | 'spotify:listPlaylists',
@@ -383,14 +608,22 @@ describe('registerIpcHandlers — spotify:*', () => {
     vi.mocked(listSpotifyPlaylists).mockRejectedValueOnce(new SpotifyReauthRequiredError());
     const handler = getRegisteredSpotifyHandler('spotify:listPlaylists');
 
-    expect(await handler({ sender: {} })).toEqual({ success: false, error: 'reauth-required' });
+    expect(await handler({ sender: {} })).toEqual({
+      success: false,
+      error: 'reauth-required',
+      code: ERROR_CODES.SPOTIFY_REAUTH_REQUIRED.code,
+    });
   });
 
   it('spotify:listPlaylists maps any other failure to its message, not a thrown exception', async () => {
     vi.mocked(listSpotifyPlaylists).mockRejectedValueOnce(new Error('network down'));
     const handler = getRegisteredSpotifyHandler('spotify:listPlaylists');
 
-    expect(await handler({ sender: {} })).toEqual({ success: false, error: 'network down' });
+    expect(await handler({ sender: {} })).toEqual({
+      success: false,
+      error: 'network down',
+      code: ERROR_CODES.SPOTIFY_PLAYLISTS_FAILED.code,
+    });
   });
 });
 
@@ -421,6 +654,7 @@ describe('registerIpcHandlers — chrome:listProfiles', () => {
     expect(await handler({ sender: {} })).toEqual({
       success: false,
       error: "Chrome doesn't appear to be installed",
+      code: ERROR_CODES.CHROME_PROFILES_UNAVAILABLE.code,
     });
   });
 });
@@ -443,6 +677,7 @@ describe('createWorkspace', () => {
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error).toContain('path');
+      expect(result.code).toBe(ERROR_CODES.WORKSPACE_INVALID.code);
     }
   });
 
@@ -482,16 +717,13 @@ describe('updateWorkspace', () => {
     await expect(updateWorkspace({ id: 123, name: 'X', steps: [] })).rejects.toThrow(/"id"/);
   });
 
-  it('rejects editing a mock workspace with a specific, honest message', async () => {
-    const result = await updateWorkspace({ id: 'client-a', name: 'Hacked', steps: [] });
-    expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toContain("can't be edited");
-  });
-
   it('rejects an unknown workspace id', async () => {
     const result = await updateWorkspace({ id: 'does-not-exist', name: 'X', steps: [] });
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toMatch(/No workspace found/);
+    if (!result.success) {
+      expect(result.error).toMatch(/No workspace found/);
+      expect(result.code).toBe(ERROR_CODES.WORKSPACE_NOT_FOUND.code);
+    }
   });
 
   it('rejects an empty new name via the same schema as createWorkspace', async () => {
@@ -515,7 +747,10 @@ describe('updateWorkspace', () => {
       steps: [{ type: 'vscode', params: { path: '' } }],
     });
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toContain('path');
+    if (!result.success) {
+      expect(result.error).toContain('path');
+      expect(result.code).toBe(ERROR_CODES.WORKSPACE_INVALID.code);
+    }
   });
 
   it('overwrites the saved file in place, id unchanged, loadable afterward', async () => {
@@ -548,16 +783,13 @@ describe('deleteWorkspace', () => {
     await expect(deleteWorkspace(123)).rejects.toThrow(/workspace id/);
   });
 
-  it('rejects deleting a mock workspace with a specific, honest message', async () => {
-    const result = await deleteWorkspace('client-a');
-    expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toContain("can't be deleted");
-  });
-
   it('rejects an unknown workspace id', async () => {
     const result = await deleteWorkspace('does-not-exist');
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toMatch(/No workspace found/);
+    if (!result.success) {
+      expect(result.error).toMatch(/No workspace found/);
+      expect(result.code).toBe(ERROR_CODES.WORKSPACE_NOT_FOUND.code);
+    }
   });
 
   it('deletes a real saved workspace, removing its file and from listWorkspaces', async () => {
@@ -573,7 +805,6 @@ describe('deleteWorkspace', () => {
 
     const all = await listWorkspaces();
     expect(all.some((ws) => ws.id === created.config.id)).toBe(false);
-    expect(all.some((ws) => ws.id === 'client-a')).toBe(true);
   });
 
   it('reports "No workspace found" (not a silent no-op) on a second delete of the same id', async () => {
@@ -583,52 +814,18 @@ describe('deleteWorkspace', () => {
 
     const second = await deleteWorkspace(created.config.id);
     expect(second.success).toBe(false);
-    if (!second.success) expect(second.error).toMatch(/No workspace found/);
+    if (!second.success) {
+      expect(second.error).toMatch(/No workspace found/);
+      expect(second.code).toBe(ERROR_CODES.WORKSPACE_NOT_FOUND.code);
+    }
   });
 });
 
 describe('listWorkspaces', () => {
-  it('includes a freshly created real workspace alongside the mock ones', async () => {
+  it('includes a freshly created real workspace', async () => {
     await createWorkspace({ name: 'Real one', steps: [] });
     const all = await listWorkspaces();
     expect(all.some((ws) => ws.name === 'Real one')).toBe(true);
-    expect(all.some((ws) => ws.id === 'client-a')).toBe(true);
-  });
-
-  it('tags real workspaces as not read-only and mock workspaces as read-only', async () => {
-    await createWorkspace({ name: 'Real one', steps: [] });
-    const all = await listWorkspaces();
-    const real = all.find((ws) => ws.name === 'Real one');
-    const mock = all.find((ws) => ws.id === 'client-a');
-    expect(real?.readOnly).toBeFalsy();
-    expect(mock?.readOnly).toBe(true);
-  });
-
-  it('lists real workspaces before the mock ones', async () => {
-    await createWorkspace({ name: 'Real one', steps: [] });
-    const all = await listWorkspaces();
-    const realIndex = all.findIndex((ws) => ws.name === 'Real one');
-    const mockIndex = all.findIndex((ws) => ws.id === 'client-a');
-    expect(realIndex).toBeLessThan(mockIndex);
-  });
-
-  it('prefers a real persisted config over a mock workspace sharing the same id', async () => {
-    // Not reachable via createWorkspace (always mints a fresh
-    // randomUUID()) — simulates a hand-placed/imported config file
-    // that happens to reuse one of the hardcoded mock ids.
-    const dir = join(testUserDataDir, 'workspaces');
-    await mkdir(dir, { recursive: true });
-    await writeFile(
-      join(dir, 'client-a.json'),
-      JSON.stringify({ version: 1, id: 'client-a', name: 'Real client-a', steps: [] }),
-    );
-
-    const all = await listWorkspaces();
-    const matches = all.filter((ws) => ws.id === 'client-a');
-
-    expect(matches).toHaveLength(1);
-    expect(matches[0]?.name).toBe('Real client-a');
-    expect(matches[0]?.readOnly).toBeFalsy();
   });
 
   it('logs, but does not throw, when a persisted config file is unreadable', async () => {
@@ -641,5 +838,117 @@ describe('listWorkspaces', () => {
     expect(consoleErrorSpy).toHaveBeenCalled();
 
     consoleErrorSpy.mockRestore();
+  });
+
+  describe('active', () => {
+    beforeEach(() => {
+      vi.mocked(processControl.isAppRunning).mockReset().mockResolvedValue(false);
+      vi.mocked(activityStore.isIntentActive).mockReset().mockReturnValue(false);
+    });
+
+    it('is false for a workspace that was never intent-activated, even if it is still running', async () => {
+      const created = await createWorkspace({
+        name: 'VSC',
+        steps: [{ type: 'vscode', params: { path: '~/x' } }],
+      });
+      if (!created.success) throw new Error('setup failed: ' + created.error);
+      // Nothing marks it intent-active here.
+      vi.mocked(processControl.isAppRunning).mockImplementation(
+        async (name) => name === 'Visual Studio Code',
+      );
+
+      const all = await listWorkspaces();
+      expect(all.find((ws) => ws.id === created.config.id)?.active).toBeFalsy();
+    });
+
+    it('is true only when intent-active AND something it needs is actually running', async () => {
+      const created = await createWorkspace({
+        name: 'VSC',
+        steps: [{ type: 'vscode', params: { path: '~/x' } }],
+      });
+      if (!created.success) throw new Error('setup failed: ' + created.error);
+      vi.mocked(activityStore.isIntentActive).mockImplementation(
+        (id: string) => id === created.config.id,
+      );
+      vi.mocked(processControl.isAppRunning).mockImplementation(
+        async (name) => name === 'Visual Studio Code',
+      );
+
+      const all = await listWorkspaces();
+      expect(all.find((ws) => ws.id === created.config.id)?.active).toBe(true);
+    });
+
+    it('never shows active a workspace that merely shares a no-target tool with an active one', async () => {
+      // Two workspaces both using spotify, which has no distinguishing
+      // target — both "running" Spotify must never make the one that
+      // was never itself restored/switched-to appear active.
+      const active = await createWorkspace({ name: 'A', steps: [{ type: 'spotify', params: {} }] });
+      if (!active.success) throw new Error('setup failed: ' + active.error);
+      const neverTouched = await createWorkspace({
+        name: 'B (never touched)',
+        steps: [{ type: 'spotify', params: {} }],
+      });
+      if (!neverTouched.success) throw new Error('setup failed: ' + neverTouched.error);
+
+      vi.mocked(activityStore.isIntentActive).mockImplementation(
+        (id: string) => id === active.config.id,
+      );
+      vi.mocked(processControl.isAppRunning).mockImplementation(async (name) => name === 'Spotify');
+
+      const all = await listWorkspaces();
+      expect(all.find((ws) => ws.id === neverTouched.config.id)?.active).toBeFalsy();
+    });
+
+    // The non-macOS guard (SUPPORTS_WORKSPACE_ACTIVITY) is a module-level
+    // constant computed at import time from process.platform — testing
+    // the other branch would need vi.resetModules() plus a fresh import,
+    // which would rebind processControl/activityStore to new mock
+    // instances distinct from the ones asserted on here. Not worth the
+    // fragility for a one-line early return; verified by inspection
+    // instead (apps/desktop/src/main/ipc/handlers.ts's
+    // SUPPORTS_WORKSPACE_ACTIVITY and every guarded call site).
+  });
+});
+
+describe('registerIpcHandlers — app:getIcon', () => {
+  function getRegisteredAppIconHandler(): (
+    event: unknown,
+    appPath: unknown,
+  ) => Promise<string | null> {
+    registerIpcHandlers();
+    const call = vi.mocked(ipcMain.handle).mock.calls.find(([channel]) => channel === 'app:getIcon');
+    if (!call) throw new Error('app:getIcon was never registered');
+    return call[1] as never;
+  }
+
+  it('returns getAppIconDataUrl\'s result unchanged on success', async () => {
+    vi.mocked(getAppIconDataUrl).mockResolvedValueOnce('data:image/png;base64,abc123');
+    const handler = getRegisteredAppIconHandler();
+
+    const result = await handler({}, '/Applications/Figma.app');
+
+    expect(result).toBe('data:image/png;base64,abc123');
+    expect(getAppIconDataUrl).toHaveBeenCalledWith('/Applications/Figma.app');
+  });
+
+  it('returns null for a non-string path, without calling getAppIconDataUrl', async () => {
+    const handler = getRegisteredAppIconHandler();
+
+    expect(await handler({}, 123)).toBeNull();
+    expect(getAppIconDataUrl).not.toHaveBeenCalled();
+  });
+
+  it('returns null for an empty string path, without calling getAppIconDataUrl', async () => {
+    const handler = getRegisteredAppIconHandler();
+
+    expect(await handler({}, '')).toBeNull();
+    expect(getAppIconDataUrl).not.toHaveBeenCalled();
+  });
+
+  it('passes through a null result (extraction failed) unchanged', async () => {
+    vi.mocked(getAppIconDataUrl).mockResolvedValueOnce(null);
+    const handler = getRegisteredAppIconHandler();
+
+    expect(await handler({}, '/Applications/Gone.app')).toBeNull();
   });
 });

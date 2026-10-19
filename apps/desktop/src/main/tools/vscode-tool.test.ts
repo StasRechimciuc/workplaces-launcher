@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ERROR_CODES } from '@workspace-launcher/shared';
 import { vscodeTool } from './vscode-tool';
 import { getPlatformLauncher } from '../platform';
 import {
@@ -147,6 +148,7 @@ describe('vscodeTool', () => {
 
       expect(result.success).toBe(false);
       expect(result.message).toContain('app not found');
+      expect(result.code).toBe(ERROR_CODES.APP_LAUNCH_FAILED.code);
     });
 
     it('does not stage a restore file when terminals is empty', async () => {
@@ -207,6 +209,7 @@ describe('vscodeTool', () => {
       expect(openInApp).not.toHaveBeenCalled();
       expect(result.success).toBe(false);
       expect(result.message).toContain('disk full');
+      expect(result.code).toBe(ERROR_CODES.VSCODE_TERMINAL_RESTORE_FAILED.code);
     });
 
     it('cleans up the staged restore file when openInApp fails after terminals were configured', async () => {
@@ -219,6 +222,7 @@ describe('vscodeTool', () => {
 
       expect(mockedDeletePendingVscodeRestore).toHaveBeenCalledWith('/Users/me/projects/client-a');
       expect(result.success).toBe(false);
+      expect(result.code).toBe(ERROR_CODES.APP_LAUNCH_FAILED.code);
     });
 
     it('does not attempt cleanup when openInApp fails and there were no terminals to stage', async () => {

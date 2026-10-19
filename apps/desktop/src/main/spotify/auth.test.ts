@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ERROR_CODES } from '@workspace-launcher/shared';
 import { shell } from 'electron';
 import { runLoopbackAuth } from './oauth-server';
 import { loadDisplayName, loadRefreshToken, saveCredentials } from './token-store';
@@ -58,7 +59,11 @@ describe('spotify/auth', () => {
 
       const result = await connect();
 
-      expect(result).toEqual({ success: false, error: expect.stringContaining('SPOTIFY_CLIENT_ID') });
+      expect(result).toEqual({
+        success: false,
+        error: expect.stringContaining('SPOTIFY_CLIENT_ID'),
+        code: ERROR_CODES.SPOTIFY_CONNECT_FAILED.code,
+      });
       expect(shell.openExternal).not.toHaveBeenCalled();
     });
 
@@ -109,7 +114,11 @@ describe('spotify/auth', () => {
 
       const outcome = await connect();
 
-      expect(outcome).toEqual({ success: false, error: expect.stringContaining('denied') });
+      expect(outcome).toEqual({
+        success: false,
+        error: expect.stringContaining('denied'),
+        code: ERROR_CODES.SPOTIFY_CONNECT_FAILED.code,
+      });
     });
 
     it('cancels the loopback server when shell.openExternal rejects, instead of leaving it listening', async () => {
@@ -124,7 +133,11 @@ describe('spotify/auth', () => {
 
       const outcome = await connect();
 
-      expect(outcome).toEqual({ success: false, error: expect.stringContaining('no default browser') });
+      expect(outcome).toEqual({
+        success: false,
+        error: expect.stringContaining('no default browser'),
+        code: ERROR_CODES.SPOTIFY_CONNECT_FAILED.code,
+      });
       expect(cancel).toHaveBeenCalledTimes(1);
     });
   });

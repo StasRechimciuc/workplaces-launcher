@@ -1,7 +1,13 @@
 import type { WorkspaceConfig, WorkspaceStep } from '@workspace-launcher/shared';
-import { getStepTypeDefinition, type StepTypeDefinition } from '@workspace-launcher/shared';
+import {
+  appDisplayName,
+  formatDuration,
+  getStepTypeDefinition,
+  type StepTypeDefinition,
+} from '@workspace-launcher/shared';
 import { getTool } from '../tools/registry';
-import type { WorkspaceDisplay, WorkspaceToolStepDisplay } from '../../preload';
+import { getTypicalStepDurationMs } from '../orchestrator/step-timing-history';
+import type { TimingDisplay, WorkspaceDisplay, WorkspaceToolStepDisplay } from '../../preload';
 
 // Must match src/renderer/src/lib/tool-colors.ts's TAG_DOT_CLASSES keys
 // exactly. Not centralized in @workspace-launcher/shared in this pass —
@@ -68,19 +74,83 @@ function describeStep(
   };
 }
 
+/**
+ * The generic 'app' type's whole point is that it isn't one fixed
+ * thing — showing the literal STEP_TYPES name ("App") for every single
+ * instance would be useless/confusing with more than one in the same
+ * workspace (which app?). Every other type's name is genuinely static
+ * (a "VS Code" step is always VS Code), so this is deliberately scoped
+ * to 'app' only, not a general per-type override mechanism.
+ */
+function stepDisplayName(step: WorkspaceStep, def: StepTypeDefinition | undefined): string {
+  if (step.type === 'app') {
+    const path = step.params['path'];
+    if (typeof path === 'string' && path.length > 0) {
+      return appDisplayName(path);
+    }
+  }
+  return def?.name ?? step.type;
+}
+
+/**
+ * This step type's typical launch time, for display — "launch," not
+ * "restore"/"ready": on macOS this reflects real, measured time until
+ * the app's process was detected running (orchestrator.ts's runStep),
+ * on top of the tool's own launch-call duration; some apps may still be
+ * finishing their own startup after this point (true idle/readiness
+ * detection is out of scope — see WCs/WC__project-status.md). 'unmeasured'
+ * below MIN_SAMPLES_FOR_ADAPTIVE_TIMEOUT samples (step-timing-history.ts)
+ * — not a guess, an honest "no data yet."
+ */
+function stepLaunchTime(stepType: string): TimingDisplay {
+  const typicalMs = getTypicalStepDurationMs(stepType);
+  if (typicalMs === undefined) {
+    return { display: 'Not yet measured', state: 'unmeasured' };
+  }
+  return { display: `~${formatDuration(typicalMs)}`, state: 'full' };
+}
+
+/**
+ * Workspace-level launch-time summary: sums each step's typical
+ * duration, but only across steps that actually have data — a step
+ * with no history yet is never silently counted as 0ms, which would
+ * understate the real total. Four distinct outcomes: zero steps ('—' —
+ * nothing to time at all, distinct from "has steps but none measured
+ * yet"); steps exist but none have data ('unmeasured'); some but not
+ * all have data ('partial' — the real total is at least this much,
+ * never a falsely-clean number); every step has data ('full').
+ */
+function workspaceLaunchTime(steps: WorkspaceStep[]): TimingDisplay {
+  if (steps.length === 0) {
+    return { display: '—', state: 'no-steps' };
+  }
+
+  const durations = steps.map((step) => getTypicalStepDurationMs(step.type));
+  const known = durations.filter((ms): ms is number => ms !== undefined);
+
+  if (known.length === 0) {
+    return { display: 'Not yet measured', state: 'unmeasured' };
+  }
+
+  const sum = known.reduce((total, ms) => total + ms, 0);
+  const formatted = `~${formatDuration(sum)}`;
+  if (known.length === durations.length) {
+    return { display: formatted, state: 'full' };
+  }
+  return {
+    display: `${formatted} · ${known.length}/${durations.length} steps timed`,
+    state: 'partial',
+  };
+}
+
 function toWorkspaceToolStepDisplay(step: WorkspaceStep): WorkspaceToolStepDisplay {
   const def = getStepTypeDefinition(step.type);
   const { detail, expand } = describeStep(step, def);
   return {
     icon: def?.icon ?? 'box',
     color: def?.color ?? 'zinc',
-    name: def?.name ?? step.type,
-    // No real per-step timing exists before a workspace's first
-    // restore — '0s' is a deliberate placeholder (not a real
-    // measurement), per the founder's own call overriding the prior
-    // '—' placeholder. TimelineStep.tsx's badge tooltip is keyed off
-    // this exact literal to explain it on hover.
-    time: '0s',
+    name: stepDisplayName(step, def),
+    launchTime: stepLaunchTime(step.type),
     detail,
     // Spread conditionally, not `expand: expand`: exactOptionalPropertyTypes
     // treats an explicit `undefined` value differently from the key
@@ -94,9 +164,7 @@ function toWorkspaceToolStepDisplay(step: WorkspaceStep): WorkspaceToolStepDispl
 
 /**
  * Converts a real, persisted WorkspaceConfig into the renderer's
- * display shape. Never restored yet by definition (it was only just
- * loaded/created), so lastRestored/restoreTime are fixed, honest
- * placeholders rather than mock-style fabricated history.
+ * display shape.
  */
 export function toWorkspaceDisplay(config: WorkspaceConfig): WorkspaceDisplay {
   const tools = config.steps.map(toWorkspaceToolStepDisplay);
@@ -106,13 +174,12 @@ export function toWorkspaceDisplay(config: WorkspaceConfig): WorkspaceDisplay {
     id: config.id,
     name: config.name,
     tag: tagColorForId(config.id),
-    subtitle: `${tools.length} tool${tools.length === 1 ? '' : 's'} · never restored`,
+    subtitle: `${tools.length} tool${tools.length === 1 ? '' : 's'}`,
     description:
       stepNames.length > 0
         ? `${joinWithAnd(stepNames)}, restored in order below.`
         : 'No tools added yet.',
-    lastRestored: 'Never',
-    restoreTime: '—',
+    launchTime: workspaceLaunchTime(config.steps),
     tools,
   };
 }

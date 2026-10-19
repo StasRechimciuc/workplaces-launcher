@@ -25,7 +25,7 @@ const BUTTON_CLASS =
 export function SpotifyFields({
   params,
   onChange,
-  registerPrimaryInputRef: _registerPrimaryInputRef, // unused — no <input> here; see step-fields/registry.ts's hasPrimaryInput: false for spotify, same precedent as ClockifyFields
+  registerPrimaryInputRef: _registerPrimaryInputRef, // unused — no <input> here; see step-fields/registry.ts's hasPrimaryInput: false for spotify
   spotify,
 }: StepFieldsProps): JSX.Element {
   const state = spotify?.state ?? { status: 'disconnected' as const };

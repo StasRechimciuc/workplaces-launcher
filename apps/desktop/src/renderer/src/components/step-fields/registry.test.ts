@@ -10,25 +10,14 @@ describe('stepFieldsHasPrimaryInput', () => {
     expect(stepFieldsHasPrimaryInput('vscode')).toBe(true);
   });
 
-  it('is false for clockify (registered, but no primary input)', () => {
-    // The bug this regression test guards against: clockify is an
-    // *implemented* type with nothing to configure — previously
-    // WorkspaceFormModal.tsx derived "has an input to focus" from
-    // `preset.implemented` alone, which would have wrongly been true
-    // here, suppressing Radix's fallback refocus while nothing was
-    // ever registered to focus instead (focus silently falls through
-    // to <body>).
-    expect(stepFieldsHasPrimaryInput('clockify')).toBe(false);
-  });
-
-  it.each(['spotify', 'chrome'])(
+  it.each(['spotify', 'chrome', 'app'])(
     'is false for %s (collapsible, but its UI is buttons/a picker, not a plain input)',
     (type) => {
       expect(stepFieldsHasPrimaryInput(type)).toBe(false);
     },
   );
 
-  it.each(['docker', 'terminal', 'slack', 'unknown-type'])(
+  it.each(['docker', 'terminal', 'slack', 'clockify', 'unknown-type'])(
     'is false for %s (no registry entry)',
     (type) => {
       expect(stepFieldsHasPrimaryInput(type)).toBe(false);
@@ -37,15 +26,11 @@ describe('stepFieldsHasPrimaryInput', () => {
 });
 
 describe('stepFieldsIsCollapsible', () => {
-  it.each(['vscode', 'chrome', 'spotify'])('is true for %s', (type) => {
+  it.each(['vscode', 'chrome', 'spotify', 'app'])('is true for %s', (type) => {
     expect(stepFieldsIsCollapsible(type)).toBe(true);
   });
 
-  it('is false for clockify (nothing to configure at all)', () => {
-    expect(stepFieldsIsCollapsible('clockify')).toBe(false);
-  });
-
-  it.each(['docker', 'terminal', 'slack', 'unknown-type'])(
+  it.each(['docker', 'terminal', 'slack', 'clockify', 'unknown-type'])(
     'is false for %s (no registry entry)',
     (type) => {
       expect(stepFieldsIsCollapsible(type)).toBe(false);
@@ -54,8 +39,12 @@ describe('stepFieldsIsCollapsible', () => {
 });
 
 describe('getStepFieldsComponent', () => {
-  it('still returns a component for clockify', () => {
-    expect(getStepFieldsComponent('clockify')).toBeDefined();
+  it('returns undefined for clockify (implemented, but genuinely nothing to configure — no registry entry)', () => {
+    expect(getStepFieldsComponent('clockify')).toBeUndefined();
+  });
+
+  it('returns a component for app', () => {
+    expect(getStepFieldsComponent('app')).toBeDefined();
   });
 
   it('returns undefined for an unregistered type', () => {

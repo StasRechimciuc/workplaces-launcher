@@ -10,6 +10,8 @@ export interface StepResult {
   success: boolean;
   message: string;
   durationMs: number;
+  /** Stable lookup key into ERROR_CODES (error-codes.ts) — absent on success. */
+  code?: string;
 }
 
 /**
@@ -22,6 +24,41 @@ export interface StepResult {
  */
 export type ValidationResult<TParams = unknown> =
   { valid: true; data: TParams } | { valid: false; errors: string[] };
+
+/**
+ * Something this app knows how to launch/close that was left running
+ * rather than touched — excluded from auto-close (Chrome), still
+ * needed by another currently-active workspace, or an attempted quit
+ * that actually failed (`detail` carries that failure's message — see
+ * WCs/WC__workspace-activity.md). `'failed'` is never silently
+ * swallowed into console-only logging: it's surfaced here so the
+ * renderer can tell the user, matching this app's no-silent-failure
+ * rule.
+ */
+export interface LeftOpenEntry {
+  appName: string;
+  reason: 'excluded' | 'still-used' | 'failed';
+  detail?: string;
+}
+
+/**
+ * Result of "Switch to this workspace" — closes whatever's running
+ * that the target doesn't need, then runs the target's own steps
+ * (reusing runWorkspace unchanged, since `open -a` is already
+ * idempotent for anything already running).
+ */
+export interface SwitchResult {
+  stepResults: StepResult[];
+  closed: string[];
+  leftOpen: LeftOpenEntry[];
+}
+
+/** Result of "Close this workspace" — closes only this workspace's own
+ * apps; never opens anything. */
+export interface CloseResult {
+  closed: string[];
+  leftOpen: LeftOpenEntry[];
+}
 
 /** One row in a step's "expand" detail panel (config/workspace-display.ts). */
 export interface StepDisplayRow {

@@ -78,3 +78,25 @@ export function recordSuccessfulStepDuration(toolType: string, durationMs: numbe
   const samples = [...(all[toolType] ?? []), durationMs].slice(-MAX_SAMPLES_PER_TOOL);
   historyStore.set('durationsByToolType', { ...all, [toolType]: samples });
 }
+
+/**
+ * The typical (average) recorded duration for a tool type, for DISPLAY
+ * purposes — distinct from getStepTimeoutMs, which estimates a TIMEOUT
+ * (a different fallback — a 2-hour ceiling, not "no data" — and a
+ * *1.5 safety buffer that would be misleading framed as "how long this
+ * usually takes"). Returns undefined below MIN_SAMPLES_FOR_ADAPTIVE_TIMEOUT
+ * samples, the same threshold getStepTimeoutMs itself treats as "not
+ * enough data" — and also if any recorded sample is non-finite (a
+ * corrupted store value), rather than letting NaN/Infinity silently
+ * propagate into a displayed duration.
+ */
+export function getTypicalStepDurationMs(toolType: string): number | undefined {
+  const samples = historyStore.get('durationsByToolType')[toolType] ?? [];
+  if (samples.length < MIN_SAMPLES_FOR_ADAPTIVE_TIMEOUT) {
+    return undefined;
+  }
+  if (!samples.every((ms) => Number.isFinite(ms))) {
+    return undefined;
+  }
+  return Math.round(samples.reduce((sum, ms) => sum + ms, 0) / samples.length);
+}

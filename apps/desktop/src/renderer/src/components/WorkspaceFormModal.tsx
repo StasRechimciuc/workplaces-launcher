@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { appDisplayName, ERROR_CODES } from '@workspace-launcher/shared';
 import type {
   CreateWorkspaceResult,
   UpdateWorkspaceResult,
@@ -20,6 +21,7 @@ import {
 } from './step-fields/registry';
 import type { StepFieldsProps } from './step-fields/types';
 import { ToolBadge } from './ToolBadge';
+import { ErrorCode } from './ErrorCode';
 import {
   Dialog,
   DialogClose,
@@ -46,6 +48,9 @@ interface WorkspaceFormModalProps {
   onClose: () => void;
   /** Fires on a successful save in either mode. */
   onSaved: (config: WorkspaceConfig) => void;
+  /** Opens ErrorsModal (App.tsx-owned) targeting a specific error code
+   * — the save-error banner's "Learn more about this error" link. */
+  onShowErrorCode: (code: string) => void;
 }
 
 /**
@@ -137,12 +142,17 @@ function ToolPickerItem({ preset, onSelect }: ToolPickerItemProps): JSX.Element 
   return (
     <DropdownMenuItem className="flex-col items-start gap-0 py-2" onSelect={onSelect}>
       <div className="flex w-full items-center gap-2.5">
+        {/* No params to show here — this is the picker preview, before
+            any app is chosen, so the 'app' type just falls back to its
+            generic icon, which is correct: showing some arbitrary
+            previous/stale icon here would be misleading. */}
         <ToolBadge
           type={preset.type}
           icon={preset.icon}
           color={preset.color}
           size={13}
           chipClassName="h-6 w-6 text-[13px]"
+          params={{}}
         />
         <span className="text-[12.5px] font-medium text-text">{preset.name}</span>
         {!preset.implemented && (
@@ -205,6 +215,7 @@ export function WorkspaceFormModal({
   workspaces,
   onClose,
   onSaved,
+  onShowErrorCode,
 }: WorkspaceFormModalProps): JSX.Element {
   const nextKeyRef = useRef(0);
   const [name, setName] = useState('');
@@ -212,7 +223,7 @@ export function WorkspaceFormModal({
     initialDrafts(nextKeyRef),
   );
   const [isSaving, setIsSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<{ message: string; code?: string } | null>(null);
   // Which rows show their fields expanded, keyed by CreateStepDraft.key
   // (stable across reorders/removals, unlike an array index). Collapsed
   // by default — both fresh defaults and an existing workspace's saved
@@ -386,14 +397,17 @@ export function WorkspaceFormModal({
         return;
       }
       if (!result.success) {
-        setSaveError(result.error);
+        setSaveError({ message: result.error, code: result.code });
         return;
       }
       onSaved(result.config);
       closeAndReset();
     } catch (err) {
       if (isMountedRef.current) {
-        setSaveError(err instanceof Error ? err.message : String(err));
+        setSaveError({
+          message: err instanceof Error ? err.message : String(err),
+          code: ERROR_CODES.SYSTEM_UNEXPECTED.code,
+        });
       }
     } finally {
       if (isMountedRef.current) {
@@ -450,7 +464,21 @@ export function WorkspaceFormModal({
               const collapsible = stepFieldsIsCollapsible(preset.type);
               const isOpen = collapsible && openKeys.has(key);
               const hasFields = getStepFieldsComponent(preset.type) !== undefined;
+              // A non-collapsible type (today: Clockify) has nothing a
+              // fields block could ever show — its one-line explanation
+              // lives in the header subtitle instead (configHint, e.g.
+              // "Nothing to configure"), same line as the name, not a
+              // separate block below.
               const subtitle = collapsible ? stepRowSummary(preset.type, params) : preset.config;
+              // The generic 'app' type isn't one fixed thing like every
+              // other preset — showing the literal preset name ("App")
+              // would be useless with more than one app step in the
+              // same workspace (which app?). Falls back to the static
+              // preset name until a real app is actually chosen.
+              const rowName =
+                preset.type === 'app' && typeof params['path'] === 'string' && params['path']
+                  ? appDisplayName(params['path'])
+                  : preset.name;
               return (
                 <div className="flex gap-2.5" key={key}>
                   <div className="flex shrink-0 flex-col items-center pt-0.5">
@@ -484,8 +512,9 @@ export function WorkspaceFormModal({
                         color={preset.color}
                         size={13}
                         chipClassName="h-6 w-6 text-[13px]"
+                        params={params}
                       />
-                      <span className="text-[12.5px] font-medium text-text">{preset.name}</span>
+                      <span className="text-[12.5px] font-medium text-text">{rowName}</span>
                       {subtitle && (
                         <>
                           <span className="text-[11.5px] text-text-faint">·</span>
@@ -517,7 +546,11 @@ export function WorkspaceFormModal({
                       </span>
                     </div>
 
-                    {hasFields && (!collapsible || isOpen) && (
+                    {/* isOpen is already always false for a non-collapsible
+                        type (see its derivation above), so this naturally
+                        never shows a fields block for one — its message
+                        lives in the header subtitle above instead. */}
+                    {hasFields && isOpen && (
                       <div className="mt-2 ml-8.5">
                         <StepParamsFields
                           preset={preset}
@@ -596,7 +629,11 @@ export function WorkspaceFormModal({
           {saveError && (
             <div className="mt-3.5 flex items-center gap-2 rounded-sm border border-border bg-bg-elevated px-2.5 py-2 text-[12.5px] text-text-muted">
               <Icon name="x" size={13} className="text-danger" />
-              <span>{saveError}</span>
+              <ErrorCode
+                message={saveError.message}
+                code={saveError.code}
+                onLearnMore={onShowErrorCode}
+              />
             </div>
           )}
         </div>

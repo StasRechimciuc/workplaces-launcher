@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_STEP_TIMEOUT_MS,
   getStepTimeoutMs,
+  getTypicalStepDurationMs,
   MIN_ADAPTIVE_TIMEOUT_MS,
   recordSuccessfulStepDuration,
 } from './step-timing-history';
@@ -78,5 +79,64 @@ describe('step-timing-history', () => {
     // Raw average * 1.5 would be 15ms — far too tight to survive
     // ordinary scheduling jitter. The floor must win.
     expect(getStepTimeoutMs('instant-tool')).toBe(MIN_ADAPTIVE_TIMEOUT_MS);
+  });
+
+  describe('getTypicalStepDurationMs', () => {
+    it('returns undefined for a tool type with no history', () => {
+      expect(getTypicalStepDurationMs('display-never-seen')).toBeUndefined();
+    });
+
+    it('returns undefined below the minimum sample threshold (3)', () => {
+      recordSuccessfulStepDuration('display-vscode', 3000);
+      recordSuccessfulStepDuration('display-vscode', 3000);
+      expect(getTypicalStepDurationMs('display-vscode')).toBeUndefined();
+    });
+
+    it('returns the rounded average once the threshold is met', () => {
+      recordSuccessfulStepDuration('display-chrome', 1000);
+      recordSuccessfulStepDuration('display-chrome', 2000);
+      recordSuccessfulStepDuration('display-chrome', 3000);
+      expect(getTypicalStepDurationMs('display-chrome')).toBe(2000);
+    });
+
+    it('keeps only the most recent 10 samples, dropping older ones', () => {
+      recordSuccessfulStepDuration('display-spotify', 1000); // will be dropped
+      for (let i = 0; i < 10; i++) {
+        recordSuccessfulStepDuration('display-spotify', 5000);
+      }
+      // If the dropped 1000ms sample still counted (11 samples), the
+      // average would be lower than this.
+      expect(getTypicalStepDurationMs('display-spotify')).toBe(5000);
+    });
+
+    it('returns undefined, not NaN, if a stored sample is non-finite', () => {
+      recordSuccessfulStepDuration('display-corrupted', 1000);
+      recordSuccessfulStepDuration('display-corrupted', 2000);
+      recordSuccessfulStepDuration('display-corrupted', NaN);
+      expect(getTypicalStepDurationMs('display-corrupted')).toBeUndefined();
+    });
+
+    it('is a separate reading from getStepTimeoutMs — no 1.5x buffer applied', () => {
+      recordSuccessfulStepDuration('display-vs-timeout', 10000);
+      recordSuccessfulStepDuration('display-vs-timeout', 10000);
+      recordSuccessfulStepDuration('display-vs-timeout', 10000);
+      expect(getTypicalStepDurationMs('display-vs-timeout')).toBe(10000);
+      expect(getStepTimeoutMs('display-vs-timeout')).toBe(15000);
+    });
+
+    it('blends two different generic "app"-type instances into one bucket — a known, accepted limitation, not a bug', () => {
+      // The generic 'app' step type is keyed by the bare step type
+      // string, same as every other type — there's no per-derived-name
+      // bucketing. Re-keying it would silently break getStepTimeoutMs's
+      // own lookups for the same store (see orchestrator.ts's doc
+      // comment). This test documents the resulting behavior rather
+      // than papering over it: a Figma-launch sample and an unrelated
+      // Slack-launch sample both land in the one 'app' bucket and get
+      // blended together.
+      recordSuccessfulStepDuration('app', 2000); // e.g. Figma
+      recordSuccessfulStepDuration('app', 2000);
+      recordSuccessfulStepDuration('app', 8000); // e.g. Slack, much slower
+      expect(getTypicalStepDurationMs('app')).toBe(4000);
+    });
   });
 });

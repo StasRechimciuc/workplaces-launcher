@@ -38,9 +38,11 @@ Synthesize their findings yourself into **one** recommended idea and approach �
 
 ## Stage 2 — Technical plan (only after Stage 1 is approved)
 
-Use `EnterPlanMode`. Inside it: parallel Explore agents for codebase specifics → Plan agent(s) for the concrete implementation → an adversarial review pass that stress-tests the plan for real bugs/gaps before it's presented (this project's established practice — catch issues before code exists, not after). Write the final plan to the plan file and call `ExitPlanMode`.
+No mode switch — run this stage the normal way, same as Stage 1: launch agents directly in the current mode, never `EnterPlanMode`. Parallel Explore agents for codebase specifics → Plan agent(s) for the concrete implementation → an adversarial review pass that stress-tests the plan for real bugs/gaps before it's presented (this project's established practice — catch issues before code exists, not after). Research/Explore/Plan/review agents always run this way — launched directly, never gated behind a mode switch — for both Stage 1 and Stage 2.
 
-Don't stop at plan-mode's own default caps (3 Explore, 1 Plan) when more angles would genuinely sharpen the result — launch additional Explore/Plan agents in parallel per distinct sub-question (e.g. data-flow, testing conventions, existing UI patterns to reuse are three separate angles for one feature, not one), then combine their findings yourself into the single plan. More agents in parallel cost no extra turnaround, so default to splitting a plan with several genuinely separable angles across several agents rather than one broad agent doing all of it serially.
+Don't stop at an arbitrary cap on agent count when more angles would genuinely sharpen the result — launch additional Explore/Plan agents in parallel per distinct sub-question (e.g. data-flow, testing conventions, existing UI patterns to reuse are three separate angles for one feature, not one), then combine their findings yourself into the single plan. More agents in parallel cost no extra turnaround, so default to splitting a plan with several genuinely separable angles across several agents rather than one broad agent doing all of it serially.
+
+Present the final, synthesized plan directly in the conversation (Context → concrete design → tests → verification) — no separate plan file to write, no mode to exit.
 
 If anything surfaces here that needs the user's attention or would change the Stage-1-approved direction, say so explicitly rather than silently adjusting the plan around it — but first check it against principle 11 the same way: decide it yourself and state the decision if `CLAUDE.md`/`WCs/` already answers it, only actually ask if it's genuinely open.
 

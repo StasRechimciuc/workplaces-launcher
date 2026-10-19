@@ -1,13 +1,28 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkspaceConfig } from '@workspace-launcher/shared';
 import { toWorkspaceDisplay } from './workspace-display';
 import { registerBuiltInTools } from '../tools';
+
+// step-timing-history.ts is backed by electron-store, which needs a
+// real Electron `app` to resolve its storage path — unavailable under
+// Vitest. Mocked out entirely; its own averaging/threshold logic is
+// covered by step-timing-history.test.ts instead. Defaults to "no
+// history for anything" (undefined) so existing tests that don't care
+// about launchTime keep passing unchanged.
+const getTypicalStepDurationMs = vi.fn((_toolType: string): number | undefined => undefined);
+vi.mock('../orchestrator/step-timing-history', () => ({
+  getTypicalStepDurationMs: (...args: [string]) => getTypicalStepDurationMs(...args),
+}));
 
 // describeStep (workspace-display.ts) now looks tools up via the real
 // registry to call their detail()/expand() methods — same setup
 // handlers.test.ts already needs for the same reason.
 beforeAll(() => {
   registerBuiltInTools();
+});
+
+beforeEach(() => {
+  getTypicalStepDurationMs.mockReset().mockReturnValue(undefined);
 });
 
 function baseConfig(steps: WorkspaceConfig['steps']): WorkspaceConfig {
@@ -21,10 +36,75 @@ describe('toWorkspaceDisplay', () => {
     expect(display.name).toBe('Test workspace');
   });
 
-  it('always reports a never-restored config honestly', () => {
-    const display = toWorkspaceDisplay(baseConfig([]));
-    expect(display.lastRestored).toBe('Never');
-    expect(display.restoreTime).toBe('—');
+  describe('launchTime', () => {
+    it('reports "—" / no-steps for a workspace with zero steps', () => {
+      const display = toWorkspaceDisplay(baseConfig([]));
+      expect(display.launchTime).toEqual({ display: '—', state: 'no-steps' });
+    });
+
+    it('reports "Not yet measured" / unmeasured for a step with no history', () => {
+      const display = toWorkspaceDisplay(baseConfig([{ type: 'vscode', params: { path: '~/x' } }]));
+      expect(display.tools[0]?.launchTime).toEqual({
+        display: 'Not yet measured',
+        state: 'unmeasured',
+      });
+    });
+
+    it('reports an approximate time / full once a step type has enough history', () => {
+      getTypicalStepDurationMs.mockReturnValue(3000);
+      const display = toWorkspaceDisplay(baseConfig([{ type: 'vscode', params: { path: '~/x' } }]));
+      expect(display.tools[0]?.launchTime).toEqual({ display: '~3s', state: 'full' });
+    });
+
+    it('reports workspace-level "Not yet measured" when no step type has history', () => {
+      const display = toWorkspaceDisplay(
+        baseConfig([
+          { type: 'vscode', params: { path: '~/x' } },
+          { type: 'chrome', params: {} },
+        ]),
+      );
+      expect(display.launchTime).toEqual({ display: 'Not yet measured', state: 'unmeasured' });
+    });
+
+    it('sums every step type\'s typical duration for a clean "full" total when all have history', () => {
+      getTypicalStepDurationMs.mockImplementation((type) =>
+        type === 'vscode' ? 3000 : type === 'chrome' ? 5000 : undefined,
+      );
+      const display = toWorkspaceDisplay(
+        baseConfig([
+          { type: 'vscode', params: { path: '~/x' } },
+          { type: 'chrome', params: {} },
+        ]),
+      );
+      expect(display.launchTime).toEqual({ display: '~8s', state: 'full' });
+    });
+
+    it('reports a "partial" total, with a steps-timed count, when only some step types have history', () => {
+      getTypicalStepDurationMs.mockImplementation((type) => (type === 'vscode' ? 3000 : undefined));
+      const display = toWorkspaceDisplay(
+        baseConfig([
+          { type: 'vscode', params: { path: '~/x' } },
+          { type: 'chrome', params: {} },
+        ]),
+      );
+      expect(display.launchTime).toEqual({
+        display: '~3s · 1/2 steps timed',
+        state: 'partial',
+      });
+    });
+
+    it('sums each occurrence independently for two steps of the same type, not just once per distinct type', () => {
+      getTypicalStepDurationMs.mockReturnValue(3000);
+      const display = toWorkspaceDisplay(
+        baseConfig([
+          { type: 'vscode', params: { path: '~/a' } },
+          { type: 'vscode', params: { path: '~/b' } },
+        ]),
+      );
+      // Two real launches of the same tool type should roughly double
+      // the total, not collapse to one step's worth.
+      expect(display.launchTime).toEqual({ display: '~6s', state: 'full' });
+    });
   });
 
   it("looks up a known step type's icon/color/name from STEP_TYPES", () => {
@@ -86,7 +166,7 @@ describe('toWorkspaceDisplay', () => {
   it('derives a singular/plural tool-count subtitle', () => {
     expect(
       toWorkspaceDisplay(baseConfig([{ type: 'vscode', params: { path: '~/x' } }])).subtitle,
-    ).toBe('1 tool · never restored');
+    ).toBe('1 tool');
     expect(
       toWorkspaceDisplay(
         baseConfig([
@@ -94,7 +174,7 @@ describe('toWorkspaceDisplay', () => {
           { type: 'docker', params: {} },
         ]),
       ).subtitle,
-    ).toBe('2 tools · never restored');
+    ).toBe('2 tools');
   });
 
   it('assigns the same tag color deterministically for the same id', () => {
@@ -191,6 +271,36 @@ describe('toWorkspaceDisplay', () => {
       expect(display.description).toBe(
         'VS Code, Chrome, Spotify and 1 more, restored in order below.',
       );
+    });
+  });
+
+  describe("the generic 'app' type's dynamic name", () => {
+    it("shows the real app's name, not the static STEP_TYPES name, once a path is chosen", () => {
+      const display = toWorkspaceDisplay(
+        baseConfig([{ type: 'app', params: { path: '/Applications/Figma.app' } }]),
+      );
+      expect(display.tools[0]?.name).toBe('Figma');
+    });
+
+    it('falls back to the generic STEP_TYPES name ("App") when no path is chosen yet', () => {
+      const display = toWorkspaceDisplay(baseConfig([{ type: 'app', params: {} }]));
+      expect(display.tools[0]?.name).toBe('App');
+    });
+
+    it('still uses the static STEP_TYPES name for every other type (unaffected)', () => {
+      const display = toWorkspaceDisplay(baseConfig([{ type: 'vscode', params: { path: '~/x' } }]));
+      expect(display.tools[0]?.name).toBe('VS Code');
+    });
+
+    it('distinguishes two different app steps in the same workspace by name', () => {
+      const display = toWorkspaceDisplay(
+        baseConfig([
+          { type: 'app', params: { path: '/Applications/Figma.app' } },
+          { type: 'app', params: { path: '/System/Applications/Music.app' } },
+        ]),
+      );
+      expect(display.tools[0]?.name).toBe('Figma');
+      expect(display.tools[1]?.name).toBe('Music');
     });
   });
 });

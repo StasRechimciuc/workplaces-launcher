@@ -5,7 +5,7 @@ import type {
   ToolPlugin,
   ValidationResult,
 } from '@workspace-launcher/shared';
-import { zodValidate } from '@workspace-launcher/shared';
+import { ERROR_CODES, zodValidate } from '@workspace-launcher/shared';
 import { getPlatformLauncher } from '../platform';
 
 // Clockify has no confirmed URI scheme and no target to launch into —
@@ -27,7 +27,10 @@ export type ClockifyStepParams = z.infer<typeof ClockifyStepParamsSchema>;
 // loudly and honestly for an unmapped app name; that's the correct
 // behavior until a real Windows install is verified, not a gap to
 // paper over with a guess.
-const CLOCKIFY_APP_NAME = 'Clockify Desktop';
+// Exported for tool-identity.ts (workspace activity tracking — see
+// WCs/WC__workspace-activity.md) — single source of truth for the
+// macOS app name this step type launches.
+export const CLOCKIFY_APP_NAME = 'Clockify Desktop';
 
 export const clockifyTool: ToolPlugin<ClockifyStepParams> = {
   type: 'clockify',
@@ -39,7 +42,12 @@ export const clockifyTool: ToolPlugin<ClockifyStepParams> = {
   async run(): Promise<StepResult> {
     const startedAt = Date.now();
     const result = await getPlatformLauncher().launchApp(CLOCKIFY_APP_NAME);
-    return { success: result.success, message: result.message, durationMs: Date.now() - startedAt };
+    return {
+      success: result.success,
+      message: result.message,
+      durationMs: Date.now() - startedAt,
+      ...(result.success ? {} : { code: ERROR_CODES.APP_LAUNCH_FAILED.code }),
+    };
   },
 
   async teardown(): Promise<StepResult> {

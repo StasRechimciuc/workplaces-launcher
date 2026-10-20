@@ -24,6 +24,7 @@ import { SpotifyReauthRequiredError } from '../spotify/auth';
 import { listPlaylists as listSpotifyPlaylists } from '../spotify/playlists';
 import { listChromeProfiles } from '../platform/chrome-profiles';
 import { getAppIconDataUrl } from '../platform/app-icon';
+import { rescanAndCache } from '../platform/app-detection-cache';
 
 vi.mock('../platform', () => ({
   getPlatformLauncher: vi.fn(),
@@ -97,6 +98,19 @@ vi.mock('../platform/chrome-profiles', () => ({
   listChromeProfiles: vi.fn(),
 }));
 
+// Same electron-store hazard as step-timing-history.ts/
+// workspace-activity-store.ts below — real app-location detection also
+// shells out to plutil/scans /Applications, never exercised here. Its
+// own logic is covered directly by
+// app-detection.test.ts/app-detection-cache.test.ts. Both exports
+// stubbed: resolve-app-path.ts (reached transitively by every real
+// restore/retry in this file) imports getCandidatesForTool, not just
+// the app:detectInstalls handler's own rescanAndCache.
+vi.mock('../platform/app-detection-cache', () => ({
+  rescanAndCache: vi.fn(),
+  getCandidatesForTool: vi.fn(() => Promise.resolve([])),
+}));
+
 // config/loader.ts (used by restoreWorkspace to check for a real saved
 // config, and by createWorkspace/listWorkspaces to save/load them)
 // only calls app.getPath('userData') — faked with a real temp
@@ -162,6 +176,7 @@ beforeEach(async () => {
   vi.mocked(spotifyAuth.disconnect).mockReset();
   vi.mocked(listSpotifyPlaylists).mockReset();
   vi.mocked(listChromeProfiles).mockReset();
+  vi.mocked(rescanAndCache).mockReset();
 });
 
 afterEach(async () => {
@@ -657,6 +672,59 @@ describe('registerIpcHandlers — chrome:listProfiles', () => {
       code: ERROR_CODES.CHROME_PROFILES_UNAVAILABLE.code,
     });
   });
+});
+
+describe('registerIpcHandlers — app:detectInstalls', () => {
+  function getRegisteredDetectHandler(): (
+    event: unknown,
+    toolKey: unknown,
+  ) => Promise<unknown> {
+    registerIpcHandlers();
+    const call = vi
+      .mocked(ipcMain.handle)
+      .mock.calls.find(([channel]) => channel === 'app:detectInstalls');
+    if (!call) throw new Error('app:detectInstalls was never registered');
+    return call[1] as never;
+  }
+
+  it('returns {success:true, candidates} for a known tool key', async () => {
+    const candidates = [{ path: '/Applications/Visual Studio Code.app', displayName: 'Visual Studio Code' }];
+    vi.mocked(rescanAndCache).mockResolvedValueOnce({
+      vscode: candidates,
+      chrome: [],
+      spotify: [],
+      clockify: [],
+    });
+    const handler = getRegisteredDetectHandler();
+
+    expect(await handler({}, 'vscode')).toEqual({ success: true, candidates });
+  });
+
+  it('throws synchronously for an unknown/missing tool key, without ever scanning', async () => {
+    const handler = getRegisteredDetectHandler();
+
+    await expect(handler({}, 'not-a-real-tool')).rejects.toThrow(/known tool key/);
+    await expect(handler({}, undefined)).rejects.toThrow(/known tool key/);
+    expect(rescanAndCache).not.toHaveBeenCalled();
+  });
+
+  it('maps a scan failure to {success:false, error}, not a thrown exception', async () => {
+    vi.mocked(rescanAndCache).mockRejectedValueOnce(new Error('permission denied'));
+    const handler = getRegisteredDetectHandler();
+
+    expect(await handler({}, 'chrome')).toEqual({
+      success: false,
+      error: 'permission denied',
+      code: ERROR_CODES.APP_DETECTION_FAILED.code,
+    });
+  });
+
+  // The non-macOS guard (SUPPORTS_APP_DETECTION) is a module-level
+  // constant computed at import time from process.platform — same
+  // "not worth the fragility" reasoning listWorkspaces' own 'active'
+  // describe block gives for SUPPORTS_WORKSPACE_ACTIVITY; verified by
+  // inspection instead (handlers.ts's SUPPORTS_APP_DETECTION and its
+  // one guarded call site above).
 });
 
 describe('createWorkspace', () => {

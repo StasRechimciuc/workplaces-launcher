@@ -5,6 +5,7 @@ import type {
   CloseResult,
   CreateWorkspaceResult,
   DeleteWorkspaceResult,
+  DetectAppResult,
   RestoreProgressEvent,
   SpotifyListPlaylistsResult,
   StepResult,
@@ -15,6 +16,7 @@ import type {
 import {
   CURRENT_WORKSPACE_CONFIG_VERSION,
   ERROR_CODES,
+  isToolAppKey,
   parseWorkspaceConfig,
   RESTORE_PROGRESS_CHANNEL,
 } from '@workspace-launcher/shared';
@@ -39,7 +41,20 @@ import { SpotifyReauthRequiredError } from '../spotify/auth';
 import { listPlaylists as listSpotifyPlaylists } from '../spotify/playlists';
 import { listChromeProfiles } from '../platform/chrome-profiles';
 import { getAppIconDataUrl } from '../platform/app-icon';
+import { rescanAndCache } from '../platform/app-detection-cache';
 import type { WorkspaceDisplay } from '../../preload';
+
+// Real app-install detection shells out to macOS-only tools (plutil,
+// /Applications enumeration) — see platform/app-detection.ts. Guarded
+// here, not inside that module, matching this codebase's existing
+// SUPPORTS_WORKSPACE_ACTIVITY convention (same file, workspace activity
+// tracking): a feature-level platform check at the IPC boundary, so a
+// future Windows build never attempts a macOS-only scan at all rather
+// than attempting it and failing. On Windows this resolves to an
+// always-empty candidate list, which the renderer already treats as
+// "couldn't find it automatically" — the same native-picker fallback
+// the generic 'app' step type already relies on, not a new code path.
+const SUPPORTS_APP_DETECTION = process.platform === 'darwin';
 
 /**
  * Resolves a workspace id to a real, persisted, runnable WorkspaceConfig.
@@ -460,6 +475,30 @@ export function registerIpcHandlers(): void {
       };
     }
   });
+
+  ipcMain.handle(
+    'app:detectInstalls',
+    async (_event, toolKey: unknown): Promise<DetectAppResult> => {
+      if (!isToolAppKey(toolKey)) {
+        throw new Error(
+          'app:detectInstalls expects a known tool key (vscode/chrome/spotify/clockify).',
+        );
+      }
+      if (!SUPPORTS_APP_DETECTION) {
+        return { success: true, candidates: [] };
+      }
+      try {
+        const all = await rescanAndCache();
+        return { success: true, candidates: all[toolKey] };
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+          code: ERROR_CODES.APP_DETECTION_FAILED.code,
+        };
+      }
+    },
+  );
 
   ipcMain.handle('app:getIcon', async (_event, appPath: unknown): Promise<string | null> => {
     // A soft, best-effort display enhancement, not user input being

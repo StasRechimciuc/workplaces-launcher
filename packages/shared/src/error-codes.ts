@@ -55,6 +55,18 @@ export const ERROR_CODES = {
     explanation:
       'The app for this step could not be launched. It may have been moved, renamed, or uninstalled since this workspace was set up.',
   },
+  APP_PATH_NOT_FOUND: {
+    code: 'ER-LAUNCH-02',
+    title: 'Configured app location not found',
+    explanation:
+      "This step's configured app location no longer exists — the app may have moved or been uninstalled since it was chosen. Re-open this step to locate it again.",
+  },
+  APP_DETECTION_FAILED: {
+    code: 'ER-LAUNCH-03',
+    title: "Couldn't detect installed apps",
+    explanation:
+      "Workspace Launcher couldn't scan this machine's Applications folders to find this app. It may be a permissions issue reading /Applications.",
+  },
   CHROME_TABS_FAILED: {
     code: 'ER-CHROME-01',
     title: "Couldn't open one or more Chrome tabs",

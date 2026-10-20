@@ -1,3 +1,4 @@
+import { appDisplayName } from '@workspace-launcher/shared';
 import { getFirstTerminalCommands } from '../../lib/vscode-terminal-params';
 
 /**
@@ -37,4 +38,19 @@ export function spotifyStepSummary(params: Record<string, unknown>): string {
   // Legacy/hand-edited config with a URI but no name captured yet.
   const playlist = typeof params['playlist'] === 'string' ? params['playlist'].trim() : '';
   return playlist ? 'Playlist configured' : 'No playlist set';
+}
+
+/**
+ * Clockify's only configurable thing is which real app it launches —
+ * see ResolvedAppPath.tsx, which this summary mirrors for the
+ * collapsed row. Unlike the other three summaries above, this one IS
+ * the resolved app path by necessity, not by consistency-for-its-own-
+ * sake: every other type's summary already identifies the primary
+ * thing that row does, with the resolved binary path shown inline in
+ * the expanded fields block instead (a secondary, lower-stakes detail
+ * not worth competing for space in their one-line summaries).
+ */
+export function clockifyStepSummary(params: Record<string, unknown>): string {
+  const appPath = typeof params['appPath'] === 'string' ? params['appPath'].trim() : '';
+  return appPath ? appDisplayName(appPath) : 'App not detected yet';
 }

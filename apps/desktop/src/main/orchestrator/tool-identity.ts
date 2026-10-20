@@ -1,17 +1,22 @@
-import { appDisplayName } from '@workspace-launcher/shared';
-import { VSCODE_APP_NAME } from '../tools/vscode-tool';
-import { CHROME_APP_NAME } from '../tools/chrome-tool';
-import { SPOTIFY_APP_NAME } from '../tools/spotify-tool';
-import { CLOCKIFY_APP_NAME } from '../tools/clockify-tool';
+import {
+  appDisplayName,
+  CHROME_APP_NAME,
+  CLOCKIFY_APP_NAME,
+  SPOTIFY_APP_NAME,
+  VSCODE_APP_NAME,
+} from '@workspace-launcher/shared';
 
 /**
  * Maps a step to the macOS application name it launches, for workspace
  * activity tracking (Restore/Switch/Close — see
  * WCs/WC__workspace-activity.md). This is deliberately NOT a
  * ToolPlugin method: only five step
- * types need this, and reusing each tool's existing app-name constant
- * here is simpler than widening the shared interface (and `teardown()`,
- * still a Tier 2 no-op) for a macOS-only, v1 feature.
+ * types need this, and reusing each tool's product-family name
+ * constant (packages/shared/src/app-detection.ts — the same single
+ * source of truth platform/app-detection.ts's real-install-path scan
+ * also matches against) here is simpler than widening the shared
+ * interface (and `teardown()`, still a Tier 2 no-op) for a macOS-only,
+ * v1 feature.
  *
  * Raw-params contract like ToolPlugin's `detail`/`expand` — never
  * throws, degrades gracefully for whatever's actually on disk.

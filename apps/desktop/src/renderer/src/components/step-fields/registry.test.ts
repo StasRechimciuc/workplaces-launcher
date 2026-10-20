@@ -11,14 +11,14 @@ describe('stepFieldsHasPrimaryInput', () => {
     expect(stepFieldsHasPrimaryInput('vscode')).toBe(true);
   });
 
-  it.each(['spotify', 'chrome', 'app'])(
+  it.each(['spotify', 'chrome', 'app', 'clockify'])(
     'is false for %s (collapsible, but its UI is buttons/a picker, not a plain input)',
     (type) => {
       expect(stepFieldsHasPrimaryInput(type)).toBe(false);
     },
   );
 
-  it.each(['docker', 'terminal', 'slack', 'clockify', 'unknown-type'])(
+  it.each(['docker', 'terminal', 'slack', 'unknown-type'])(
     'is false for %s (no registry entry)',
     (type) => {
       expect(stepFieldsHasPrimaryInput(type)).toBe(false);
@@ -27,11 +27,11 @@ describe('stepFieldsHasPrimaryInput', () => {
 });
 
 describe('stepFieldsIsCollapsible', () => {
-  it.each(['vscode', 'chrome', 'spotify', 'app'])('is true for %s', (type) => {
+  it.each(['vscode', 'chrome', 'spotify', 'app', 'clockify'])('is true for %s', (type) => {
     expect(stepFieldsIsCollapsible(type)).toBe(true);
   });
 
-  it.each(['docker', 'terminal', 'slack', 'clockify', 'unknown-type'])(
+  it.each(['docker', 'terminal', 'slack', 'unknown-type'])(
     'is false for %s (no registry entry)',
     (type) => {
       expect(stepFieldsIsCollapsible(type)).toBe(false);
@@ -47,18 +47,18 @@ describe('stepRowSummary', () => {
     expect(stepRowSummary('vscode', { path: '~/x' })).toBe('~/x');
     expect(stepRowSummary('chrome', { profile: 'Default' })).toBe('Default');
     expect(stepRowSummary('spotify', { playlistName: 'Deep Focus' })).toBe('Deep Focus');
+    expect(stepRowSummary('clockify', { appPath: '/Applications/Clockify.app' })).toBe('Clockify');
   });
 
   it('returns an empty string for a type with no summary entry (app) or no registry entry at all', () => {
     expect(stepRowSummary('app', { path: '/Applications/Figma.app' })).toBe('');
-    expect(stepRowSummary('clockify', {})).toBe('');
     expect(stepRowSummary('docker', {})).toBe('');
   });
 });
 
 describe('getStepFieldsComponent', () => {
-  it('returns undefined for clockify (implemented, but genuinely nothing to configure — no registry entry)', () => {
-    expect(getStepFieldsComponent('clockify')).toBeUndefined();
+  it('returns a component for clockify (its own installed-app detection, same as vscode/chrome/spotify)', () => {
+    expect(getStepFieldsComponent('clockify')).toBeDefined();
   });
 
   it('returns a component for app', () => {

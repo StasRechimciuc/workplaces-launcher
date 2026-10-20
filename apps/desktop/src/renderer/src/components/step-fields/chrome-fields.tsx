@@ -10,6 +10,7 @@ import {
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu';
 import type { StepFieldsProps } from './types';
+import { FIELD_GROUP_LABEL_CLASS, ResolvedAppPath } from './ResolvedAppPath';
 
 const BUTTON_CLASS =
   'flex h-7 shrink-0 items-center gap-1.5 rounded-sm border border-border-strong px-2.25 text-[12px] text-text-muted hover:bg-bg-hover disabled:pointer-events-none disabled:opacity-50';
@@ -32,6 +33,7 @@ export function ChromeFields({
   params,
   onChange,
   registerPrimaryInputRef: _registerPrimaryInputRef, // unused — no <input> here; see step-fields/registry.ts's hasPrimaryInput: false for chrome, same precedent as SpotifyFields
+  appPathDetection,
 }: StepFieldsProps): JSX.Element {
   const [profiles, setProfiles] = useState<ChromeProfileInfo[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -43,6 +45,7 @@ export function ChromeFields({
     : [];
   const profile = typeof params['profile'] === 'string' ? params['profile'] : '';
   const profileName = typeof params['profileName'] === 'string' ? params['profileName'] : '';
+  const appPath = typeof params['appPath'] === 'string' ? params['appPath'] : '';
 
   function handleOpenChange(isOpen: boolean): void {
     if (!isOpen || profiles !== null || loading) {
@@ -70,6 +73,15 @@ export function ChromeFields({
 
   return (
     <div className="flex flex-col gap-1.5">
+      <span className={FIELD_GROUP_LABEL_CLASS}>App</span>
+      <ResolvedAppPath
+        toolLabel="Chrome"
+        appPath={appPath}
+        onChange={onChange}
+        detection={appPathDetection!}
+      />
+
+      <span className={`${FIELD_GROUP_LABEL_CLASS} mt-1`}>Profile</span>
       <div className="flex items-center gap-1.5">
         <DropdownMenu onOpenChange={handleOpenChange}>
           <DropdownMenuTrigger asChild>

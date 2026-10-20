@@ -1,13 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ERROR_CODES } from '@workspace-launcher/shared';
+import { CHROME_APP_NAME, ERROR_CODES } from '@workspace-launcher/shared';
 import { chromeTool } from './chrome-tool';
 import { getPlatformLauncher } from '../platform';
+import { resolveAppLaunchTarget } from './resolve-app-path';
 
 vi.mock('../platform', () => ({
   getPlatformLauncher: vi.fn(),
 }));
 
+// Real detection shells out to plutil/scans /Applications — never
+// exercised in a unit test, same precedent as every other filesystem/
+// subprocess dependency in this suite. Its own logic is covered
+// directly by app-detection.test.ts/resolve-app-path.test.ts.
+vi.mock('./resolve-app-path', () => ({
+  resolveAppLaunchTarget: vi.fn(),
+}));
+
 const mockedGetPlatformLauncher = vi.mocked(getPlatformLauncher);
+const mockedResolveAppLaunchTarget = vi.mocked(resolveAppLaunchTarget);
 const openUrlInBrowserProfile = vi.fn();
 
 beforeEach(() => {
@@ -17,6 +27,10 @@ beforeEach(() => {
     launchApp: vi.fn(),
     openInApp: vi.fn(),
     openUrlInBrowserProfile,
+  });
+  mockedResolveAppLaunchTarget.mockReset().mockResolvedValue({
+    ok: true,
+    target: CHROME_APP_NAME,
   });
 });
 
@@ -48,6 +62,18 @@ describe('chromeTool', () => {
     it('accepts params missing urls, defaulting to an empty array (profile-only launch)', () => {
       const result = chromeTool.validate({ profile: 'Work' });
       expect(result).toEqual({ valid: true, data: { profile: 'Work', urls: [] } });
+    });
+
+    it('accepts and passes through an optional appPath', () => {
+      const result = chromeTool.validate({
+        profile: 'Work',
+        urls: [],
+        appPath: '/Applications/Google Chrome.app',
+      });
+      expect(result).toEqual({
+        valid: true,
+        data: { profile: 'Work', urls: [], appPath: '/Applications/Google Chrome.app' },
+      });
     });
 
     it('rejects a urls array containing an empty string', () => {
@@ -97,6 +123,24 @@ describe('chromeTool', () => {
 
       expect(openUrlInBrowserProfile).toHaveBeenCalledWith('Google Chrome', 'Work');
       expect(result.success).toBe(true);
+    });
+
+    it('fails loudly and never opens the browser at all when resolution fails', async () => {
+      mockedResolveAppLaunchTarget.mockResolvedValueOnce({
+        ok: false,
+        message: 'Google Chrome not found at /old/path — it may have moved or been uninstalled.',
+      });
+
+      const result = await chromeTool.run(
+        { profile: 'Work', urls: ['https://a.com'] },
+        { workspaceId: 'ws-1' },
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('not found at /old/path');
+      expect(result.message).toContain('Chrome was not opened');
+      expect(result.code).toBe(ERROR_CODES.APP_PATH_NOT_FOUND.code);
+      expect(openUrlInBrowserProfile).not.toHaveBeenCalled();
     });
 
     it('opens each url sequentially, in order, against the same profile', async () => {

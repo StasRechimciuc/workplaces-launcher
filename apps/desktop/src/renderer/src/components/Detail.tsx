@@ -5,7 +5,7 @@ import type {
   StepResult,
   WorkspaceConfig,
 } from '@workspace-launcher/shared';
-import { ERROR_CODES } from '@workspace-launcher/shared';
+import { ERROR_CODES, isToolAppKey } from '@workspace-launcher/shared';
 import type { WorkspaceDisplay } from '../../../preload';
 import { Icon } from '../icons';
 import { useIsMounted } from '../lib/useIsMounted';
@@ -13,6 +13,7 @@ import { getRecentProjectPaths } from '../lib/recent-project-paths';
 import { workspaceLaunchTimeLabel, workspaceLaunchTimeTooltip } from '../lib/launch-time-display';
 import { replaceStepParams } from '../lib/replace-step-params';
 import { useSpotifyConnection } from '../lib/useSpotifyConnection';
+import { useAppPathDetections } from '../lib/useAppPathDetections';
 import { TimelineStep } from './TimelineStep';
 import { RestoreResults } from './RestoreResults';
 import { ErrorCode } from './ErrorCode';
@@ -104,6 +105,12 @@ export function Detail({
   // see useSpotifyConnection.ts's own doc comment), not worth lifting
   // to App.tsx just to share between two consumers.
   const spotify = useSpotifyConnection();
+  // Same reasoning as spotify above — independently instantiated from
+  // WorkspaceFormModal's own instance. No reset-on-close here (unlike
+  // the modal): a detected app path stays valid for the whole session
+  // regardless of which workspace's Detail view is showing, so there's
+  // nothing to invalidate when switching the selected workspace.
+  const appPathDetections = useAppPathDetections();
 
   function handleToggleStep(i: number): void {
     setExpandedIndex((current) => (current === i ? null : i));
@@ -489,6 +496,9 @@ export function Detail({
             }}
             recentFolders={recentFolders.filter((p) => p !== tool.params['path'])}
             spotify={spotify}
+            {...(isToolAppKey(tool.type)
+              ? { appPathDetection: appPathDetections.forTool(tool.type) }
+              : {})}
             draftParams={expandedIndex === i ? draftParams : null}
             onDraftChange={setDraftParams}
             onSave={() => {

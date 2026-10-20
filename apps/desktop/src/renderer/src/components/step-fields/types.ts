@@ -1,4 +1,5 @@
 import type { SpotifyConnection } from '../../lib/useSpotifyConnection';
+import type { AppPathDetection } from '../../lib/useAppPathDetections';
 
 /**
  * Shape every per-tool-type params-form component implements — see
@@ -32,6 +33,16 @@ export interface StepFieldsProps {
    * must agree on, not a per-row snapshot.
    */
   spotify?: SpotifyConnection;
+  /**
+   * This row's slice of the lifted app-location detection cache (see
+   * lib/useAppPathDetections.ts) — only vscode/chrome/spotify/clockify
+   * fields read it, same precedent as recentFolders/spotify above.
+   * Lifted to WorkspaceFormModal rather than owned locally by
+   * ResolvedAppPath.tsx because a row's fields block fully unmounts on
+   * collapse (WorkspaceFormModal's `hasFields && isOpen` gate) — local
+   * state would re-fetch on every single re-expand.
+   */
+  appPathDetection?: AppPathDetection;
 }
 
 export type StepFieldsComponent = (props: StepFieldsProps) => JSX.Element | null;

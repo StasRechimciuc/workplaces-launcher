@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ERROR_CODES } from '@workspace-launcher/shared';
+import { ERROR_CODES, VSCODE_APP_NAME } from '@workspace-launcher/shared';
 import { vscodeTool } from './vscode-tool';
 import { getPlatformLauncher } from '../platform';
+import { resolveAppLaunchTarget } from './resolve-app-path';
 import {
   deletePendingVscodeRestore,
   writePendingVscodeRestore,
@@ -11,12 +12,24 @@ vi.mock('../platform', () => ({
   getPlatformLauncher: vi.fn(),
 }));
 
+// Real detection shells out to plutil/scans /Applications — never
+// exercised in a unit test, same precedent as every other filesystem/
+// subprocess dependency in this suite. Its own logic is covered
+// directly by app-detection.test.ts/resolve-app-path.test.ts. Defaults
+// to resolving the plain hardcoded name, matching this tool's
+// pre-existing behavior before real detection existed — the same
+// value every assertion below already expects.
+vi.mock('./resolve-app-path', () => ({
+  resolveAppLaunchTarget: vi.fn(),
+}));
+
 vi.mock('@workspace-launcher/shared/vscode-restore', () => ({
   writePendingVscodeRestore: vi.fn(),
   deletePendingVscodeRestore: vi.fn(),
 }));
 
 const mockedGetPlatformLauncher = vi.mocked(getPlatformLauncher);
+const mockedResolveAppLaunchTarget = vi.mocked(resolveAppLaunchTarget);
 const mockedWritePendingVscodeRestore = vi.mocked(writePendingVscodeRestore);
 const mockedDeletePendingVscodeRestore = vi.mocked(deletePendingVscodeRestore);
 
@@ -29,6 +42,10 @@ beforeEach(() => {
     launchApp: vi.fn(),
     openInApp,
     openUrlInBrowserProfile: vi.fn(),
+  });
+  mockedResolveAppLaunchTarget.mockReset().mockResolvedValue({
+    ok: true,
+    target: VSCODE_APP_NAME,
   });
   mockedWritePendingVscodeRestore.mockReset().mockResolvedValue(undefined);
   mockedDeletePendingVscodeRestore.mockReset().mockResolvedValue(undefined);
@@ -54,6 +71,21 @@ describe('vscodeTool', () => {
         throw new Error('expected validation to fail');
       }
       expect(result.errors.length).toBeGreaterThan(0);
+    });
+
+    it('accepts and passes through an optional appPath', () => {
+      const result = vscodeTool.validate({
+        path: '/Users/me/projects/client-a',
+        appPath: '/Applications/Visual Studio Code.app',
+      });
+      expect(result).toEqual({
+        valid: true,
+        data: {
+          path: '/Users/me/projects/client-a',
+          terminals: [],
+          appPath: '/Applications/Visual Studio Code.app',
+        },
+      });
     });
 
     it('rejects an empty-string path', () => {
@@ -149,6 +181,43 @@ describe('vscodeTool', () => {
       expect(result.success).toBe(false);
       expect(result.message).toContain('app not found');
       expect(result.code).toBe(ERROR_CODES.APP_LAUNCH_FAILED.code);
+    });
+
+    it("launches whatever resolveAppLaunchTarget resolves to, not necessarily the hardcoded name", async () => {
+      mockedResolveAppLaunchTarget.mockResolvedValueOnce({
+        ok: true,
+        target: '/Applications/Visual Studio Code.app',
+      });
+      openInApp.mockResolvedValueOnce({ success: true, message: 'Opened.' });
+
+      await vscodeTool.run(
+        { path: '/Users/me/projects/client-a', terminals: [] },
+        { workspaceId: 'ws-1' },
+      );
+
+      expect(openInApp).toHaveBeenCalledWith(
+        '/Applications/Visual Studio Code.app',
+        '/Users/me/projects/client-a',
+      );
+    });
+
+    it('fails loudly and never launches anything when resolution fails, without staging a restore file', async () => {
+      mockedResolveAppLaunchTarget.mockResolvedValueOnce({
+        ok: false,
+        message: 'Visual Studio Code not found at /old/path — it may have moved or been uninstalled.',
+      });
+
+      const result = await vscodeTool.run(
+        { path: '/Users/me/projects/client-a', terminals: [{ commands: ['npm run dev'] }] },
+        { workspaceId: 'ws-1' },
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('not found at /old/path');
+      expect(result.message).toContain('VS Code was not opened');
+      expect(result.code).toBe(ERROR_CODES.APP_PATH_NOT_FOUND.code);
+      expect(openInApp).not.toHaveBeenCalled();
+      expect(mockedWritePendingVscodeRestore).not.toHaveBeenCalled();
     });
 
     it('does not stage a restore file when terminals is empty', async () => {

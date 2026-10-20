@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { chromeStepSummary, spotifyStepSummary, vscodeStepSummary } from './step-summaries';
+import {
+  chromeStepSummary,
+  clockifyStepSummary,
+  spotifyStepSummary,
+  vscodeStepSummary,
+} from './step-summaries';
 
 describe('vscodeStepSummary', () => {
   it('reports no path set when empty', () => {
@@ -59,5 +64,16 @@ describe('spotifyStepSummary', () => {
     expect(
       spotifyStepSummary({ playlist: 'spotify:playlist:abc', playlistName: 'Deep Focus' }),
     ).toBe('Deep Focus');
+  });
+});
+
+describe('clockifyStepSummary', () => {
+  it('reports "App not detected yet" when no path is set', () => {
+    expect(clockifyStepSummary({})).toBe('App not detected yet');
+    expect(clockifyStepSummary({ appPath: '   ' })).toBe('App not detected yet');
+  });
+
+  it('shows the resolved app name when a path is set', () => {
+    expect(clockifyStepSummary({ appPath: '/Applications/Clockify.app' })).toBe('Clockify');
   });
 });

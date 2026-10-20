@@ -2,7 +2,13 @@ import { VscodeFields } from './vscode-fields';
 import { ChromeFields } from './chrome-fields';
 import { SpotifyFields } from './spotify-fields';
 import { AppFields } from './app-fields';
-import { chromeStepSummary, spotifyStepSummary, vscodeStepSummary } from './step-summaries';
+import { ClockifyFields } from './clockify-fields';
+import {
+  chromeStepSummary,
+  clockifyStepSummary,
+  spotifyStepSummary,
+  vscodeStepSummary,
+} from './step-summaries';
 import type { StepFieldsComponent } from './types';
 
 interface StepFieldsRegistryEntry {
@@ -23,8 +29,8 @@ interface StepFieldsRegistryEntry {
    * collapsible (chevron, click-to-expand/collapse, a dynamic subtitle
    * from `summary` below) vs. always shown inline with the preset's
    * static `config` hint as its subtitle. False for a type with no
-   * registry entry at all (Clockify included — see the comment above
-   * STEP_FIELDS).
+   * registry entry at all (docker/terminal/slack — no registered tool
+   * yet).
    */
   collapsible: boolean;
   /**
@@ -33,9 +39,10 @@ interface StepFieldsRegistryEntry {
    * state without expanding it, so this reads the draft's actual
    * params, not just the preset's static hint text (which is what
    * non-collapsible types show instead). Optional: a collapsible type
-   * with no `summary` entry (today: none — every collapsible type
-   * provides one) falls back to an empty string via `stepRowSummary`
-   * below, same as a type with no registry entry at all.
+   * with no `summary` entry (today: 'app' — its row's own dynamic name
+   * already covers this, see the comment at its entry below) falls
+   * back to an empty string via `stepRowSummary` below, same as a type
+   * with no registry entry at all.
    */
   summary?: (params: Record<string, unknown>) => string;
 }
@@ -45,14 +52,15 @@ interface StepFieldsRegistryEntry {
  * `if (preset.type === X)` chain in StepParamsFields — a new tool type
  * with its own fields component means adding it here, not editing that
  * component itself.
+ *
+ * docker/terminal/slack have no entry at all — no registered tool yet,
+ * nothing a fields component could show. Clockify DOES have an entry
+ * now, even though it has no tool-specific configuration beyond the
+ * one thing every built-in tool type shares: which real installed app
+ * it launches (see ResolvedAppPath.tsx) — previously had no entry at
+ * all, back when that was its only possible field and it had nothing
+ * to configure.
  */
-// Clockify has no entry here at all — same as docker/terminal/slack
-// (no registered tool yet) — because it genuinely has nothing to
-// configure, so there's nothing a fields component could ever show.
-// Its one-line explanation lives in STEP_TYPES' configHint instead,
-// shown as the Tools-list row's header subtitle — not a dedicated
-// component. `implemented: true` (STEP_TYPES) still distinguishes it
-// from docker/terminal/slack's "not built yet."
 const STEP_FIELDS: Record<string, StepFieldsRegistryEntry> = {
   vscode: {
     Component: VscodeFields,
@@ -79,6 +87,12 @@ const STEP_FIELDS: Record<string, StepFieldsRegistryEntry> = {
   // empty-string subtitle via stepRowSummary below, same as a type
   // with no registry entry at all.
   app: { Component: AppFields, hasPrimaryInput: false, collapsible: true },
+  clockify: {
+    Component: ClockifyFields,
+    hasPrimaryInput: false,
+    collapsible: true,
+    summary: clockifyStepSummary,
+  },
 };
 
 export function getStepFieldsComponent(type: string): StepFieldsComponent | undefined {
@@ -88,10 +102,11 @@ export function getStepFieldsComponent(type: string): StepFieldsComponent | unde
 /**
  * Whether `type`'s fields component registers a primary input to focus
  * — see WorkspaceFormModal.tsx's addTool/onCloseAutoFocus. False for a
- * type with no registry entry at all (Docker/Terminal/Slack/Clockify
- * today — StepParamsFields already renders nothing for them via
+ * type with no registry entry at all (docker/terminal/slack today —
+ * StepParamsFields already renders nothing for them via
  * getStepFieldsComponent returning undefined), same as it is for a
- * type that has an entry but no input (Spotify, Chrome).
+ * type that has an entry but no input (Spotify, Chrome, Clockify —
+ * each real content worth summarizing/hiding, none a plain <input>).
  */
 export function stepFieldsHasPrimaryInput(type: string): boolean {
   return STEP_FIELDS[type]?.hasPrimaryInput ?? false;

@@ -5,8 +5,9 @@ import type {
   ToolPlugin,
   ValidationResult,
 } from '@workspace-launcher/shared';
-import { ERROR_CODES, zodValidate } from '@workspace-launcher/shared';
+import { ERROR_CODES, SPOTIFY_APP_NAME, zodValidate } from '@workspace-launcher/shared';
 import { getPlatformLauncher } from '../platform';
+import { resolveAppLaunchTarget } from './resolve-app-path';
 
 // A `spotify:` URI (e.g. "spotify:playlist:37i9dQZF1DWZeKCadgRdKQ") or an
 // "https://open.spotify.com/..." link — the two link shapes Spotify's
@@ -31,14 +32,13 @@ const SpotifyStepParamsSchema = z.object({
   // a real name instead of the raw URI without a live API call. run()
   // never reads this; only `playlist` (the real URI) drives the restore.
   playlistName: z.string().optional(),
+  // The real, detected install path this step launches — see
+  // vscode-tool.ts's identical `appPath` field for the full precedent/
+  // reasoning.
+  appPath: z.string().optional(),
 });
 
 export type SpotifyStepParams = z.infer<typeof SpotifyStepParamsSchema>;
-
-// Exported for tool-identity.ts (workspace activity tracking — see
-// WCs/WC__workspace-activity.md) — single source of truth for the
-// macOS app name this step type launches.
-export const SPOTIFY_APP_NAME = 'Spotify';
 
 export const spotifyTool: ToolPlugin<SpotifyStepParams> = {
   type: 'spotify',
@@ -51,6 +51,16 @@ export const spotifyTool: ToolPlugin<SpotifyStepParams> = {
     const startedAt = Date.now();
     const launcher = getPlatformLauncher();
     const playlist = params.playlist;
+
+    const resolved = await resolveAppLaunchTarget('spotify', SPOTIFY_APP_NAME, params.appPath);
+    if (!resolved.ok) {
+      return {
+        success: false,
+        message: `${resolved.message} Spotify was not opened.`,
+        durationMs: Date.now() - startedAt,
+        code: ERROR_CODES.APP_PATH_NOT_FOUND.code,
+      };
+    }
 
     // openInApp passes `playlist` as a bare positional argv entry to
     // the resolved Spotify.exe (windows/launcher.ts) / `open -a` on
@@ -65,8 +75,8 @@ export const spotifyTool: ToolPlugin<SpotifyStepParams> = {
     // Windows-VM-blocked gaps (see WCs/WC__project-status.md).
     const result =
       playlist !== undefined && playlist.length > 0
-        ? await launcher.openInApp(SPOTIFY_APP_NAME, playlist)
-        : await launcher.launchApp(SPOTIFY_APP_NAME);
+        ? await launcher.openInApp(resolved.target, playlist)
+        : await launcher.launchApp(resolved.target);
 
     return {
       success: result.success,

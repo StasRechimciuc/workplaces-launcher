@@ -5,11 +5,13 @@ import type {
   CreateWorkspaceInput,
   CreateWorkspaceResult,
   DeleteWorkspaceResult,
+  DetectAppResult,
   SpotifyConnectResult,
   SpotifyListPlaylistsResult,
   SpotifyStatus,
   StepResult,
   SwitchResult,
+  ToolAppKey,
   UpdateWorkspaceInput,
   UpdateWorkspaceResult,
 } from '@workspace-launcher/shared';
@@ -165,6 +167,17 @@ const api = {
   // — the generic "App" step type's badge (see lib/useAppIcon.ts).
   getAppIcon: (appPath: string): Promise<string | null> =>
     ipcRenderer.invoke('app:getIcon', appPath),
+  // Scans this machine for a real installed .app matching the given
+  // built-in tool type (never a single silently-picked winner — always
+  // the full candidate list) — see main/platform/app-detection.ts.
+  // Always a live scan, never a stale cached answer (see
+  // app-detection-cache.ts's rescanAndCache doc comment). Always
+  // resolves `{success:true, candidates:[]}` on a platform without
+  // real detection support (Windows, for now) rather than failing —
+  // the renderer's existing "0 candidates" flow (the native app-picker)
+  // already covers that case.
+  detectInstalledApp: (toolKey: ToolAppKey): Promise<DetectAppResult> =>
+    ipcRenderer.invoke('app:detectInstalls', toolKey),
 };
 
 export type WorkspaceLauncherApi = typeof api;

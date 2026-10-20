@@ -5,8 +5,9 @@ import type {
   ToolPlugin,
   ValidationResult,
 } from '@workspace-launcher/shared';
-import { ERROR_CODES, zodValidate } from '@workspace-launcher/shared';
+import { CHROME_APP_NAME, ERROR_CODES, zodValidate } from '@workspace-launcher/shared';
 import { getPlatformLauncher } from '../platform';
+import { resolveAppLaunchTarget } from './resolve-app-path';
 
 const ChromeStepParamsSchema = z.object({
   profile: z.string().min(1, 'profile must be a non-empty string'),
@@ -22,14 +23,13 @@ const ChromeStepParamsSchema = z.object({
   // textarea is genuinely optional — never touching it must not make
   // the whole step fail to save with a confusing "Required" error.
   urls: z.array(z.string().min(1, 'each url must be a non-empty string')).default([]),
+  // The real, detected install path this step launches — see
+  // vscode-tool.ts's identical `appPath` field for the full precedent/
+  // reasoning.
+  appPath: z.string().optional(),
 });
 
 export type ChromeStepParams = z.infer<typeof ChromeStepParamsSchema>;
-
-// Exported for tool-identity.ts (workspace activity tracking — see
-// WCs/WC__workspace-activity.md) — single source of truth for the
-// macOS app name this step type launches.
-export const CHROME_APP_NAME = 'Google Chrome';
 
 export const chromeTool: ToolPlugin<ChromeStepParams> = {
   type: 'chrome',
@@ -42,6 +42,16 @@ export const chromeTool: ToolPlugin<ChromeStepParams> = {
     const startedAt = Date.now();
     const launcher = getPlatformLauncher();
 
+    const resolved = await resolveAppLaunchTarget('chrome', CHROME_APP_NAME, params.appPath);
+    if (!resolved.ok) {
+      return {
+        success: false,
+        message: `${resolved.message} Chrome was not opened.`,
+        durationMs: Date.now() - startedAt,
+        code: ERROR_CODES.APP_PATH_NOT_FOUND.code,
+      };
+    }
+
     // orchestrator.ts now passes validate()'s already-defaulted `data`
     // here, so `params.urls` is guaranteed an array on that path — this
     // guard is redundant-in-practice for it. Kept anyway: `run()` is a
@@ -50,7 +60,7 @@ export const chromeTool: ToolPlugin<ChromeStepParams> = {
     const urls = Array.isArray(params.urls) ? params.urls : [];
 
     if (urls.length === 0) {
-      const result = await launcher.openUrlInBrowserProfile(CHROME_APP_NAME, params.profile);
+      const result = await launcher.openUrlInBrowserProfile(resolved.target, params.profile);
       return {
         success: result.success,
         message: result.message,
@@ -81,7 +91,7 @@ export const chromeTool: ToolPlugin<ChromeStepParams> = {
     // windows.
     const failed: string[] = [];
     for (const url of urls) {
-      const result = await launcher.openUrlInBrowserProfile(CHROME_APP_NAME, params.profile, url);
+      const result = await launcher.openUrlInBrowserProfile(resolved.target, params.profile, url);
       if (!result.success) {
         failed.push(`${url} (${result.message})`);
       }

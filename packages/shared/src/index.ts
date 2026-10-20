@@ -6,6 +6,7 @@ export * from './tool-validation';
 export * from './restore-progress';
 export * from './app-display-name';
 export * from './format-duration';
+export * from './app-detection';
 // spotify.ts and chrome.ts are type-only (no runtime values) — safe
 // through this barrel for every consumer, including preload, unlike
 // restore-progress.ts's RESTORE_PROGRESS_CHANNEL below: a type-only

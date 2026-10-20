@@ -6,6 +6,7 @@ import {
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu';
 import type { StepFieldsProps } from './types';
+import { FIELD_GROUP_LABEL_CLASS, ResolvedAppPath } from './ResolvedAppPath';
 
 const BUTTON_CLASS =
   'flex h-7 shrink-0 items-center gap-1.5 rounded-sm border border-border-strong px-2.25 text-[12px] text-text-muted hover:bg-bg-hover disabled:pointer-events-none disabled:opacity-50';
@@ -27,12 +28,23 @@ export function SpotifyFields({
   onChange,
   registerPrimaryInputRef: _registerPrimaryInputRef, // unused — no <input> here; see step-fields/registry.ts's hasPrimaryInput: false for spotify
   spotify,
+  appPathDetection,
 }: StepFieldsProps): JSX.Element {
   const state = spotify?.state ?? { status: 'disconnected' as const };
   const playlistName = typeof params['playlistName'] === 'string' ? params['playlistName'] : '';
+  const appPath = typeof params['appPath'] === 'string' ? params['appPath'] : '';
 
   return (
     <div className="flex flex-col gap-1.5">
+      <span className={FIELD_GROUP_LABEL_CLASS}>App</span>
+      <ResolvedAppPath
+        toolLabel="Spotify"
+        appPath={appPath}
+        onChange={onChange}
+        detection={appPathDetection!}
+      />
+
+      <span className={`${FIELD_GROUP_LABEL_CLASS} mt-1`}>Playlist</span>
       <div className="flex items-center gap-1.5">
         {state.status === 'disconnected' && (
           <button

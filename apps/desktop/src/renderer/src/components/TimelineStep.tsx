@@ -2,6 +2,7 @@ import type { WorkspaceToolStepDisplay } from '../../../preload';
 import { Icon } from '../icons';
 import { cn } from '../lib/utils';
 import type { SpotifyConnection } from '../lib/useSpotifyConnection';
+import type { AppPathDetection } from '../lib/useAppPathDetections';
 import { stepLaunchTimeLabel, stepLaunchTimeTooltip } from '../lib/launch-time-display';
 import { getStepFieldsComponent, stepFieldsIsCollapsible } from './step-fields/registry';
 import { ToolBadge } from './ToolBadge';
@@ -15,6 +16,10 @@ interface TimelineStepProps {
   onToggle: () => void;
   recentFolders: string[];
   spotify: SpotifyConnection;
+  /** See step-fields/types.ts's StepFieldsProps — forwarded verbatim,
+   * only vscode/chrome/spotify/clockify-fields.tsx read it. Absent for
+   * any other tool type (Fields is undefined for those regardless). */
+  appPathDetection?: AppPathDetection;
   /** null = no edits made yet in this step's fields (Save stays
    * disabled) — distinct from "edited back to the original value,"
    * which this codebase's established taste treats as an acceptable
@@ -36,6 +41,7 @@ export function TimelineStep({
   onToggle,
   recentFolders,
   spotify,
+  appPathDetection,
   draftParams,
   onDraftChange,
   onSave,
@@ -142,6 +148,7 @@ export function TimelineStep({
               registerPrimaryInputRef={() => {}}
               {...(tool.type === 'vscode' ? { recentFolders } : {})}
               {...(tool.type === 'spotify' ? { spotify } : {})}
+              {...(appPathDetection !== undefined ? { appPathDetection } : {})}
             />
             {/* Only shown once there's an actual change to act on — with
                 nothing edited yet, Save has nothing to persist and

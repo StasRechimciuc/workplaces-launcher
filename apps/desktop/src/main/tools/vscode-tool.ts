@@ -5,13 +5,14 @@ import type {
   ToolPlugin,
   ValidationResult,
 } from '@workspace-launcher/shared';
-import { ERROR_CODES, zodValidate } from '@workspace-launcher/shared';
+import { ERROR_CODES, VSCODE_APP_NAME, zodValidate } from '@workspace-launcher/shared';
 import {
   deletePendingVscodeRestore,
   writePendingVscodeRestore,
 } from '@workspace-launcher/shared/vscode-restore';
 import { getPlatformLauncher } from '../platform';
 import { expandHome, isAcceptableToolPath } from '../lib/paths';
+import { resolveAppLaunchTarget } from './resolve-app-path';
 
 /**
  * One terminal's config — `commands` only, matching docs/build-shell.md's
@@ -48,15 +49,16 @@ const VSCodeStepParamsSchema = z.object({
       'path must be an absolute path (or start with ~) — a relative path silently breaks terminal restore and may open the wrong folder',
     ),
   terminals: z.array(VSCodeTerminalParamsSchema).default([]),
+  // The real, detected install path this step launches — chosen via
+  // the auto-detection/disambiguation flow or the native app-picker in
+  // WorkspaceFormModal.tsx. Optional/backward-compatible, same
+  // precedent as chrome-tool.ts's profileName. Absent for any config
+  // saved before this field existed; resolve-app-path.ts's machine-
+  // level detection cache covers that case at launch time instead.
+  appPath: z.string().optional(),
 });
 
 export type VSCodeStepParams = z.infer<typeof VSCodeStepParamsSchema>;
-
-// Exported for tool-identity.ts (workspace activity tracking — see
-// WCs/WC__workspace-activity.md), so that module never retypes
-// this string — it's a single source of truth for the macOS app name
-// this step type launches.
-export const VSCODE_APP_NAME = 'Visual Studio Code';
 
 export const vscodeTool: ToolPlugin<VSCodeStepParams> = {
   type: 'vscode',
@@ -68,6 +70,20 @@ export const vscodeTool: ToolPlugin<VSCodeStepParams> = {
   async run(params: VSCodeStepParams): Promise<StepResult> {
     const startedAt = Date.now();
     const folderPath = expandHome(params.path);
+
+    // Resolved before anything else — a missing configured path must
+    // never stage a terminal-restore handoff for a launch that's about
+    // to fail.
+    const resolved = await resolveAppLaunchTarget('vscode', VSCODE_APP_NAME, params.appPath);
+    if (!resolved.ok) {
+      return {
+        success: false,
+        message: `${resolved.message} VS Code was not opened.`,
+        durationMs: Date.now() - startedAt,
+        code: ERROR_CODES.APP_PATH_NOT_FOUND.code,
+      };
+    }
+
     // orchestrator.ts now passes validate()'s already-defaulted `data`
     // here, so `params.terminals` is guaranteed an array on that path —
     // this guard is redundant-in-practice for it. Kept anyway: `run()`
@@ -96,7 +112,7 @@ export const vscodeTool: ToolPlugin<VSCodeStepParams> = {
       }
     }
 
-    const result = await getPlatformLauncher().openInApp(VSCODE_APP_NAME, folderPath);
+    const result = await getPlatformLauncher().openInApp(resolved.target, folderPath);
 
     if (!result.success && terminals.length > 0) {
       // openInApp failed after the restore file was already staged —

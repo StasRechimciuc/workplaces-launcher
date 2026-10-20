@@ -1,13 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ERROR_CODES } from '@workspace-launcher/shared';
+import { ERROR_CODES, SPOTIFY_APP_NAME } from '@workspace-launcher/shared';
 import { spotifyTool } from './spotify-tool';
 import { getPlatformLauncher } from '../platform';
+import { resolveAppLaunchTarget } from './resolve-app-path';
 
 vi.mock('../platform', () => ({
   getPlatformLauncher: vi.fn(),
 }));
 
+// Real detection shells out to plutil/scans /Applications — never
+// exercised in a unit test, same precedent as every other filesystem/
+// subprocess dependency in this suite. Its own logic is covered
+// directly by app-detection.test.ts/resolve-app-path.test.ts.
+vi.mock('./resolve-app-path', () => ({
+  resolveAppLaunchTarget: vi.fn(),
+}));
+
 const mockedGetPlatformLauncher = vi.mocked(getPlatformLauncher);
+const mockedResolveAppLaunchTarget = vi.mocked(resolveAppLaunchTarget);
 const launchApp = vi.fn();
 const openInApp = vi.fn();
 
@@ -19,6 +29,10 @@ beforeEach(() => {
     launchApp,
     openInApp,
     openUrlInBrowserProfile: vi.fn(),
+  });
+  mockedResolveAppLaunchTarget.mockReset().mockResolvedValue({
+    ok: true,
+    target: SPOTIFY_APP_NAME,
   });
 });
 
@@ -82,6 +96,20 @@ describe('spotifyTool', () => {
         data: { playlist: 'spotify:playlist:37i9dQZF1DWZeKCadgRdKQ', playlistName: 'Deep Focus' },
       });
     });
+
+    it('accepts and passes through an optional appPath', () => {
+      const result = spotifyTool.validate({
+        playlist: 'spotify:playlist:37i9dQZF1DWZeKCadgRdKQ',
+        appPath: '/Applications/Spotify.app',
+      });
+      expect(result).toEqual({
+        valid: true,
+        data: {
+          playlist: 'spotify:playlist:37i9dQZF1DWZeKCadgRdKQ',
+          appPath: '/Applications/Spotify.app',
+        },
+      });
+    });
   });
 
   describe('run', () => {
@@ -128,6 +156,25 @@ describe('spotifyTool', () => {
       expect(result.success).toBe(false);
       expect(result.message).toContain('Spotify not installed');
       expect(result.code).toBe(ERROR_CODES.APP_LAUNCH_FAILED.code);
+    });
+
+    it('fails loudly and never launches anything when resolution fails', async () => {
+      mockedResolveAppLaunchTarget.mockResolvedValueOnce({
+        ok: false,
+        message: 'Spotify not found at /old/path — it may have moved or been uninstalled.',
+      });
+
+      const result = await spotifyTool.run(
+        { playlist: 'spotify:playlist:abc' },
+        { workspaceId: 'ws-1' },
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('not found at /old/path');
+      expect(result.message).toContain('Spotify was not opened');
+      expect(result.code).toBe(ERROR_CODES.APP_PATH_NOT_FOUND.code);
+      expect(openInApp).not.toHaveBeenCalled();
+      expect(launchApp).not.toHaveBeenCalled();
     });
   });
 

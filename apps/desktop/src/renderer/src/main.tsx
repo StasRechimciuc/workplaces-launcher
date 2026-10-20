@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 import { App } from './App';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 // window.d.ts (global Window.api typing) needs no import — TypeScript
 // picks up ambient .d.ts files automatically from tsconfig's `include`.
@@ -13,6 +14,8 @@ if (!container) {
 
 createRoot(container).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 );

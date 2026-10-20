@@ -12,6 +12,7 @@ import {
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu';
 import type { StepFieldsProps } from './types';
+import { FIELD_GROUP_LABEL_CLASS, ResolvedAppPath } from './ResolvedAppPath';
 
 /**
  * Terminal commands render via EditableStringList (individual removable
@@ -28,8 +29,10 @@ export function VscodeFields({
   onChange,
   registerPrimaryInputRef,
   recentFolders,
+  appPathDetection,
 }: StepFieldsProps): JSX.Element {
   const commands = getFirstTerminalCommands(params);
+  const appPath = typeof params['appPath'] === 'string' ? params['appPath'] : '';
   // Local, not threaded from the parent — a second concurrent dialog
   // from a DIFFERENT row isn't prevented by this (isBrowsing is per-row
   // state), only a second click on this same row's own button while
@@ -50,6 +53,15 @@ export function VscodeFields({
 
   return (
     <div className="flex flex-col gap-1.5">
+      <span className={FIELD_GROUP_LABEL_CLASS}>App</span>
+      <ResolvedAppPath
+        toolLabel="VS Code"
+        appPath={appPath}
+        onChange={onChange}
+        detection={appPathDetection!}
+      />
+
+      <span className={`${FIELD_GROUP_LABEL_CLASS} mt-1`}>Project folder</span>
       <div className="flex items-center gap-1.5">
         <input
           ref={registerPrimaryInputRef}

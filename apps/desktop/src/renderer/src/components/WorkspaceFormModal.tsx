@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { appDisplayName, ERROR_CODES } from '@workspace-launcher/shared';
+import { appDisplayName, ERROR_CODES, isToolAppKey } from '@workspace-launcher/shared';
 import type {
   CreateWorkspaceResult,
   UpdateWorkspaceResult,
@@ -12,6 +12,7 @@ import { CREATE_TOOL_PRESETS, type CreateToolPreset } from '../constants';
 import { useIsMounted } from '../lib/useIsMounted';
 import { getRecentProjectPaths } from '../lib/recent-project-paths';
 import { useSpotifyConnection } from '../lib/useSpotifyConnection';
+import { useAppPathDetections } from '../lib/useAppPathDetections';
 import { cn } from '../lib/utils';
 import {
   getStepFieldsComponent,
@@ -177,6 +178,9 @@ interface StepParamsFieldsProps {
   /** See step-fields/types.ts's StepFieldsProps — forwarded verbatim,
    * only spotify-fields.tsx currently reads it. */
   spotify?: StepFieldsProps['spotify'];
+  /** See step-fields/types.ts's StepFieldsProps — forwarded verbatim,
+   * only vscode/chrome/spotify/clockify-fields.tsx read it. */
+  appPathDetection?: StepFieldsProps['appPathDetection'];
 }
 
 /**
@@ -193,6 +197,7 @@ function StepParamsFields({
   registerPrimaryInputRef,
   recentFolders,
   spotify,
+  appPathDetection,
 }: StepParamsFieldsProps): JSX.Element | null {
   const Fields = getStepFieldsComponent(preset.type);
   if (!Fields) {
@@ -205,6 +210,7 @@ function StepParamsFields({
       registerPrimaryInputRef={registerPrimaryInputRef}
       {...(recentFolders !== undefined ? { recentFolders } : {})}
       {...(spotify !== undefined ? { spotify } : {})}
+      {...(appPathDetection !== undefined ? { appPathDetection } : {})}
     />
   );
 }
@@ -246,6 +252,14 @@ export function WorkspaceFormModal({
   // state can't live at SpotifyFields' own (per-row) altitude.
   const spotify = useSpotifyConnection();
 
+  // Same "once per modal mount" reasoning as spotify above, for a
+  // different cause: a row's fields block fully unmounts on collapse
+  // (see `hasFields && isOpen` below), so detection state owned by
+  // ResolvedAppPath.tsx itself would re-fetch on every single
+  // re-expand. Keyed by tool type, not by row — two VS Code steps in
+  // one workspace share one detection, never a second redundant scan.
+  const appPathDetections = useAppPathDetections();
+
   // Populated for whichever type's row renders a primary field via
   // StepParamsFields' `registerPrimaryInputRef` prop — vscode's path,
   // chrome's profile, spotify's playlist. A removed row's ref callback
@@ -272,6 +286,7 @@ export function WorkspaceFormModal({
   // reasoning as Detail.tsx's handleRestore.
   const isMountedRef = useIsMounted();
 
+  const resetAppPathDetections = appPathDetections.reset;
   const resetForm = useCallback(() => {
     nextKeyRef.current = 0;
     setName('');
@@ -279,7 +294,8 @@ export function WorkspaceFormModal({
     setOpenKeys(new Set());
     setSaveError(null);
     setIsSaving(false);
-  }, []);
+    resetAppPathDetections();
+  }, [resetAppPathDetections]);
 
   function closeAndReset(): void {
     resetForm();
@@ -299,10 +315,11 @@ export function WorkspaceFormModal({
       setCreateSteps(draftsFromWorkspace(editingWorkspace, nextKeyRef));
       setOpenKeys(new Set());
       setSaveError(null);
+      resetAppPathDetections();
     } else {
       resetForm();
     }
-  }, [open, editingWorkspace, resetForm]);
+  }, [open, editingWorkspace, resetForm, resetAppPathDetections]);
 
   /**
    * Adds a row for the picked preset and queues it to receive focus
@@ -567,6 +584,9 @@ export function WorkspaceFormModal({
                           }}
                           recentFolders={recentFolders.filter((p) => p !== params['path'])}
                           spotify={spotify}
+                          {...(isToolAppKey(preset.type)
+                            ? { appPathDetection: appPathDetections.forTool(preset.type) }
+                            : {})}
                         />
                       </div>
                     )}

@@ -357,6 +357,63 @@ matching the precedent `WC__vscode-terminal-restore.md` already set.
   timeout feature) — re-keying it per-app was considered and explicitly
   not done, since it would silently break that existing timeout
   feature's own lookups without separate dedicated review.
+- **Real app-location detection** for the 4 built-in tools (VS Code,
+  Chrome, Spotify, Clockify) — the last open Tier-1 "no manual typing"
+  must-have. Went through a full `/judge` round, driven by the
+  founder's hard constraint: "it must work for any user therefore no
+  hardcodings" — ruling out even a single hardcoded bundle ID per tool
+  (would miss VS Code Insiders, VSCodium, Chrome Beta/Canary, etc.).
+  Shipped design: on macOS, scans `/Applications`/`/System/Applications`/
+  `~/Applications` for a bundle whose own directory name matches a
+  tool's product-family name (`platform/app-detection.ts`) — empirically
+  verified live during planning that `CFBundleDisplayName` alone is
+  insufficient (VS Code's real install reports `"Code"` there, not
+  `"Visual Studio Code"`), so the directory name is the primary signal,
+  `CFBundleDisplayName` only a secondary one. Never silently picks a
+  winner: the Add-tool/Edit UI (`ResolvedAppPath.tsx`, shared across all
+  4 tool field components, including a new `clockify-fields.tsx` —
+  Clockify previously had no fields component at all) always shows the
+  resolved path with a "Not this one? Pick manually" link, falls back to
+  the existing native app-picker on zero matches, and shows a
+  disambiguation list (reusing the Chrome-profile-picker's exact
+  dropdown pattern) on multiple matches. A chosen/overridden path is
+  just a new optional `appPath` step param, persisted only through the
+  existing explicit Save flow — never written back by an unattended
+  restore. A machine-level scan cache (`app-detection-cache.ts`, 24h TTL,
+  same `electron-store` pattern as `step-timing-history.ts`) means a
+  restore of an old config with no stored `appPath` never re-scans
+  `/Applications` every single run. A stale stored path fails loudly at
+  launch time ("not found — may have moved or been uninstalled"), never
+  silently falls back to a blind name guess. Zero new macOS permissions
+  — same plain shell-out pattern (`plutil`, `runCommand`) already used
+  for the icon-extraction feature, no Accessibility/TCC surface
+  reopened. An adversarial review pass caught and fixed 6 real issues
+  before/during build: a dual-cache redundant-rescan risk (fixed by
+  keying the renderer's detection cache by tool type, not row — two VS
+  Code steps in one workspace now share one scan), a missing
+  `clockify-tool.ts` `run()` signature change, a real import-layering
+  violation (the four product-family name constants moved to
+  `packages/shared` so neither `tools/` nor `platform/` imports from the
+  other), a missing platform guard (macOS-only, resolves to an empty
+  candidate list elsewhere rather than attempting the scan), and the 4
+  existing tool unit tests which would have started shelling out for
+  real and failing on whichever machine actually has these apps
+  installed (fixed by mocking the new resolver). 564/564 tests, lint/
+  typecheck/build all clean.
+  - A second, 4-agent review pass ran against the actual built code
+    (not the plan) from four angles: correctness/async, security,
+    renderer/UX, test coverage. Security and correctness came back
+    clean (one theoretical, low-stakes concurrent-rescan note, not
+    worth fixing). Real fixes applied: inconsistent "Pick"/"Choose"
+    vocabulary across `ResolvedAppPath.tsx`'s states, standardized on
+    "Choose"; a `validate()` round-trip test for the new `appPath`
+    field added to all 4 tool test files; and the renderer's detection-
+    dedupe logic (previously verified only by code review, zero test
+    backing) extracted into a pure `detection-deduper.ts` so its actual
+    "only one real IPC call per tool type" guarantee has a real test —
+    this project has no React hook/component-testing setup, so the
+    fix was extracting the testable logic, not adding a new test
+    framework. 574/574 tests, lint/typecheck/build all clean.
 
 ## Review round: today's full batch (2026-10-20)
 
@@ -434,6 +491,80 @@ Medium/optional).
   now documented in full in `WCs/WC__vscode-terminal-restore.md`'s
   "Known, documented limitations" section rather than summarized here.
 
+## Real bug fixed + global React error boundary added (2026-10-20)
+
+Live bug report right after the app-location-detection feature
+shipped: clicking a VS Code (or chrome/spotify/clockify) step in the
+workspace Detail view's inline "quick-edit" timeline hard-crashed to a
+black screen ("Cannot read properties of undefined (reading 'state')").
+Root cause found: `TimelineStep.tsx` is a *second*, separate render
+site for the per-tool fields components — the inline quick-edit
+feature from an earlier round, distinct from `WorkspaceFormModal.tsx`'s
+"Edit workspace" dialog — and it was missed when the app-location
+detection feature was built. It rendered `VscodeFields`/`ChromeFields`/
+`SpotifyFields`/`ClockifyFields` directly without ever passing
+`appPathDetection`, so each one's `detection={appPathDetection!}` non-
+null assertion handed `ResolvedAppPath` a real `undefined`. Initial live
+Playwright reproduction attempts missed this because they only drove
+the Edit-workspace modal path, never this inline timeline quick-edit
+UI, which only the founder's own manual testing actually exercised.
+Fixed by lifting a `useAppPathDetections()` instance into `Detail.tsx`
+(same pattern as `WorkspaceFormModal.tsx`, no reset-on-close needed
+here since a detection stays valid for the whole session regardless of
+which workspace's Detail view is open) and threading it through
+`TimelineStep.tsx`'s new optional `appPathDetection` prop into `Fields`,
+gated by `isToolAppKey(tool.type)`.
+
+Real, separate gap this also surfaced: this renderer had **zero React
+error boundaries anywhere** — any uncaught render exception, from this
+bug or any future one, took down the whole window with nothing to
+catch it. Fixed with a new top-level `ErrorBoundary.tsx`
+(`apps/desktop/src/renderer/src/components/`), a standard
+`getDerivedStateFromError`/`componentDidCatch` class component (the
+only valid shape — no hook equivalent exists), wrapping `<App />` in
+`main.tsx`. Shows "Something went wrong" + the error message + a
+Reload button instead of a black screen; still logs to the console, so
+nothing is hidden, just no longer fatal to the whole app. Deliberately
+one boundary at the top, not one per row/modal — the goal is "the app
+can never go fully black again," not full per-row recovery — and it's
+what made this exact crash safely diagnosable instead of a silent dead
+window. Kept as a permanent safety net even with the real bug now
+fixed, directly satisfying claude.md's "no unhandled failure paths...
+fails loudly, never silently" standard for this whole failure class.
+
+## Detection scan switched from fixed folders to Spotlight (2026-10-20)
+
+Founder caught a real inconsistency while testing: Clockify showed
+"Couldn't find Clockify automatically" in the app-location detection
+UI, yet Restore still launched it correctly. Root cause: the detection
+scan only walked `/Applications`, `/System/Applications`, and
+`~/Applications`; the founder's real `Clockify Desktop.app` was sitting
+in `~/Downloads` (never dragged into Applications) — launch still
+worked because `resolveAppLaunchTarget`'s plain-name fallback shells
+out to `open -a "<name>"`, which resolves via Launch Services, a much
+broader system-wide lookup than the 3-folder scan.
+
+Fixed by replacing the directory walk in
+`apps/desktop/src/main/platform/app-detection.ts` with `mdfind`
+(Spotlight) queries — one per tool, `kMDItemContentType ==
+'com.apple.application-bundle' && kMDItemDisplayName == '*<name>*'c` —
+confirmed empirically on the real machine first (same precedent as the
+original CFBundleDisplayName finding): `kMDItemDisplayName` is
+filename-derived, matching `appDisplayName(path)` exactly, and found
+the real Clockify/Spotify/Chrome/VS Code installs including the
+Downloads one. This is the same index Launch Services itself draws
+from, so detection and launch can no longer disagree. Also surfaced a
+genuine (and already-handled) edge case live: a real "Install
+Spotify.app" installer stub sitting next to the real "Spotify.app" both
+match and both surface — exactly the "always return the full candidate
+list, let the user disambiguate" design already built for this,
+working as intended. `plutil`/`CFBundlePackageType`-based filtering is
+gone (mdfind's own `com.apple.application-bundle` UTI filter already
+guarantees a real bundle); the per-tool product-family substring match
+is unchanged. Rewrote `app-detection.test.ts` for the new mdfind-based
+shape (573/574, net -1 test — fewer directory-walk edge cases to cover
+now that there's no directory walk).
+
 ## Known, deliberately deferred issue
 
 `apps/desktop` has no plain `tsconfig.json` (only `tsconfig.node.json` +
@@ -444,15 +575,15 @@ regardless. Fix proposed once, declined once; still open, no urgency.
 
 ## Verified state as of the last real check
 
-Lint / typecheck (4 workspaces) / test (**527/527**) / build (main,
+Lint / typecheck (4 workspaces) / test (**574/574**) / build (main,
 preload, renderer, vscode-extension) all clean as of 2026-10-20
 (489 after removing the mock-workspace feature and its now-obsolete
 tests plus a new multi-active-workspace Switch regression test, +35
 for the real launch-time display, +2 from an 8-agent review pass
 across every change in this batch, +1 net from folding
-`step-row-summary.ts` into `step-fields/registry.ts` — see "What's
-shipped since
-2026-09-22" above). Three
+`step-row-summary.ts` into `step-fields/registry.ts`, +37 for real
+app-location detection (its own `/judge` round plus the adversarial
+review's fixes) — see "What's shipped since 2026-09-22" above). Three
 full multi-agent review rounds ran against this codebase earlier
 (round 1-2: 2026-09-18, round 3: 2026-09-22 — 12+ review-agent passes
 total); every real, concrete bug found across all three has been fixed

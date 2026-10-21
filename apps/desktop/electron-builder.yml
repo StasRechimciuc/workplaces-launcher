@@ -6,6 +6,14 @@ directories:
 files:
   - out/**/*
   - package.json
+# Copied into the packaged app's Resources folder (reachable via
+# process.resourcesPath) — main/index.ts resolves the tray icon from
+# there in a packaged build, or directly from this source path in dev
+# (is.dev). Not bundled by electron-vite's renderer/main build steps,
+# since it's a plain static asset neither process imports as code.
+extraResources:
+  - from: resources/tray
+    to: tray
 win:
   target:
     - nsis

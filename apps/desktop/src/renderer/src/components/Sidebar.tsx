@@ -68,6 +68,11 @@ export function Sidebar({
       <div className="my-3 h-px shrink-0 bg-border" />
 
       <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
+        {searchQuery && workspaces.length > 0 && (
+          <div className="px-2.5 pb-1.5 text-[11px] font-medium tracking-[0.04em] text-text-faint uppercase">
+            Search results
+          </div>
+        )}
         {workspaces.length === 0 && (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4 py-10 text-center">
             <Icon name="search" size={18} className="text-text-faint" />

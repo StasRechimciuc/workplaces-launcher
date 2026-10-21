@@ -3,20 +3,27 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ERROR_CODES, RESTORE_PROGRESS_CHANNEL } from '@workspace-launcher/shared';
-import { dialog, ipcMain } from 'electron';
+import { app, dialog, ipcMain } from 'electron';
 import {
+  clearWorkspaceHotkey,
   closeWorkspaceStep,
   createWorkspace,
   deleteWorkspace,
+  getLaunchOnLogin,
   listWorkspaces,
   registerIpcHandlers,
   restoreWorkspace,
   retryWorkspaceStep,
+  setLaunchOnLogin,
+  setWorkspaceHotkey,
   switchWorkspace,
   updateWorkspace,
 } from './handlers';
 import * as processControl from '../platform/macos/process-control';
 import * as activityStore from '../orchestrator/workspace-activity-store';
+import * as hotkeyService from '../orchestrator/hotkey-service';
+import * as hotkeysStore from '../orchestrator/workspace-hotkeys-store';
+import { settingsStore } from '../settings/store';
 import { registerBuiltInTools } from '../tools';
 import { getPlatformLauncher } from '../platform';
 import * as spotifyAuth from '../spotify/auth';
@@ -57,6 +64,32 @@ vi.mock('../orchestrator/step-timing-history', () => ({
 vi.mock('../orchestrator/workspace-activity-store', () => ({
   isIntentActive: vi.fn(() => false),
   setIntentActive: vi.fn(),
+}));
+
+// hotkey-service.ts's own registration/rollback/debounce logic is
+// covered directly by hotkey-service.test.ts; mocked wholesale here so
+// these tests can assert handlers.ts correctly ORCHESTRATES calls into
+// it (e.g. setWorkspaceHotkey rolling back on a reported failure)
+// without a real globalShortcut registration.
+vi.mock('../orchestrator/hotkey-service', () => ({
+  syncHotkeys: vi.fn(() => ({ failed: [] })),
+  getFailedHotkeyBindings: vi.fn(() => []),
+}));
+
+// workspace-hotkeys-store.ts's own get/set/clear logic is covered
+// directly by workspace-hotkeys-store.test.ts — same electron-store
+// hazard as workspace-activity-store.ts above.
+vi.mock('../orchestrator/workspace-hotkeys-store', () => ({
+  getHotkeyBinding: vi.fn(() => undefined),
+  getAllHotkeyBindings: vi.fn(() => ({})),
+  setHotkeyBinding: vi.fn(),
+  clearHotkeyBinding: vi.fn(),
+}));
+
+// settings/store.ts constructs an electron-store Store at module load
+// — same hazard as every other electron-store-backed module above.
+vi.mock('../settings/store', () => ({
+  settingsStore: { get: vi.fn(), set: vi.fn() },
 }));
 
 // process-control.ts shells out to real osascript — every
@@ -126,11 +159,20 @@ const mockWin = {
   setAlwaysOnTop: vi.fn(),
   moveTop: vi.fn(),
   focus: vi.fn(),
+  webContents: {
+    send: vi.fn(),
+    isDestroyed: vi.fn(() => false),
+  },
 };
 
 vi.mock('electron', () => ({
   app: {
     getPath: () => testUserDataDir,
+    getLoginItemSettings: vi.fn(() => ({ openAtLogin: false })),
+    setLoginItemSettings: vi.fn(),
+    // Defaults to a packaged build so most tests exercise the normal
+    // path; the dev-build guard tests override this to false.
+    isPackaged: true,
   },
   ipcMain: {
     handle: vi.fn(),
@@ -142,6 +184,14 @@ vi.mock('electron', () => ({
     showOpenDialog: vi.fn(),
   },
 }));
+
+// `app.isPackaged` is typed readonly in Electron's real .d.ts (which
+// this mock's static type still carries) — this helper is the one
+// place that casts past it, rather than scattering `as unknown as`
+// at every call site.
+function setAppPackaged(value: boolean): void {
+  (app as unknown as { isPackaged: boolean }).isPackaged = value;
+}
 
 const mockedGetPlatformLauncher = vi.mocked(getPlatformLauncher);
 const openInApp = vi.fn();
@@ -171,6 +221,8 @@ beforeEach(async () => {
   mockWin.setAlwaysOnTop.mockReset();
   mockWin.moveTop.mockReset();
   mockWin.focus.mockReset();
+  mockWin.webContents.send.mockReset();
+  mockWin.webContents.isDestroyed.mockReset().mockReturnValue(false);
   vi.mocked(ipcMain.handle).mockReset();
   vi.mocked(dialog.showOpenDialog).mockReset();
   vi.mocked(getAppIconDataUrl).mockReset();
@@ -180,6 +232,17 @@ beforeEach(async () => {
   vi.mocked(listSpotifyPlaylists).mockReset();
   vi.mocked(listChromeProfiles).mockReset();
   vi.mocked(rescanAndCache).mockReset();
+  vi.mocked(app.getLoginItemSettings).mockReset().mockReturnValue({ openAtLogin: false } as never);
+  vi.mocked(app.setLoginItemSettings).mockReset();
+  setAppPackaged(true);
+  vi.mocked(hotkeyService.syncHotkeys).mockReset().mockReturnValue({ failed: [] });
+  vi.mocked(hotkeyService.getFailedHotkeyBindings).mockReset().mockReturnValue([]);
+  vi.mocked(hotkeysStore.getHotkeyBinding).mockReset().mockReturnValue(undefined);
+  vi.mocked(hotkeysStore.getAllHotkeyBindings).mockReset().mockReturnValue({});
+  vi.mocked(hotkeysStore.setHotkeyBinding).mockReset();
+  vi.mocked(hotkeysStore.clearHotkeyBinding).mockReset();
+  vi.mocked(settingsStore.get).mockReset();
+  vi.mocked(settingsStore.set).mockReset();
 });
 
 afterEach(async () => {
@@ -391,7 +454,7 @@ describe('registerIpcHandlers — workspaces:restore progress + focus wiring', (
   });
 
   function getRegisteredRestoreHandler(): (
-    event: { sender: { send: ReturnType<typeof vi.fn>; isDestroyed: ReturnType<typeof vi.fn> } },
+    event: { sender: unknown },
     workspaceId: unknown,
   ) => Promise<unknown> {
     registerIpcHandlers();
@@ -402,16 +465,21 @@ describe('registerIpcHandlers — workspaces:restore progress + focus wiring', (
     return call[1] as never;
   }
 
+  // BrowserWindow.fromWebContents is mocked to always return the
+  // shared mockWin regardless of what event.sender is — restoreWorkspaceWithFocus
+  // (handlers.ts) sends/checks-destroyed through win.webContents, not
+  // event.sender directly, so these tests drive mockWin.webContents
+  // rather than constructing a custom event.sender.
+  const fakeEvent = { sender: {} };
+
   it('pushes a progress event per step over the IPC channel and re-asserts window focus', async () => {
     const handler = getRegisteredRestoreHandler();
-    const send = vi.fn();
-    const event = { sender: { send, isDestroyed: vi.fn(() => false) } };
 
-    const results = await handler(event, mixedWorkspaceId);
+    const results = await handler(fakeEvent, mixedWorkspaceId);
 
     expect(results).toHaveLength(6);
-    expect(send).toHaveBeenCalledTimes(12);
-    expect(send.mock.calls[0]).toEqual([
+    expect(mockWin.webContents.send).toHaveBeenCalledTimes(12);
+    expect(mockWin.webContents.send.mock.calls[0]).toEqual([
       RESTORE_PROGRESS_CHANNEL,
       expect.objectContaining({ workspaceId: mixedWorkspaceId, stepIndex: 0, status: 'running' }),
     ]);
@@ -423,13 +491,12 @@ describe('registerIpcHandlers — workspaces:restore progress + focus wiring', (
   });
 
   it('never lets a destroyed webContents throw into the orchestrator, and still returns every result', async () => {
-    const handler = getRegisteredRestoreHandler();
-    const send = vi.fn(() => {
+    mockWin.webContents.send.mockImplementation(() => {
       throw new Error('Object has been destroyed');
     });
-    const event = { sender: { send, isDestroyed: vi.fn(() => false) } };
+    const handler = getRegisteredRestoreHandler();
 
-    const results = await handler(event, mixedWorkspaceId);
+    const results = await handler(fakeEvent, mixedWorkspaceId);
 
     // The exact failure mode the adversarial review caught: a throwing
     // send() must never abort the run or discard already-collected
@@ -438,14 +505,13 @@ describe('registerIpcHandlers — workspaces:restore progress + focus wiring', (
   });
 
   it('skips sending when the webContents is already destroyed, without throwing', async () => {
+    mockWin.webContents.isDestroyed.mockReturnValue(true);
     const handler = getRegisteredRestoreHandler();
-    const send = vi.fn();
-    const event = { sender: { send, isDestroyed: vi.fn(() => true) } };
 
-    const results = await handler(event, mixedWorkspaceId);
+    const results = await handler(fakeEvent, mixedWorkspaceId);
 
     expect(results).toHaveLength(6);
-    expect(send).not.toHaveBeenCalled();
+    expect(mockWin.webContents.send).not.toHaveBeenCalled();
   });
 
   it('never lets a throwing focus reassert abort the restore either', async () => {
@@ -457,9 +523,8 @@ describe('registerIpcHandlers — workspaces:restore progress + focus wiring', (
       throw new Error('native window error');
     });
     const handler = getRegisteredRestoreHandler();
-    const event = { sender: { send: vi.fn(), isDestroyed: vi.fn(() => false) } };
 
-    const results = await handler(event, mixedWorkspaceId);
+    const results = await handler(fakeEvent, mixedWorkspaceId);
 
     // Same failure class as the destroyed-webContents case above, but
     // for restore-focus.ts's moveTop()/focus() calls instead of send().
@@ -897,6 +962,203 @@ describe('deleteWorkspace', () => {
       expect(second.error).toMatch(/No workspace found/);
       expect(second.code).toBe(ERROR_CODES.WORKSPACE_NOT_FOUND.code);
     }
+  });
+
+  it('clears any global hotkey bound to the deleted workspace and re-syncs', async () => {
+    const created = await createWorkspace({ name: 'To delete', steps: [] });
+    if (!created.success) throw new Error('setup failed');
+
+    await deleteWorkspace(created.config.id);
+
+    expect(hotkeysStore.clearHotkeyBinding).toHaveBeenCalledWith(created.config.id);
+    expect(hotkeyService.syncHotkeys).toHaveBeenCalled();
+  });
+
+  it('does not clear a hotkey binding or re-sync on a failed delete (unknown id)', async () => {
+    await deleteWorkspace('does-not-exist');
+
+    expect(hotkeysStore.clearHotkeyBinding).not.toHaveBeenCalled();
+    expect(hotkeyService.syncHotkeys).not.toHaveBeenCalled();
+  });
+});
+
+describe('setWorkspaceHotkey', () => {
+  it('throws for a non-string/empty workspace id', async () => {
+    await expect(setWorkspaceHotkey(123, 'CommandOrControl+Alt+1')).rejects.toThrow(/workspace id/);
+  });
+
+  it('rejects a malformed accelerator without ever touching the store', async () => {
+    const created = await createWorkspace({ name: 'Hotkey target', steps: [] });
+    if (!created.success) throw new Error('setup failed');
+
+    const result = await setWorkspaceHotkey(created.config.id, 'not a real accelerator');
+
+    expect(result).toMatchObject({ success: false, code: ERROR_CODES.HOTKEY_INVALID.code });
+    expect(hotkeysStore.setHotkeyBinding).not.toHaveBeenCalled();
+  });
+
+  it('rejects a Shift-containing combo (reserved for the derived Switch variant)', async () => {
+    const created = await createWorkspace({ name: 'Hotkey target', steps: [] });
+    if (!created.success) throw new Error('setup failed');
+
+    const result = await setWorkspaceHotkey(created.config.id, 'CommandOrControl+Shift+1');
+
+    expect(result).toMatchObject({ success: false, code: ERROR_CODES.HOTKEY_INVALID.code });
+  });
+
+  it('rejects an unknown workspace id', async () => {
+    const result = await setWorkspaceHotkey('does-not-exist', 'CommandOrControl+Alt+1');
+    expect(result).toMatchObject({ success: false, code: ERROR_CODES.WORKSPACE_NOT_FOUND.code });
+  });
+
+  it('persists and syncs a well-formed combo for a real workspace', async () => {
+    const created = await createWorkspace({ name: 'Hotkey target', steps: [] });
+    if (!created.success) throw new Error('setup failed');
+
+    const result = await setWorkspaceHotkey(created.config.id, 'CommandOrControl+Alt+1');
+
+    expect(result).toEqual({ success: true });
+    expect(hotkeysStore.setHotkeyBinding).toHaveBeenCalledWith(created.config.id, 'CommandOrControl+Alt+1');
+    expect(hotkeyService.syncHotkeys).toHaveBeenCalled();
+  });
+
+  it('rejects a combo already bound to ANOTHER workspace, naming it, without touching the store', async () => {
+    const existing = await createWorkspace({ name: 'Existing workspace', steps: [] });
+    const created = await createWorkspace({ name: 'New workspace', steps: [] });
+    if (!existing.success || !created.success) throw new Error('setup failed');
+    vi.mocked(hotkeysStore.getAllHotkeyBindings).mockReturnValue({
+      [existing.config.id]: 'CommandOrControl+Alt+1',
+    });
+
+    const result = await setWorkspaceHotkey(created.config.id, 'CommandOrControl+Alt+1');
+
+    // This must be caught by name BEFORE touching the store at all —
+    // syncHotkeys()'s own insertion-order-dependent failure detection
+    // could otherwise just as easily report the OTHER (pre-existing)
+    // workspace as the one that broke, silently killing a hotkey that
+    // was working fine a moment ago while this request reports success.
+    expect(result).toEqual({
+      success: false,
+      error: 'Already bound to "Existing workspace".',
+      code: ERROR_CODES.HOTKEY_ALREADY_IN_USE.code,
+    });
+    expect(hotkeysStore.setHotkeyBinding).not.toHaveBeenCalled();
+    expect(hotkeyService.syncHotkeys).not.toHaveBeenCalled();
+  });
+
+  it('allows re-recording the SAME combo for the SAME workspace without a false collision', async () => {
+    const created = await createWorkspace({ name: 'Self workspace', steps: [] });
+    if (!created.success) throw new Error('setup failed');
+    vi.mocked(hotkeysStore.getAllHotkeyBindings).mockReturnValue({
+      [created.config.id]: 'CommandOrControl+Alt+1',
+    });
+
+    const result = await setWorkspaceHotkey(created.config.id, 'CommandOrControl+Alt+1');
+
+    expect(result).toEqual({ success: true });
+  });
+
+  it('rolls back to the PREVIOUS binding (not just clears it) when the new one fails to register', async () => {
+    const created = await createWorkspace({ name: 'Hotkey target', steps: [] });
+    if (!created.success) throw new Error('setup failed');
+    vi.mocked(hotkeysStore.getHotkeyBinding).mockReturnValue('CommandOrControl+Alt+9');
+    vi.mocked(hotkeyService.syncHotkeys).mockReturnValueOnce({ failed: [created.config.id] });
+
+    const result = await setWorkspaceHotkey(created.config.id, 'CommandOrControl+Alt+1');
+
+    expect(result).toMatchObject({ success: false, code: ERROR_CODES.HOTKEY_ALREADY_IN_USE.code });
+    // Last call restores the previous, known-good binding — not a clear.
+    expect(hotkeysStore.setHotkeyBinding).toHaveBeenLastCalledWith(
+      created.config.id,
+      'CommandOrControl+Alt+9',
+    );
+    expect(hotkeysStore.clearHotkeyBinding).not.toHaveBeenCalled();
+    // Re-synced once to apply the attempt, once more to restore.
+    expect(hotkeyService.syncHotkeys).toHaveBeenCalledTimes(2);
+  });
+
+  it('rolls back to NO binding when there was none before and the new one fails', async () => {
+    const created = await createWorkspace({ name: 'Hotkey target', steps: [] });
+    if (!created.success) throw new Error('setup failed');
+    vi.mocked(hotkeysStore.getHotkeyBinding).mockReturnValue(undefined);
+    vi.mocked(hotkeyService.syncHotkeys).mockReturnValueOnce({ failed: [created.config.id] });
+
+    const result = await setWorkspaceHotkey(created.config.id, 'CommandOrControl+Alt+1');
+
+    expect(result).toMatchObject({ success: false, code: ERROR_CODES.HOTKEY_ALREADY_IN_USE.code });
+    expect(hotkeysStore.clearHotkeyBinding).toHaveBeenCalledWith(created.config.id);
+  });
+});
+
+describe('clearWorkspaceHotkey', () => {
+  it('throws for a non-string/empty workspace id', () => {
+    expect(() => clearWorkspaceHotkey(123)).toThrow(/workspace id/);
+  });
+
+  it('clears the binding and re-syncs', () => {
+    clearWorkspaceHotkey('ws-1');
+    expect(hotkeysStore.clearHotkeyBinding).toHaveBeenCalledWith('ws-1');
+    expect(hotkeyService.syncHotkeys).toHaveBeenCalled();
+  });
+});
+
+describe('getLaunchOnLogin', () => {
+  it('reads the live OS state, not just the stored value', () => {
+    vi.mocked(app.getLoginItemSettings).mockReturnValue({ openAtLogin: true } as never);
+
+    const result = getLaunchOnLogin();
+
+    expect(result).toEqual({ success: true, enabled: true });
+  });
+
+  it('syncs the store to match the live OS state', () => {
+    vi.mocked(app.getLoginItemSettings).mockReturnValue({ openAtLogin: true } as never);
+
+    getLaunchOnLogin();
+
+    expect(settingsStore.set).toHaveBeenCalledWith('launchOnLogin', true);
+  });
+});
+
+describe('setLaunchOnLogin', () => {
+  it('throws for a non-boolean value', () => {
+    expect(() => setLaunchOnLogin('yes')).toThrow(/boolean/);
+  });
+
+  it('registers with the OS and persists on success', () => {
+    const result = setLaunchOnLogin(true);
+
+    expect(result).toEqual({ success: true });
+    expect(app.setLoginItemSettings).toHaveBeenCalledWith({ openAtLogin: true });
+    expect(settingsStore.set).toHaveBeenCalledWith('launchOnLogin', true);
+  });
+
+  it('returns a structured failure (not a throw) if the OS call itself fails', () => {
+    vi.mocked(app.setLoginItemSettings).mockImplementation(() => {
+      throw new Error('not entitled');
+    });
+
+    const result = setLaunchOnLogin(true);
+
+    expect(result).toMatchObject({ success: false, code: ERROR_CODES.LAUNCH_ON_LOGIN_FAILED.code });
+  });
+
+  it('refuses to turn ON in an unpackaged dev build, without touching the OS at all', () => {
+    setAppPackaged(false);
+
+    const result = setLaunchOnLogin(true);
+
+    expect(result).toMatchObject({ success: false, code: ERROR_CODES.LAUNCH_ON_LOGIN_FAILED.code });
+    expect(app.setLoginItemSettings).not.toHaveBeenCalled();
+  });
+
+  it('still allows turning OFF in a dev build — cleans up a login item registered before this guard existed', () => {
+    setAppPackaged(false);
+
+    const result = setLaunchOnLogin(false);
+
+    expect(result).toEqual({ success: true });
+    expect(app.setLoginItemSettings).toHaveBeenCalledWith({ openAtLogin: false });
   });
 });
 

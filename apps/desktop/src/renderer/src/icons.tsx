@@ -58,6 +58,15 @@ const ICON_PATHS: Record<string, string> = {
   // same screen as a Switch result).
   repeat:
     '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
+  // Global hotkey pill (Detail.tsx). Key "dots" are zero-length <line>
+  // elements — rendered as round dots by the shared <svg>'s
+  // strokeLinecap="round", same trick as a filled circle without a
+  // second fill-only path.
+  keyboard:
+    '<rect x="2" y="5" width="20" height="14" rx="2"/><line x1="6" y1="9" x2="6" y2="9"/><line x1="10" y1="9" x2="10" y2="9"/><line x1="14" y1="9" x2="14" y2="9"/><line x1="18" y1="9" x2="18" y2="9"/><line x1="7" y1="15" x2="17" y2="15"/>',
+  // Persistent "what does this mean" affordance (WorkspaceHotkeyControl.tsx)
+  // — click, not hover, so the explanation is actually discoverable.
+  info: '<circle cx="12" cy="12" r="9"/><line x1="12" y1="16" x2="12" y2="11.5"/><line x1="12" y1="8" x2="12" y2="8"/>',
 };
 
 export type IconName = keyof typeof ICON_PATHS;

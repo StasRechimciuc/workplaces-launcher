@@ -6,11 +6,16 @@ import Store from 'electron-store';
 export interface AppSettings {
   defaultTerminalApp: string;
   launchOnLogin: boolean;
+  /** Whether the one-time "still running in the menu bar" notice has
+   * already been shown — see main/index.ts's window-all-closed
+   * handler. Shown at most once, ever, not once per launch. */
+  hasShownBackgroundNotice: boolean;
 }
 
 const defaults: AppSettings = {
   defaultTerminalApp: 'Terminal',
   launchOnLogin: false,
+  hasShownBackgroundNotice: false,
 };
 
 /**

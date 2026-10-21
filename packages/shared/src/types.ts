@@ -106,3 +106,27 @@ export interface ToolPlugin<TParams = unknown> {
   /** Same raw-params contract as `detail` above. `undefined` means no expand panel. */
   expand?(params: Record<string, unknown>): StepDisplayRow[] | undefined;
 }
+
+/**
+ * Result of setting a workspace's global hotkey (hotkeys:setBinding -
+ * see WCs/WC__global-hotkeys.md). Mirrors CreateWorkspaceResult's exact
+ * shape/spirit: "the combo is already in use" is routine, expected
+ * input while recording, not an exceptional condition.
+ */
+export type SetHotkeyBindingResult =
+  | { success: true }
+  | { success: false; error: string; code: string };
+
+/**
+ * Result of reading the "launch at login" preference - always a live
+ * read of the OS's own login-item state (settings/store.ts's
+ * `launchOnLogin` field is kept in sync with this, never the other way
+ * around), so it stays correct even if changed outside this app (e.g.
+ * macOS System Settings > Login Items).
+ */
+export type GetLaunchOnLoginResult = { success: true; enabled: boolean };
+
+/** Result of setting the "launch at login" preference. */
+export type SetLaunchOnLoginResult =
+  | { success: true }
+  | { success: false; error: string; code: string };

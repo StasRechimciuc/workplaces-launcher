@@ -1,8 +1,10 @@
 import { join } from 'node:path';
-import { app, BrowserWindow, dialog, Menu, shell } from 'electron';
+import { app, BrowserWindow, dialog, Menu, Notification, Tray, shell } from 'electron';
 import { electronApp, is, optimizer } from '@electron-toolkit/utils';
 import { PRODUCT_NAME } from '@workspace-launcher/shared/vscode-restore';
 import { registerIpcHandlers } from './ipc/handlers';
+import { syncHotkeys } from './orchestrator/hotkey-service';
+import { settingsStore } from './settings/store';
 import { buildAppMenu } from './menu';
 import { registerBuiltInTools } from './tools';
 
@@ -122,17 +124,77 @@ function createMainWindow(): BrowserWindow {
 }
 
 if (gotSingleInstanceLock) {
+  // The one real-quit chokepoint — see WCs/WC__global-hotkeys.md's
+  // tray/background-persistence section. False by default: any quit
+  // trigger (Cmd+Q via the app menu's default Quit role, the window's
+  // own close button reaching zero windows, a plain `kill <pid>`,
+  // anything else that calls app.quit() or sends a quit signal) backs
+  // the app off into the tray instead of exiting. The ONLY code that
+  // sets this true is the tray menu's own "Quit" item, just before it
+  // calls app.quit() itself — deliberately scoped inside this
+  // `if (gotSingleInstanceLock)` block (not module-level), so the
+  // failed-lock early-exit path above never registers a before-quit
+  // handler that could intercept its own already-queued app.quit().
+  let isQuittingFromTray = false;
+  let tray: Tray | null = null;
+
   // Someone tried to launch a second instance — focus the existing
   // window instead of letting a second process start.
   app.on('second-instance', () => {
+    showOrCreateMainWindow();
+  });
+
+  /**
+   * Shared by the tray's own click handler, its "Open" menu item, and
+   * the second-instance handler above: reuses an existing window if
+   * one's still around (windows are destroyed, not hidden, on close —
+   * see window-all-closed below — so "existing" usually means the app
+   * was never backgrounded yet this launch) rather than always
+   * creating a fresh one.
+   */
+  function showOrCreateMainWindow(): void {
+    if (process.platform === 'darwin') {
+      app.dock?.show();
+    }
     const [existingWindow] = BrowserWindow.getAllWindows();
     if (existingWindow) {
       if (existingWindow.isMinimized()) {
         existingWindow.restore();
       }
       existingWindow.focus();
+      return;
     }
-  });
+    createMainWindow();
+  }
+
+  /**
+   * macOS menu-bar icons must be "template images" (monochrome,
+   * filename ending in "Template") for the OS to auto-invert them
+   * between light/dark menu bars — see resources/tray/'s own PNGs and
+   * WCs/WC__global-hotkeys.md for why these are a known placeholder,
+   * not final artwork. `is.dev` loads straight from this source tree;
+   * a packaged build copies them to `process.resourcesPath` via
+   * electron-builder.yml's `extraResources`.
+   */
+  function getTrayIconPath(): string {
+    return is.dev
+      ? join(__dirname, '../../resources/tray/trayIconTemplate.png')
+      : join(process.resourcesPath, 'tray/trayIconTemplate.png');
+  }
+
+  function buildTrayMenu(): Menu {
+    return Menu.buildFromTemplate([
+      { label: 'Open Workspace Launcher', click: () => showOrCreateMainWindow() },
+      { type: 'separator' },
+      {
+        label: 'Quit Workspace Launcher',
+        click: () => {
+          isQuittingFromTray = true;
+          app.quit();
+        },
+      },
+    ]);
+  }
 
   void app.whenReady().then(() => {
     electronApp.setAppUserModelId('com.workspacelauncher.app');
@@ -146,16 +208,89 @@ if (gotSingleInstanceLock) {
     registerIpcHandlers();
     createMainWindow();
 
+    tray = new Tray(getTrayIconPath());
+    tray.setToolTip(PRODUCT_NAME);
+    tray.setContextMenu(buildTrayMenu());
+    // Context-menu-on-left-click is already macOS's own default once
+    // setContextMenu is called (this platform's actual scope right
+    // now) — this handler only matters for a future Windows/Linux
+    // build, where left-click doesn't auto-show the context menu.
+    if (process.platform !== 'darwin') {
+      tray.on('click', () => showOrCreateMainWindow());
+    }
+
+    // Registers every stored workspace hotkey as a live global
+    // shortcut — see hotkey-service.ts. Deliberately not awaited: a
+    // registration failure is reported per-workspace via the Settings
+    // UI's "needs to be re-picked" indicator, never a startup-blocking
+    // error, and syncHotkeys() itself never throws (each registration
+    // attempt is individually try/caught).
+    syncHotkeys();
+
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
-        createMainWindow();
-      }
+      showOrCreateMainWindow();
     });
+  }).catch((err: unknown) => {
+    // Mirrors createMainWindow()'s own loadPromise.catch below — an
+    // uncaught rejection here (e.g. a future addition to this chain
+    // that can throw) would otherwise be a silent, unreported failure
+    // with no window and no indication why.
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`Failed to start Workspace Launcher: ${message}`);
+    dialog.showErrorBox('Workspace Launcher failed to start', message);
   });
 
   app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') {
-      app.quit();
+    // Windows are destroyed, not hidden, on close (createMainWindow has
+    // no close-interception of its own) specifically to avoid keeping a
+    // full Chromium renderer resident in memory for however long the
+    // app sits backgrounded — the founder's own prediction is that this
+    // will be a frequently-used, often-backgrounded feature. activate/
+    // showOrCreateMainWindow already recreate a window on demand, so
+    // nothing is lost besides a brief reload when reopening.
+    if (process.platform === 'darwin') {
+      app.dock?.hide();
+    }
+
+    // Never show this on a genuine tray-initiated quit — window-all-
+    // closed still fires on the way to a real exit (Electron's quit
+    // order is before-quit -> each window's close -> window-all-closed
+    // -> will-quit -> quit), and telling the user "still running in the
+    // background" at the exact moment the app is exiting would be
+    // actively misleading.
+    if (isQuittingFromTray) return;
+
+    if (!settingsStore.get('hasShownBackgroundNotice') && Notification.isSupported()) {
+      new Notification({
+        title: PRODUCT_NAME,
+        body: 'Still running in the menu bar — click the tray icon to reopen, or Quit from there.',
+      }).show();
+      settingsStore.set('hasShownBackgroundNotice', true);
     }
   });
+
+  // Dev-mode only: electron-vite's own hot-restart-on-file-change
+  // sends the running process a real quit — if before-quit intercepted
+  // that too (as it correctly does in production, to back the app off
+  // into the tray), the old process would never actually exit. It'd
+  // stay alive holding the single-instance lock while electron-vite
+  // spawns a fresh process for the restart, which immediately loses
+  // the lock race and exits, while the OLD zombie process's
+  // `second-instance` handler recreates a window against its own
+  // now-stale `ELECTRON_RENDERER_URL` — a dev server that's since
+  // moved on or died, surfacing as a blank white window with
+  // ERR_CONNECTION_REFUSED. Confirmed, not theoretical: hit exactly
+  // this during this feature's own build. Production packaging never
+  // sends this kind of external restart signal, so this gate only
+  // matters for `npm run dev`.
+  if (!is.dev) {
+    app.on('before-quit', (event) => {
+      if (isQuittingFromTray) return; // let the real quit proceed
+      event.preventDefault();
+      BrowserWindow.getAllWindows().forEach((w) => w.destroy());
+      if (process.platform === 'darwin') {
+        app.dock?.hide();
+      }
+    });
+  }
 }

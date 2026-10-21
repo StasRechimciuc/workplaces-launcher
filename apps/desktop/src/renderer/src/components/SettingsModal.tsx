@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../icons';
 import { getStoredTheme, setStoredTheme, type Theme } from '../lib/theme';
 import {
@@ -56,6 +56,37 @@ export function SettingsModal({ open, onClose }: SettingsModalProps): JSX.Elemen
     () => effective.filter((s) => s.label.toLowerCase().includes(query.toLowerCase())),
     [effective, query],
   );
+
+  const [launchOnLogin, setLaunchOnLoginState] = useState(false);
+  const [launchOnLoginError, setLaunchOnLoginError] = useState('');
+
+  // Re-read every time the modal opens — it's main-process state
+  // (electron-store + the OS's own login-item registration), not
+  // something this component can know changed otherwise.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void window.api.getLaunchOnLogin().then((result) => {
+      if (cancelled) return;
+      if (result.success) {
+        setLaunchOnLoginState(result.enabled);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  async function handleToggleLaunchOnLogin(): Promise<void> {
+    setLaunchOnLoginError('');
+    const next = !launchOnLogin;
+    const result = await window.api.setLaunchOnLogin(next);
+    if (result.success) {
+      setLaunchOnLoginState(next);
+    } else {
+      setLaunchOnLoginError(result.error);
+    }
+  }
 
   function toggleTheme(): void {
     const next: Theme = theme === 'dark' ? 'light' : 'dark';
@@ -145,6 +176,46 @@ export function SettingsModal({ open, onClose }: SettingsModalProps): JSX.Elemen
                 />
               </label>
             </div>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="flex flex-col">
+              <span className="text-[12.5px] text-text">Launch at login</span>
+              {/* No pre-emptive disabling in a dev build — that read as a
+                  silently broken control (confirmed: its own explanatory
+                  caption was too low-contrast to even notice on the light
+                  theme). The toggle is always clickable; a dev-build
+                  attempt to turn it ON is rejected server-side
+                  (handlers.ts's setLaunchOnLogin) and shown here through
+                  the same red-error-text path every other failed action
+                  in this app already uses. */}
+              {launchOnLoginError && (
+                <span className="text-[11px] text-danger">{launchOnLoginError}</span>
+              )}
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={launchOnLogin}
+              className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
+                launchOnLogin ? 'bg-accent' : 'bg-bg-elevated'
+              } border border-border-strong`}
+              onClick={() => {
+                void handleToggleLaunchOnLogin();
+              }}
+            >
+              {/* A plain bg-white knob on this app's near-white light-theme
+                  "off" track (bg-bg-elevated) was nearly invisible —
+                  confirmed directly from a screenshot. A shadow gives the
+                  knob a visible edge against ANY track color, in either
+                  theme, rather than depending on a border/fill contrast
+                  that only happened to work in dark mode. */}
+              <span
+                className={`absolute top-0.5 h-3.5 w-3.5 rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.4)] transition-transform ${
+                  launchOnLogin ? 'translate-x-4' : 'translate-x-0.5'
+                }`}
+              />
+            </button>
           </div>
 
           <div className="border-t border-border pt-4">

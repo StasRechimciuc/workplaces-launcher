@@ -1,12 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import { BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 import type {
   ChromeListProfilesResult,
   CloseResult,
   CreateWorkspaceResult,
   DeleteWorkspaceResult,
   DetectAppResult,
+  GetLaunchOnLoginResult,
   RestoreProgressEvent,
+  SetHotkeyBindingResult,
+  SetLaunchOnLoginResult,
   SpotifyListPlaylistsResult,
   StepResult,
   SwitchResult,
@@ -17,6 +20,7 @@ import {
   CURRENT_WORKSPACE_CONFIG_VERSION,
   ERROR_CODES,
   isToolAppKey,
+  isWellFormedAccelerator,
   parseWorkspaceConfig,
   RESTORE_PROGRESS_CHANNEL,
 } from '@workspace-launcher/shared';
@@ -29,6 +33,14 @@ import {
   runWorkspace,
   switchToWorkspace,
 } from '../orchestrator/orchestrator';
+import { syncHotkeys, getFailedHotkeyBindings } from '../orchestrator/hotkey-service';
+import {
+  clearHotkeyBinding,
+  getAllHotkeyBindings,
+  getHotkeyBinding,
+  setHotkeyBinding,
+} from '../orchestrator/workspace-hotkeys-store';
+import { settingsStore } from '../settings/store';
 import { validateStepsWithRegisteredTools } from '../tools/validate-steps';
 import {
   deleteWorkspaceConfig,
@@ -107,6 +119,67 @@ export async function restoreWorkspace(
 
   const config = await resolveWorkspaceConfig(workspaceId);
   return runWorkspace(config, onProgress ? { onStepProgress: onProgress } : {});
+}
+
+/**
+ * The full restore experience — always-on-top focus pinning plus a
+ * live per-step progress push, exactly as the `workspaces:restore` IPC
+ * handler below gives a renderer-initiated restore — but reusable by
+ * anything that has a `BrowserWindow | null` rather than a live IPC
+ * `event` to derive one from. The hotkey service (hotkey-service.ts)
+ * is the other caller: a hotkey fired while a window happens to be
+ * open should get the same experience as clicking the button, not a
+ * silently degraded one; a hotkey fired with no window open just skips
+ * the pin/push (nothing to pin, nothing to push to).
+ */
+export async function restoreWorkspaceWithFocus(
+  workspaceId: unknown,
+  win: BrowserWindow | null,
+): Promise<StepResult[]> {
+  const session = startRestoreFocusSession(win);
+  try {
+    return await restoreWorkspace(workspaceId, (progress) => {
+      // A destroyed webContents (the window closed mid-restore) makes
+      // .send() throw synchronously — that must never propagate into
+      // the orchestrator's step loop and abort a restore that's still
+      // correctly collecting results for steps that already succeeded.
+      try {
+        if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
+          win.webContents.send(RESTORE_PROGRESS_CHANNEL, progress);
+        }
+      } catch (err) {
+        console.error(
+          `Failed to send restore progress: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      try {
+        session.reassert(progress);
+      } catch (err) {
+        console.error(
+          `Failed to reassert restore focus: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    });
+  } finally {
+    session.end();
+  }
+}
+
+/**
+ * Best-effort display name lookup — used only by the hotkey service's
+ * failure notification (a rare path; one extra config load there is
+ * cheap and not worth threading names through the hot registration
+ * path). Falls back to the raw id rather than throwing: a notification
+ * explaining a failure must never itself fail to show over a second,
+ * cosmetic lookup problem.
+ */
+export async function getWorkspaceName(workspaceId: string): Promise<string> {
+  try {
+    const config = await resolveWorkspaceConfig(workspaceId);
+    return config.name;
+  } catch {
+    return workspaceId;
+  }
 }
 
 /**
@@ -292,7 +365,172 @@ export async function deleteWorkspace(workspaceId: unknown): Promise<DeleteWorks
   }
 
   await deleteWorkspaceConfig(workspaceId);
+  // A hotkey bound to a now-gone workspace would otherwise sit
+  // orphaned in the store forever — syncHotkeys() would just try to
+  // register a hotkey whose callback resolves to a workspace that no
+  // longer exists, failing confusingly instead of simply not existing.
+  clearHotkeyBinding(workspaceId);
+  syncHotkeys();
   return { success: true };
+}
+
+/**
+ * Persists a new base accelerator for a workspace's global hotkey and
+ * (re-)registers it live — see hotkey-service.ts's syncHotkeys for how
+ * the actual OS-level registration works, and
+ * @workspace-launcher/shared's switchAccelerator for the derived Shift
+ * variant. Re-validates the combo's shape independently of the
+ * renderer's own recorder constraints (defense in depth — see
+ * accelerator.ts's doc comment), and rolls back to the previous
+ * binding (or no binding) if the new one fails to register, so a
+ * rejected combo never lingers half-applied.
+ */
+export async function setWorkspaceHotkey(
+  workspaceId: unknown,
+  accelerator: unknown,
+): Promise<SetHotkeyBindingResult> {
+  if (typeof workspaceId !== 'string' || workspaceId.length === 0) {
+    throw new Error('hotkeys:setBinding expects a non-empty workspace id (string).');
+  }
+  if (typeof accelerator !== 'string' || !isWellFormedAccelerator(accelerator, { allowShift: false })) {
+    return { success: false, error: 'Not a valid shortcut.', code: ERROR_CODES.HOTKEY_INVALID.code };
+  }
+
+  const { configs } = await loadAllWorkspaceConfigs();
+  if (!configs.some((config) => config.id === workspaceId)) {
+    return {
+      success: false,
+      error: `No workspace found with id "${workspaceId}".`,
+      code: ERROR_CODES.WORKSPACE_NOT_FOUND.code,
+    };
+  }
+
+  // Checked explicitly, BEFORE persisting anything, rather than just
+  // letting syncHotkeys()'s normal OS-registration-failure path catch
+  // it: syncHotkeys() re-registers every binding fresh from a plain
+  // object (insertion-ordered by whichever workspace bound a hotkey
+  // FIRST, not by this request), so if this combo already belongs to
+  // another workspace, which of the two ends up in its `failed` list
+  // depends on that unrelated ordering — it could just as easily be
+  // the OTHER, previously-working workspace that silently loses its
+  // hotkey while this request reports success. Catching it here, by
+  // name, means the request that's actually new/wrong is the one that
+  // gets rejected, and with a far clearer message than "already in
+  // use" (which one? by what, this app or another?).
+  const collision = Object.entries(getAllHotkeyBindings()).find(
+    ([id, existing]) => id !== workspaceId && existing === accelerator,
+  );
+  if (collision) {
+    const conflictName = await getWorkspaceName(collision[0]);
+    return {
+      success: false,
+      error: `Already bound to "${conflictName}".`,
+      code: ERROR_CODES.HOTKEY_ALREADY_IN_USE.code,
+    };
+  }
+
+  const previous = getHotkeyBinding(workspaceId);
+  setHotkeyBinding(workspaceId, accelerator);
+  const { failed } = syncHotkeys();
+
+  if (failed.includes(workspaceId)) {
+    if (previous) {
+      setHotkeyBinding(workspaceId, previous);
+    } else {
+      clearHotkeyBinding(workspaceId);
+    }
+    syncHotkeys(); // restore the previous, known-good registration state
+    return {
+      success: false,
+      error: 'That shortcut (or its Shift variant, used for Switch) is already in use.',
+      code: ERROR_CODES.HOTKEY_ALREADY_IN_USE.code,
+    };
+  }
+
+  return { success: true };
+}
+
+/** Removes a workspace's global hotkey binding entirely and re-syncs. */
+export function clearWorkspaceHotkey(workspaceId: unknown): void {
+  if (typeof workspaceId !== 'string' || workspaceId.length === 0) {
+    throw new Error('hotkeys:clearBinding expects a non-empty workspace id (string).');
+  }
+  clearHotkeyBinding(workspaceId);
+  syncHotkeys();
+}
+
+export function getWorkspaceHotkey(workspaceId: unknown): string | undefined {
+  if (typeof workspaceId !== 'string' || workspaceId.length === 0) {
+    throw new Error('hotkeys:getBinding expects a non-empty workspace id (string).');
+  }
+  return getHotkeyBinding(workspaceId);
+}
+
+export function getAllWorkspaceHotkeys(): Record<string, string> {
+  return getAllHotkeyBindings();
+}
+
+/** Workspace ids whose binding failed to register on the most recent
+ * sync — the Settings UI's "needs to be re-picked" indicator. */
+export function getFailedWorkspaceHotkeys(): string[] {
+  return getFailedHotkeyBindings();
+}
+
+/**
+ * Always a live read of the OS's own login-item state, synced back
+ * into settingsStore — never trusts the stored value alone, since the
+ * user could change this from macOS System Settings > Login Items
+ * directly, outside this app entirely.
+ */
+export function getLaunchOnLogin(): GetLaunchOnLoginResult {
+  const enabled = app.getLoginItemSettings().openAtLogin;
+  settingsStore.set('launchOnLogin', enabled);
+  return { success: true, enabled };
+}
+
+/** Follows the same `{success, error, code}` shape as every other
+ * fallible-OS-call handler in this file (spotify:listPlaylists,
+ * chrome:listProfiles, app:detectInstalls) rather than a bare throw —
+ * `setLoginItemSettings` can genuinely fail, e.g. on an unsigned or
+ * mis-entitled build.
+ *
+ * Refuses outright on an unpackaged dev build: `setLoginItemSettings`
+ * would register whatever's actually on disk at this process's
+ * executable path — in dev that's the generic, shared
+ * `node_modules/electron/dist/Electron.app` binary every electron-vite
+ * project uses, not a real "Workspace Launcher.app". Confirmed live:
+ * macOS's own "Login Item Added" system notification named it
+ * "Electron.app," not this app — exactly the confusing, wrong-named
+ * registration this guard exists to prevent. A packaged
+ * (electron-builder) build has its own real bundle and doesn't hit
+ * this at all. */
+export function setLaunchOnLogin(value: unknown): SetLaunchOnLoginResult {
+  if (typeof value !== 'boolean') {
+    throw new Error('settings:setLaunchOnLogin expects a boolean.');
+  }
+  // Turning it OFF is always allowed, even unpackaged — someone needs
+  // a way to undo a login item a dev build already registered (e.g.
+  // from before this guard existed) without leaving System Settings as
+  // the only way out. Only turning it ON is blocked in dev.
+  if (value && !app.isPackaged) {
+    return {
+      success: false,
+      error:
+        "Not available in a dev build — it would register the generic 'Electron.app' instead of Workspace Launcher. Try this once the app is installed.",
+      code: ERROR_CODES.LAUNCH_ON_LOGIN_FAILED.code,
+    };
+  }
+  try {
+    app.setLoginItemSettings({ openAtLogin: value });
+    settingsStore.set('launchOnLogin', value);
+    return { success: true };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+      code: ERROR_CODES.LAUNCH_ON_LOGIN_FAILED.code,
+    };
+  }
 }
 
 /**
@@ -340,40 +578,7 @@ export function registerIpcHandlers(): void {
     // this handler, so this is correct even if a future version ever
     // has more than one window.
     const win = BrowserWindow.fromWebContents(event.sender);
-    const session = startRestoreFocusSession(win);
-    try {
-      return await restoreWorkspace(workspaceId, (progress) => {
-        // A destroyed webContents (the user closed the window mid-
-        // restore) makes .send() throw synchronously — that must never
-        // propagate into the orchestrator's step loop and abort a
-        // restore that's still correctly collecting results for steps
-        // that already succeeded (orchestrator.ts's own no-discard
-        // invariant).
-        try {
-          if (!event.sender.isDestroyed()) {
-            event.sender.send(RESTORE_PROGRESS_CHANNEL, progress);
-          }
-        } catch (err) {
-          console.error(
-            `Failed to send restore progress: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-        // Same reasoning as the send() guard above: this callback runs
-        // directly inside orchestrator.ts's step loop with nothing else
-        // between it and runWorkspace's for-loop, so an uncaught throw
-        // here (e.g. an unexpected native error from moveTop()/focus())
-        // would abort the whole restore, not just this progress update.
-        try {
-          session.reassert(progress);
-        } catch (err) {
-          console.error(
-            `Failed to reassert restore focus: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-      });
-    } finally {
-      session.end();
-    }
+    return restoreWorkspaceWithFocus(workspaceId, win);
   });
 
   ipcMain.handle(
@@ -509,5 +714,33 @@ export function registerIpcHandlers(): void {
       return null;
     }
     return getAppIconDataUrl(appPath);
+  });
+
+  ipcMain.handle('hotkeys:getBinding', async (_event, workspaceId: unknown) => {
+    return getWorkspaceHotkey(workspaceId);
+  });
+
+  ipcMain.handle('hotkeys:getAllBindings', async () => {
+    return getAllWorkspaceHotkeys();
+  });
+
+  ipcMain.handle('hotkeys:setBinding', async (_event, workspaceId: unknown, accelerator: unknown) => {
+    return setWorkspaceHotkey(workspaceId, accelerator);
+  });
+
+  ipcMain.handle('hotkeys:clearBinding', async (_event, workspaceId: unknown) => {
+    clearWorkspaceHotkey(workspaceId);
+  });
+
+  ipcMain.handle('hotkeys:getFailedBindings', async () => {
+    return getFailedWorkspaceHotkeys();
+  });
+
+  ipcMain.handle('settings:getLaunchOnLogin', async () => {
+    return getLaunchOnLogin();
+  });
+
+  ipcMain.handle('settings:setLaunchOnLogin', async (_event, value: unknown) => {
+    return setLaunchOnLogin(value);
   });
 }

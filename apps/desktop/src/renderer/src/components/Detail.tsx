@@ -18,6 +18,7 @@ import { useAppPathDetections } from '../lib/useAppPathDetections';
 import { TimelineStep } from './TimelineStep';
 import { RestoreResults } from './RestoreResults';
 import { ErrorCode } from './ErrorCode';
+import { WorkspaceHotkeyControl } from './WorkspaceHotkeyControl';
 
 /** A message paired with its (possibly absent) error code — the shape
  * every locally-owned error-display state in this component uses, so
@@ -113,6 +114,7 @@ export function Detail({
   // regardless of which workspace's Detail view is showing, so there's
   // nothing to invalidate when switching the selected workspace.
   const appPathDetections = useAppPathDetections();
+  const isMac = window.api.platform === 'darwin';
 
   function handleToggleStep(i: number): void {
     setExpandedIndex((current) => (current === i ? null : i));
@@ -438,6 +440,7 @@ export function Detail({
           <Icon name="zap" size={12} className="text-text-faint" />{' '}
           {workspaceLaunchTimeLabel(workspace.launchTime)}
         </span>
+        <WorkspaceHotkeyControl workspaceId={workspace.id} isMac={isMac} />
       </div>
 
       <div className="mt-6.5 mb-5.5 h-px bg-border" />

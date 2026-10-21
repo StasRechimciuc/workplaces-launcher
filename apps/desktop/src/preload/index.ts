@@ -6,6 +6,9 @@ import type {
   CreateWorkspaceResult,
   DeleteWorkspaceResult,
   DetectAppResult,
+  GetLaunchOnLoginResult,
+  SetHotkeyBindingResult,
+  SetLaunchOnLoginResult,
   SpotifyConnectResult,
   SpotifyListPlaylistsResult,
   SpotifyStatus,
@@ -178,6 +181,31 @@ const api = {
   // already covers that case.
   detectInstalledApp: (toolKey: ToolAppKey): Promise<DetectAppResult> =>
     ipcRenderer.invoke('app:detectInstalls', toolKey),
+  // The workspace's own base accelerator (fires Restore) — undefined if
+  // none is set. The Shift variant (fires Switch) is always derived
+  // from this, never a separate stored value — see
+  // WCs/WC__global-hotkeys.md.
+  getWorkspaceHotkey: (workspaceId: string): Promise<string | undefined> =>
+    ipcRenderer.invoke('hotkeys:getBinding', workspaceId),
+  getAllWorkspaceHotkeys: (): Promise<Record<string, string>> =>
+    ipcRenderer.invoke('hotkeys:getAllBindings'),
+  // Re-registers live with the OS as part of this call — a rejected
+  // combo (already in use, by this app or another) never gets
+  // persisted, see ipc/handlers.ts's setWorkspaceHotkey.
+  setWorkspaceHotkey: (workspaceId: string, accelerator: string): Promise<SetHotkeyBindingResult> =>
+    ipcRenderer.invoke('hotkeys:setBinding', workspaceId, accelerator),
+  clearWorkspaceHotkey: (workspaceId: string): Promise<void> =>
+    ipcRenderer.invoke('hotkeys:clearBinding', workspaceId),
+  // Workspace ids whose hotkey failed to (re-)register on the most
+  // recent sync (e.g. a macOS update changed what owns a combo) — the
+  // Settings UI's "needs to be re-picked" indicator.
+  getFailedWorkspaceHotkeys: (): Promise<string[]> => ipcRenderer.invoke('hotkeys:getFailedBindings'),
+  // Always a live read of the OS's own login-item state — see
+  // ipc/handlers.ts's getLaunchOnLogin.
+  getLaunchOnLogin: (): Promise<GetLaunchOnLoginResult> =>
+    ipcRenderer.invoke('settings:getLaunchOnLogin'),
+  setLaunchOnLogin: (value: boolean): Promise<SetLaunchOnLoginResult> =>
+    ipcRenderer.invoke('settings:setLaunchOnLogin', value),
 };
 
 export type WorkspaceLauncherApi = typeof api;

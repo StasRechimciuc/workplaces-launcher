@@ -37,6 +37,14 @@ function comboFromEvent(e: { key: string; metaKey: boolean; ctrlKey: boolean; al
   }
   const tokens: string[] = [];
   if (isMac ? e.metaKey : e.ctrlKey) tokens.push('CommandOrControl');
+  // On mac, Control is a DISTINCT modifier from Cmd — it was previously
+  // dropped entirely whenever held alongside Cmd (e.g. ⌘⌃S silently
+  // registered as just ⌘S), since e.ctrlKey was only ever consulted for
+  // CommandOrControl on non-mac above. Same fix as
+  // lib/workspace-hotkeys.ts's baseComboFromEvent (the global-hotkey
+  // recorder hit, and fixed, this identical bug first). On Windows/
+  // Linux, ctrlKey already IS CommandOrControl, so no separate token.
+  if (isMac && e.ctrlKey) tokens.push('Control');
   if (e.altKey) tokens.push('Alt');
   if (e.shiftKey) tokens.push('Shift');
   tokens.push(e.key.length === 1 ? e.key.toUpperCase() : e.key);

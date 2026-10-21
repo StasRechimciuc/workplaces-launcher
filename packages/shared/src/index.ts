@@ -7,6 +7,10 @@ export * from './restore-progress';
 export * from './app-display-name';
 export * from './format-duration';
 export * from './app-detection';
+// accelerator.ts has zero Node dependencies (pure string logic) — safe
+// through this barrel for every consumer, same reasoning as
+// spotify.ts/chrome.ts below, not restore-progress.ts's special case.
+export * from './accelerator';
 // spotify.ts and chrome.ts are type-only (no runtime values) — safe
 // through this barrel for every consumer, including preload, unlike
 // restore-progress.ts's RESTORE_PROGRESS_CHANNEL below: a type-only

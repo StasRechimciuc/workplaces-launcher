@@ -114,6 +114,24 @@ export const ERROR_CODES = {
     explanation:
       "One or more of this step's terminals couldn't be opened — the configured directory may no longer exist, Workspace Launcher couldn't hand off to your terminal app, or Terminal steps aren't supported yet on this platform.",
   },
+  HOTKEY_INVALID: {
+    code: 'ER-HOTKEY-01',
+    title: 'Invalid shortcut',
+    explanation:
+      "This shortcut isn't a combination Workspace Launcher can register with the operating system. Try a different key combination.",
+  },
+  HOTKEY_ALREADY_IN_USE: {
+    code: 'ER-HOTKEY-02',
+    title: 'Shortcut unavailable',
+    explanation:
+      "This shortcut (or its Shift variant, used for Switch) is already claimed by another app or by macOS itself. There's no way for Workspace Launcher to know which one — try a different key combination.",
+  },
+  LAUNCH_ON_LOGIN_FAILED: {
+    code: 'ER-SYS-02',
+    title: "Couldn't update launch-at-login",
+    explanation:
+      'Workspace Launcher was unable to change its login-item registration with the operating system.',
+  },
   SYSTEM_UNEXPECTED: {
     code: 'ER-SYS-01',
     title: 'Something went wrong',

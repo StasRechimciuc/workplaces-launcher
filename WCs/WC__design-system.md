@@ -12,66 +12,82 @@ them consistently.
   is no `tailwind.config.js`. This is v4's real config mechanism, not a
   simplified stand-in for one; every custom token below becomes a real
   utility class (`--color-accent` → `bg-accent`/`text-accent`/
-  `border-accent`, `--radius-lg` → `rounded-lg`, etc).
+  `border-accent`, `--radius-lg` → `rounded-lg`, `--font-serif` →
+  `font-serif`, etc).
 - **shadcn/ui** components (`components/ui/`) — Radix primitives styled
   with Tailwind, copied into the repo and owned directly rather than
-  installed as an opaque package. Only `Dialog` exists so far.
-- **Dark-only.** No light theme exists or is planned; `color-scheme:
-dark` is set globally so native controls (text selection, autofill)
-  match.
+  installed as an opaque package. Only `Dialog`/`DropdownMenu` exist so
+  far.
+- **Dark and light, both real.** Dark is the default; light is applied
+  via `data-theme="light"` on `<html>`, toggled from Settings
+  (`lib/theme.ts`), with `color-scheme` set to match so native controls
+  (text selection, autofill) follow. (This doc previously claimed
+  "dark-only, no light theme planned" — stale; light shipped a while
+  ago. Fixed here, 2026-10-21.)
 - **Desktop-only**, minimum window width 1200px. No phone/tablet
   responsive layout — this is a native app, not a website.
 
 ## Color tokens
 
-All defined in `styles.css`'s `@theme` block.
+All defined in `styles.css`'s `@theme` block (dark, the default) and
+redefined in `:root[data-theme='light']` for light — a component never
+branches on theme itself, it just uses the token class and the CSS
+cascade picks the right value. Ported 2026-10-21 from a dedicated
+redesign (two full mockups, "Graphite · Blue" dark / "Paper · Blue"
+light, built against this app's own real screens) — replacing the
+original indigo/near-black palette this doc used to document.
 
-### Surfaces (background layers, darkest to lightest)
+### Surfaces (background layers)
 
-| Token         | Value     | Use                                                                                                                                               |
-| ------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bg-page`     | `#08080a` | Not currently used as a Tailwind class (no `--color-bg-page`-only element) — reserved for an eventual outer app-chrome layer if one exists later. |
-| `bg`          | `#131316` | Base app background, modal background.                                                                                                            |
-| `bg-elevated` | `#1a1a1e` | Cards, pills, badges, input backgrounds — one step "up" from base.                                                                                |
-| `bg-hover`    | `#212127` | Hover state for interactive rows/buttons on `bg`.                                                                                                 |
-| `bg-active`   | `#24242b` | Active/pressed state, one step past hover.                                                                                                        |
+| Token         | Dark                      | Light                     | Use                                                                                                                                                       |
+| ------------- | -------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bg-page`     | `#06060a`                  | `#f9f6ef`                  | Outermost app background.                                                                                                                                 |
+| `bg`          | `#101014`                  | `#f3efe7`                  | Base app background, sidebar, modal background.                                                                                                           |
+| `bg-elevated` | `#17171d`                  | `#fbf9f4`                  | Cards, pills, badges, input backgrounds — one step "up" from base.                                                                                        |
+| `bg-hover`    | `rgba(255,255,255,.035)`   | `rgba(128,120,100,.10)`    | Hover state — a translucent overlay, not a fixed hex, so it reads correctly over whatever surface sits beneath it (the source design's own mechanism).    |
+| `bg-active`   | `rgba(255,255,255,.07)`    | `rgba(128,120,100,.16)`    | Active/pressed state, double the hover overlay's opacity — the source only specified one overlay value; this extrapolates the existing hover/active ratio. |
 
 ### Text (hierarchy, brightest to dimmest)
 
-| Token        | Value     | Use                                                         |
-| ------------ | --------- | ----------------------------------------------------------- |
-| `text`       | `#f2f2f4` | Primary text — headings, active/selected item names.        |
-| `text-muted` | `#9a9aa4` | Secondary text — descriptions, body copy.                   |
-| `text-faint` | `#6d6d78` | Tertiary — timestamps, icon-only accents, placeholder text. |
+| Token        | Dark      | Light     | Use                                                          |
+| ------------ | --------- | --------- | ------------------------------------------------------------- |
+| `text`       | `#f3f3f8` | `#1b1a17` | Primary text — headings, active/selected item names.         |
+| `text-muted` | `#bfbfcb` | `#4b4740` | Secondary text — descriptions, body copy.                    |
+| `text-faint` | `#767684` | `#8a8478` | Tertiary — timestamps, icon-only accents, placeholder text.  |
 
 ### Borders
 
-| Token           | Value                    | Use                                             |
-| --------------- | ------------------------ | ----------------------------------------------- |
-| `border`        | `rgba(255,255,255,0.08)` | Default hairline — separators, card borders.    |
-| `border-strong` | `rgba(255,255,255,0.14)` | More prominent — button borders, input borders. |
+| Token           | Dark                      | Light                 | Use                                             |
+| --------------- | -------------------------- | ---------------------- | ------------------------------------------------ |
+| `border`        | `rgba(255,255,255,0.08)`   | `rgba(0,0,0,0.08)`     | Default hairline — separators, card borders.    |
+| `border-strong` | `#26262f`                  | `#ded7c7`               | More prominent — button borders, input borders. |
 
-### Brand / accent (indigo — the app's one brand color)
+### Brand / accent (blue — user-customizable, see Settings)
 
-| Token           | Value                   | Use                                                                                             |
-| --------------- | ----------------------- | ----------------------------------------------------------------------------------------------- |
-| `accent`        | `#6366f1`               | Primary action color — the "Restore workspace" button, active sidebar item border, focus rings. |
-| `accent-hover`  | `#5254d8`               | Hover state for accent-colored buttons.                                                         |
-| `accent-soft`   | `rgba(99,102,241,0.14)` | Tinted background — active sidebar item, the brand mark badge.                                  |
-| `accent-border` | `rgba(99,102,241,0.4)`  | Border for accent-tinted elements (active sidebar item, focused input).                         |
+| Token           | Value                                                       | Use                                                                                                                    |
+| --------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `accent`        | `#3b6cf0` default (same in both themes)                        | Primary action color — the "Restore workspace" button, active sidebar item border, focus rings, step-number circles. |
+| `accent-hover`  | `color-mix(in srgb, var(--color-accent) 94%, white)`            | Hover state for accent-colored buttons — derived, not a separately hand-picked hex.                                   |
+| `accent-soft`   | `color-mix(in srgb, var(--color-accent) 14%, transparent)`      | Tinted background — active sidebar item, the brand mark badge — derived from `accent`.                                |
+| `accent-border` | `color-mix(in srgb, var(--color-accent) 40%, transparent)`      | Border for accent-tinted elements — derived from `accent`.                                                            |
 
-This is deliberately the _only_ brand color decision made so far —
-picked because it's what the existing app already uses, not a fresh
-choice. Revisit once the landing page's visual identity exists, so the
-app and the pitch asset are decided together rather than the app
-locking one in first.
+`accent-hover`/`-soft`/`-border` are deliberately `color-mix()`
+derivations off the one `accent` variable, not separately hand-picked
+hexes — this is also the entire mechanism Settings' Primary Color
+picker relies on: it only ever overrides `--color-accent` itself (same
+`localStorage`-backed pattern as `lib/theme.ts`), and every derived
+shade follows automatically with zero per-component changes. See
+`lib/accent-color.ts`. Known, accepted limitation: the text rendered on
+top of an accent-filled button stays fixed white regardless of the
+chosen color — a very pale user-chosen accent could fail contrast
+there; not solved in v1, flagged rather than silently assumed fine.
 
 ### Semantic (restore results)
 
-| Token     | Value     | Use                                                 |
-| --------- | --------- | --------------------------------------------------- |
-| `success` | `#4ade80` | Succeeded step icon in restore results.             |
-| `danger`  | `#f87171` | Failed step icon in restore results, error banners. |
+| Token     | Dark      | Light     | Use                                                                                                                              |
+| --------- | --------- | --------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `success` | `#4ade80` | `#2f7d4f` | Succeeded step icon in restore results.                                                                                         |
+| `danger`  | `#f87171` | `#f87171` | Failed step icon in restore results, error banners. The source redesign didn't touch error/danger styling — unchanged, both themes. |
 
 ### Tool badge colors
 
@@ -82,9 +98,15 @@ A fixed set of 7, keyed by the `color` string on workspace/tool data
 workspace" tool row).
 
 Each has a saturated `tool-{name}` tone (icon color) and a soft,
-translucent `tool-{name}-soft` tint (badge background) — e.g.
-`--color-tool-blue: #60a5fa` / `--color-tool-blue-soft:
-rgba(59,130,246,0.14)`.
+translucent `tool-{name}-soft` tint (badge background). Four of the
+seven (`blue`/`sky`/`violet`/`amber`) are genuinely **theme-specific**
+— the source redesign tuned these four per background (lighter/more
+saturated against the dark page, deeper/more muted against the light
+one), e.g. `--color-tool-blue: #6aa8ff` (dark) vs `#2f6fde` (light).
+The other three (`zinc`/`orange`/`green`) plus the two tag-only colors
+below are theme-invariant, same as before — not part of the source
+redesign, left unchanged (a saturated fg over a low-opacity tint reads
+fine on either background by construction).
 
 **Don't apply these via `className="bg-tool-${color}"` template
 interpolation** — Tailwind can't generate CSS for a class it can't see
@@ -97,41 +119,63 @@ as a complete static class string.
 
 The small colored dot next to each workspace name in the sidebar.
 5 keys: `"blue"`, `"violet"`, `"amber"` (reuse the matching `tool-*`
-tone above), plus two tag-only colors: `tag-emerald` (`#34d399`) and
-`tag-rose` (`#fb7185`). Same rule: use `tagDotClasses(color)` from
+tone above, so these are also theme-specific), plus two tag-only
+colors: `tag-emerald` (`#34d399`) and `tag-rose` (`#fb7185`, both
+theme-invariant). Same rule: use `tagDotClasses(color)` from
 `lib/tool-colors.ts`, never a dynamic class string.
 
 ### Adding a new tool/tag color
 
 1. Add `--color-tool-{name}` (+ `-soft` if it's a badge color) to
-   `styles.css`'s `@theme`.
+   `styles.css`'s `@theme` — and to the light-theme override block too
+   if it needs theme-specific tuning (most don't, see above).
 2. Add the key to the relevant lookup object in `lib/tool-colors.ts`.
 3. Never skip the lookup — a template-interpolated class name silently
    renders unstyled (Tailwind won't have generated the CSS for it).
 
 ## Radius scale
 
-| Token        | Value                                                      |
-| ------------ | ---------------------------------------------------------- |
-| `rounded-sm` | 7px — inputs, small badges, pills-that-aren't-fully-round. |
-| `rounded-md` | 9px — buttons.                                             |
-| `rounded-lg` | 12px — modal, larger cards.                                |
+| Token        | Value |
+| ------------ | ----- |
+| `rounded-sm` | 8px — inputs, small badges, pills-that-aren't-fully-round. |
+| `rounded-md` | 13px — buttons. |
+| `rounded-lg` | 21px — modal, larger cards. |
 
 These override Tailwind's own default `sm`/`md`/`lg` radius scale
 (normally 4/6/8px) — the values above are what's actually in use
-throughout the app. A one-off radius that doesn't match any of these
-(rare — e.g. the 8px brand mark badge) uses an arbitrary value
-(`rounded-[8px]`) rather than forcing it onto the nearest token.
+throughout the app, ported 2026-10-21 from the same redesign as the
+colors above (previously 7/9/12px). A one-off radius that doesn't
+match any of these uses an arbitrary value (`rounded-[Npx]`) rather
+than forcing it onto the nearest token.
 
 ## Typography
 
-No named type scale — font sizes are exact arbitrary values
-(`text-[12.5px]`, `text-[13.5px]`, etc.) matching the original design
-pixel-for-pixel, since most sizes in this design don't land on
-Tailwind's default scale. Font family is set once, globally, on
-`body` in `styles.css` (system font stack — `-apple-system`, `SF Pro
-Text`, ...); components never set `font-family` themselves. Monospace
-text (commands, paths) uses Tailwind's default `font-mono`.
+**Two fonts, self-hosted** (`public/fonts/`, see that folder's own
+`NOTICE.md` for licensing) — not loaded from a Google Fonts CDN link,
+since this app's CSP (`style-src 'self'`, no `font-src`/`connect-src`)
+blocks that outright, and bundling matches this project's existing
+preference for local assets (tool logos, same pattern).
+
+- **Instrument Sans** (`font-sans`, `--font-sans` in `styles.css`) —
+  the app's default body font, set once globally on `body`; components
+  never set `font-family` themselves.
+- **Fraunces** (`font-serif`, `--font-serif`) — deliberately scoped to
+  exactly the three places the source redesign uses it, applied via
+  the `font-serif` utility at each call site, never as a second base
+  font everything inherits: the sidebar wordmark (`Sidebar.tsx`), a
+  workspace's page-level `<h1>` (`Detail.tsx`), and the step-number
+  circles in the restore timeline (`TimelineStep.tsx`). Always paired
+  with `font-semibold` (weight 600, matching the source's `--fhw`) —
+  Fraunces is a variable font but this app only ever uses that one
+  weight. The page `<h1>` additionally uses `tracking-[-0.015em]`
+  (the source's `--fhls`), a tighter tracking than this app's other
+  headings' `-0.01em`.
+
+No named type scale beyond that — font sizes are exact arbitrary
+values (`text-[12.5px]`, `text-[13.5px]`, etc.) matching the original
+design pixel-for-pixel, since most sizes in this design don't land on
+Tailwind's default scale. Monospace text (commands, paths) uses
+Tailwind's default `font-mono`.
 
 ## Component conventions
 

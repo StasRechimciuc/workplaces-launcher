@@ -307,9 +307,31 @@ export function Detail({
     <main className="min-w-0 flex-1 overflow-y-auto px-10 pt-7.5 pb-10">
       <div className="flex items-start justify-between gap-6">
         <div>
-          <h1 className="m-0 text-[21px] font-semibold tracking-[-0.01em] text-text">
-            {workspace.name}
-          </h1>
+          <div className="flex items-center gap-2.5">
+            <h1 className="font-serif m-0 text-[21px] font-semibold tracking-[-0.015em] text-text">
+              {workspace.name}
+            </h1>
+            {
+              // Computed server-side (intent + liveness — see
+              // WCs/WC__workspace-activity.md), never a locally-set
+              // flag. Always absent on non-macOS (v1 scope). Same
+              // pulsing-dot language as the sidebar row's own live
+              // indicator (Sidebar.tsx) — here there's room for the
+              // label too, unlike that compact list row.
+              workspace.active && (
+                <span
+                  className="flex items-center gap-1.5 text-[11.5px] font-semibold tracking-[0.04em] text-success uppercase"
+                  title="At least one of this workspace's apps is still open"
+                >
+                  <span className="relative flex h-2 w-2">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success opacity-75" />
+                    <span className="relative inline-flex h-full w-full rounded-full bg-success" />
+                  </span>
+                  Active
+                </span>
+              )
+            }
+          </div>
           <p className="mt-1.25 mb-0 text-[13px] text-text-muted">{workspace.description}</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -318,7 +340,7 @@ export function Detail({
               <button
                 type="button"
                 aria-label={`Actions for ${workspace.name}`}
-                className="flex h-8 w-8 items-center justify-center rounded-md border border-border-strong bg-transparent text-[15px] text-text-muted hover:bg-bg-hover hover:text-text data-[state=open]:bg-bg-hover data-[state=open]:text-text"
+                className="flex h-10 w-10 items-center justify-center rounded-md border border-border-strong bg-bg-elevated text-text-muted transition-[transform,background-color,border-color] duration-150 hover:-translate-y-px hover:bg-bg-hover hover:text-text active:translate-y-0 data-[state=open]:bg-bg-hover data-[state=open]:text-text"
               >
                 <Icon name="more" size={15} />
               </button>
@@ -351,7 +373,7 @@ export function Detail({
             // is a real, distinct case from closing just this one —
             // see WCs/WC__workspace-activity.md).
             <button
-              className="flex h-8.5 items-center gap-1.75 rounded-md border border-accent-border bg-transparent px-3.5 text-[13px] font-semibold text-accent transition-colors duration-120 hover:bg-accent-soft disabled:cursor-default disabled:opacity-60"
+              className="flex h-10 items-center gap-1.75 rounded-md border border-border-strong bg-bg-elevated px-4 text-[13px] font-semibold text-text transition-[transform,background-color,border-color] duration-150 hover:-translate-y-px hover:bg-bg-hover active:translate-y-0 disabled:cursor-default disabled:opacity-60"
               type="button"
               title="Closes whatever another active workspace opened that this one doesn't need, then restores this one."
               disabled={isRestoring || isSwitching || isClosing || retryingIndex !== null}
@@ -373,7 +395,7 @@ export function Detail({
             // Close-then-Restore round trip.
             workspace.active && (
               <button
-                className="flex h-8.5 items-center gap-1.75 rounded-md border border-border-strong bg-transparent px-3.75 text-[13px] font-semibold text-text transition-colors duration-120 hover:bg-bg-hover disabled:cursor-default disabled:opacity-60"
+                className="flex h-10 items-center gap-1.75 rounded-md border border-border-strong bg-bg-elevated px-4 text-[13px] font-semibold text-text transition-[transform,background-color,border-color] duration-150 hover:-translate-y-px hover:bg-bg-hover active:translate-y-0 disabled:cursor-default disabled:opacity-60"
                 type="button"
                 title="Closes just this workspace's own apps. Anything another active workspace still needs stays open."
                 disabled={isRestoring || isSwitching || isClosing || retryingIndex !== null}
@@ -387,7 +409,7 @@ export function Detail({
             )
           }
           <button
-            className="flex h-8.5 items-center gap-1.75 rounded-md bg-accent px-3.75 text-[13px] font-semibold text-white shadow-[0_1px_0_rgba(255,255,255,0.08)_inset,0_6px_16px_-6px_rgba(99,102,241,0.55)] transition-colors duration-120 hover:bg-accent-hover active:translate-y-px disabled:cursor-default disabled:opacity-60"
+            className="flex h-10 items-center gap-1.75 rounded-md bg-accent px-4 text-[13px] font-bold text-white transition-[transform,filter] duration-150 hover:-translate-y-px hover:brightness-[1.06] active:translate-y-0 disabled:cursor-default disabled:opacity-60"
             type="button"
             title={
               workspace.active

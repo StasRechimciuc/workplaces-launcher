@@ -1,26 +1,55 @@
 @import 'tailwindcss';
 
 /*
+ * Self-hosted, not a Google Fonts <link> — this app's CSP (style-src
+ * 'self', no font-src/connect-src) blocks an external font request
+ * outright, and bundling matches this project's existing preference
+ * for local assets (see public/tool-logos/NOTICE.md). Both are real
+ * variable fonts; the declared font-weight range matches exactly what
+ * this app actually uses (see public/fonts/NOTICE.md for licensing).
+ */
+@font-face {
+  font-family: 'Fraunces';
+  font-style: normal;
+  font-weight: 500 600;
+  font-display: swap;
+  src: url('/fonts/Fraunces-Variable.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Instrument Sans';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('/fonts/InstrumentSans-Variable.woff2') format('woff2');
+}
+
+/*
  * Tailwind v4 theme tokens — generates matching utilities automatically
  * (--color-* → bg-accent/text-accent/border-accent, --radius-* →
- * rounded-sm/md/lg, etc). This app's entire design system, in one
- * place — every component below is styled through these.
+ * rounded-sm/md/lg, --font-* → font-sans/font-serif, etc). This app's
+ * entire design system, in one place — every component below is
+ * styled through these.
  */
 @theme {
-  --color-bg-page: #08080a;
-  --color-bg: #131316;
-  --color-bg-elevated: #1a1a1e;
-  --color-bg-hover: #212127;
-  --color-bg-active: #24242b;
+  --color-bg-page: #06060a;
+  --color-bg: #101014;
+  /* Identical to --color-bg in dark mode (the source design's own
+     --side token equals --bg here) — only light mode's sidebar reads
+     as a distinct, slightly deeper tone from the main content area;
+     see the light override below. */
+  --color-bg-sidebar: #101014;
+  --color-bg-elevated: #17171d;
+  --color-bg-hover: rgba(255, 255, 255, 0.035);
+  --color-bg-active: rgba(255, 255, 255, 0.07);
   --color-border: rgba(255, 255, 255, 0.08);
-  --color-border-strong: rgba(255, 255, 255, 0.14);
-  --color-text: #f2f2f4;
-  --color-text-muted: #9a9aa4;
-  --color-text-faint: #6d6d78;
-  --color-accent: #6366f1;
-  --color-accent-hover: #5254d8;
-  --color-accent-soft: rgba(99, 102, 241, 0.14);
-  --color-accent-border: rgba(99, 102, 241, 0.4);
+  --color-border-strong: #26262f;
+  --color-text: #f3f3f8;
+  --color-text-muted: #bfbfcb;
+  --color-text-faint: #767684;
+  --color-accent: #3b6cf0;
+  --color-accent-hover: color-mix(in srgb, var(--color-accent) 94%, white);
+  --color-accent-soft: color-mix(in srgb, var(--color-accent) 14%, transparent);
+  --color-accent-border: color-mix(in srgb, var(--color-accent) 40%, transparent);
   --color-success: #4ade80;
   --color-danger: #f87171;
   /* Not a Tailwind-utility-driven value — the ::-webkit-scrollbar-thumb
@@ -34,30 +63,49 @@
      as its badge background. See lib/tool-colors.ts for the lookup that
      maps a color key to these classes (Tailwind can't interpolate a
      runtime string into a class name, so that lookup enumerates the
-     complete static class strings below). */
-  --color-tool-blue: #60a5fa;
-  --color-tool-blue-soft: rgba(59, 130, 246, 0.14);
-  --color-tool-sky: #38bdf8;
-  --color-tool-sky-soft: rgba(14, 165, 233, 0.14);
+     complete static class strings below).
+
+     blue/sky/violet/amber are redefined per-theme below (the source
+     design tuned these four specifically per background — lighter/more
+     saturated against the near-black dark page, deeper/more muted
+     against the warm light page); these are this block's dark-mode
+     values, doubling as the default. zinc/orange/green + the two
+     tag-only colors are theme-invariant by construction (a saturated
+     fg over a low-opacity tint reads fine on either background), same
+     as before — not part of the source redesign, left unchanged. */
+  --color-tool-blue: #6aa8ff;
+  --color-tool-blue-soft: rgba(106, 168, 255, 0.14);
+  --color-tool-sky: #4cd3f0;
+  --color-tool-sky-soft: rgba(76, 211, 240, 0.14);
   --color-tool-zinc: #d4d4d8;
   --color-tool-zinc-soft: rgba(161, 161, 170, 0.14);
   --color-tool-orange: #fb923c;
   --color-tool-orange-soft: rgba(249, 115, 22, 0.14);
-  --color-tool-violet: #a78bfa;
-  --color-tool-violet-soft: rgba(139, 92, 246, 0.14);
+  --color-tool-violet: #b49bff;
+  --color-tool-violet-soft: rgba(180, 155, 255, 0.14);
   --color-tool-green: #4ade80;
   --color-tool-green-soft: rgba(34, 197, 94, 0.14);
-  --color-tool-amber: #fbbf24;
-  --color-tool-amber-soft: rgba(245, 158, 11, 0.14);
+  --color-tool-amber: #ffb84d;
+  --color-tool-amber-soft: rgba(255, 184, 77, 0.14);
 
   /* Workspace sidebar tag dots — reuses the -fg tones above where the
      color is shared (blue/violet/amber), plus two tag-only colors. */
   --color-tag-emerald: #34d399;
   --color-tag-rose: #fb7185;
 
-  --radius-lg: 12px;
-  --radius-md: 9px;
-  --radius-sm: 7px;
+  --radius-lg: 21px;
+  --radius-md: 13px;
+  --radius-sm: 8px;
+
+  /* font-sans is this app's default (set on body below); font-serif is
+     deliberately scoped to the two places the source design actually
+     uses it (the sidebar wordmark, a workspace's page-level <h1>) —
+     applied directly via the font-serif utility at each of those call
+     sites, not as a second base font everything inherits. */
+  --font-sans:
+    'Instrument Sans', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Helvetica,
+    Arial, sans-serif;
+  --font-serif: 'Fraunces', serif;
 }
 
 /*
@@ -99,35 +147,49 @@
  * this CSS at all and stay dark-styled regardless of in-app theme
  * until that's separately wired via IPC. Cosmetic only (the content
  * area itself is correct); deliberately out of scope for this pass.
- *
- * Tool-badge colors (--color-tool-* and --color-tag-*) are NOT redefined
- * here — each is a saturated foreground paired with a low-opacity
- * "-soft" tint background, which stays legible against either a light
- * or dark page background by construction, the same reason tinted
- * badge systems are commonly designed this way.
  */
 :root[data-theme='light'] {
   color-scheme: light;
 
-  --color-bg-page: #f0f0f2;
-  --color-bg: #ffffff;
-  --color-bg-elevated: #f5f5f7;
-  --color-bg-hover: #ececef;
-  --color-bg-active: #e4e4e8;
+  --color-bg-page: #f9f6ef;
+  --color-bg: #f3efe7;
+  --color-bg-sidebar: #ebe6da;
+  --color-bg-elevated: #fbf9f4;
+  --color-bg-hover: rgba(128, 120, 100, 0.1);
+  --color-bg-active: rgba(128, 120, 100, 0.16);
   --color-border: rgba(0, 0, 0, 0.08);
-  --color-border-strong: rgba(0, 0, 0, 0.14);
-  --color-text: #1a1a1e;
-  --color-text-muted: #5f5f68;
-  --color-text-faint: #8d8d96;
-  --color-accent-soft: rgba(99, 102, 241, 0.12);
-  --color-accent-border: rgba(99, 102, 241, 0.35);
-  /* Darkened from the dark-theme values (#4ade80/#f87171) — those are
-     tuned for contrast against a near-black page background and read
-     as low-contrast/washed-out on white. --color-accent/-hover are
-     unchanged; the indigo already has enough contrast on both. */
-  --color-success: #16a34a;
-  --color-danger: #dc2626;
+  --color-border-strong: #ded7c7;
+  --color-text: #1b1a17;
+  --color-text-muted: #4b4740;
+  --color-text-faint: #8a8478;
+  /* --color-accent/-hover/-soft/-border are not redefined here — the
+     source design uses the identical accent blue in both themes, and
+     -soft/-border are already derived from --color-accent via
+     color-mix() above, so they follow automatically. */
+  /* Darkened from the dark-theme success value (#4ade80) — that's
+     tuned for contrast against a near-black page background and reads
+     as low-contrast/washed-out on a light one. --color-danger is
+     unchanged; the source redesign didn't touch error/danger styling. */
+  --color-success: #2f7d4f;
   --color-scrollbar-thumb: rgba(0, 0, 0, 0.14);
+
+  /* The five theme-tuned tool tones (see the @theme block's own
+     comment) — deeper/more muted here than their dark-mode default.
+     zinc joins this list in light mode specifically: its dark-mode
+     value (#d4d4d8) is a pale, desaturated gray — the @theme block's
+     "a saturated fg reads fine on either background" reasoning doesn't
+     hold for an unsaturated one, and it was next to invisible (icon on
+     near-white) against this theme's light page until this override. */
+  --color-tool-blue: #2f6fde;
+  --color-tool-blue-soft: rgba(47, 111, 222, 0.14);
+  --color-tool-sky: #0e7c8f;
+  --color-tool-sky-soft: rgba(14, 124, 143, 0.14);
+  --color-tool-zinc: #52525b;
+  --color-tool-zinc-soft: rgba(82, 82, 91, 0.14);
+  --color-tool-violet: #7152c9;
+  --color-tool-violet-soft: rgba(113, 82, 201, 0.14);
+  --color-tool-amber: #b7791f;
+  --color-tool-amber-soft: rgba(183, 121, 31, 0.14);
 }
 
 html,
@@ -138,9 +200,7 @@ body {
 body {
   background: var(--color-bg-page);
   color: var(--color-text);
-  font-family:
-    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', 'Segoe UI', Helvetica, Arial,
-    sans-serif;
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
 }
 

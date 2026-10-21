@@ -802,6 +802,71 @@ confirmed via screenshot that `$ echo "..."` / `$ npm --version` lines
 appear correctly before their own output. 627/627 tests,
 lint/typecheck/build clean.
 
+## Full visual redesign + a customizable primary color (2026-10-21)
+
+Founder supplied a dedicated redesign — two complete mockups built
+against this app's own real screens ("Graphite · Blue" dark, "Paper ·
+Blue" light, both on a shared Fraunces/Instrument Sans + radius/blue-
+accent system) — with instructions to port it as the app's new default
+styling, then add a user-customizable primary color on top.
+
+**Why this was cheap to do safely**: a pre-check confirmed the existing
+token system was already clean — every `.tsx` file references semantic
+Tailwind classes (`bg-bg`, `text-text-muted`, ...), zero hardcoded hex
+anywhere in the renderer, and all accent-related classes resolved from
+exactly one place (`styles.css`'s `@theme` block). That meant the whole
+redesign landed as a **values swap in one file** plus 3 new `font-
+serif` class additions — not a rewrite across components.
+
+**Fonts**: Fraunces + Instrument Sans, both real variable fonts,
+self-hosted (`public/fonts/`, own `NOTICE.md`, same bundled-asset
+precedent as `tool-logos/`) rather than a Google Fonts CDN link — this
+app's CSP (`style-src 'self'`, no `font-src`/`connect-src`) blocks an
+external font request outright. `font-serif` is deliberately scoped to
+exactly the three places the source mockup uses it (sidebar wordmark,
+a workspace's page `<h1>`, the restore-timeline step-number circles),
+not spread further.
+
+**Colors/radius**: every existing token *name* kept (so no component
+files needed touching for colors), values replaced with the mockup's —
+including four tool-badge tones (`blue`/`sky`/`violet`/`amber`) that
+turned out to be genuinely theme-specific in the source, now redefined
+per-theme for the first time; the other three tool colors + two tag
+colors stay theme-invariant, unchanged (not part of the source
+redesign). `bg-hover`/`bg-active` switched from fixed hex to
+`color-mix()`-friendly translucent overlays, matching the mockup's own
+mechanism (reads correctly over whatever surface sits beneath it,
+rather than needing a separately hand-tuned solid shade per layer).
+Radius scale: 7/9/12px → 8/13/21px.
+
+**The primary-color picker** (`lib/accent-color.ts`, a Settings row) is
+what made the whole redesign's accent handling worth restructuring:
+`accent-hover`/`-soft`/`-border` switched from separately hand-picked
+hexes/rgba to `color-mix(in srgb, var(--color-accent) N%, ...)`
+derivations off the one `--color-accent` variable — so the picker only
+ever overrides that one variable (inline on `<html>`, same
+`localStorage`-backed pattern as `lib/theme.ts`, applied pre-paint by
+`theme-bootstrap.js` to avoid a flash of the old color on cold start)
+and every derived shade follows automatically, with zero per-component
+changes. Live-verified end to end: picking a color updates the CSS
+variable, persists to `localStorage`, and the "Restore workspace"
+button / active sidebar highlight+border / step-number circles / the
+swatch itself all re-themed correctly from that one change. Known,
+accepted limitation, documented rather than solved: text on an
+accent-filled button stays fixed white regardless of the chosen color,
+so a very pale custom accent could fail contrast — not addressed in v1.
+
+`WC__design-system.md` rewritten to match (full new color tables for
+both themes, new radius scale, new typography section, the stale
+"dark-only, no light theme planned" claim finally fixed — light mode
+had shipped a while ago and the doc was never updated).
+
+630/630 tests (+3 for `accent-color.test.ts`'s pure validation logic,
+no tests for the Settings UI itself or the CSS — no React component
+testing infra, same established precedent), lint/typecheck/build all
+clean. Both themes and the color picker live-verified via Playwright
+against this session's own isolated test profile.
+
 ## Known, deliberately deferred issue
 
 `apps/desktop` has no plain `tsconfig.json` (only `tsconfig.node.json` +
@@ -812,7 +877,7 @@ regardless. Fix proposed once, declined once; still open, no urgency.
 
 ## Verified state as of the last real check
 
-Lint / typecheck (4 workspaces) / test (**619/619**) / build (main,
+Lint / typecheck (4 workspaces) / test (**630/630**) / build (main,
 preload, renderer, vscode-extension) all clean as of 2026-10-21
 (489 after removing the mock-workspace feature and its now-obsolete
 tests plus a new multi-active-workspace Switch regression test, +35
@@ -825,8 +890,11 @@ directory-walk edge cases to cover), +38 for the Terminal step type
 (its own full `/judge` round plus the plan-stage adversarial review's
 fixes), +8 from a second, post-build 4-agent review round that found
 and fixed a real renderer bug, a real UX labeling bug, and 2 smaller
-correctness issues — see "What's shipped since 2026-09-22" and
-"Terminal step type" above). Three
+correctness issues, +8 for the terminal-UX polish round (recent
+commands, the Add-tool search box, the `clear`/echo-before-command
+fixes), +3 for the full visual redesign + customizable primary color
+— see "What's shipped since 2026-09-22," "Terminal step type," and
+"Full visual redesign" above). Three
 full multi-agent review rounds ran against this codebase earlier
 (round 1-2: 2026-09-18, round 3: 2026-09-22 — 12+ review-agent passes
 total); every real, concrete bug found across all three has been fixed

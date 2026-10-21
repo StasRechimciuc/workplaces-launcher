@@ -2,6 +2,12 @@ import { useMemo, useRef, useState } from 'react';
 import { Icon } from '../icons';
 import { getStoredTheme, setStoredTheme, type Theme } from '../lib/theme';
 import {
+  DEFAULT_ACCENT_COLOR,
+  getStoredAccentColor,
+  resetAccentColor,
+  setStoredAccentColor,
+} from '../lib/accent-color';
+import {
   SHORTCUTS,
   getEffectiveShortcuts,
   getStoredOverrides,
@@ -17,14 +23,17 @@ interface SettingsModalProps {
 
 /**
  * Built on DeleteWorkspaceConfirm.tsx's pattern (parent-owned `open`
- * prop, no internal open/closed state of its own). First (and for now
- * only) section is Shortcuts — the Theme toggle, previously its own
- * Sidebar footer button, moved in here as this surface's first real
- * preference row (that button's own prior comment already anticipated
- * this: "a proper Settings surface can absorb this control later").
+ * prop, no internal open/closed state of its own). Theme (previously
+ * its own Sidebar footer button — that button's own prior comment
+ * already anticipated this: "a proper Settings surface can absorb this
+ * control later") and Primary color are simple single-row preferences;
+ * Shortcuts is the one titled sub-section, with its own `border-t`.
  */
 export function SettingsModal({ open, onClose }: SettingsModalProps): JSX.Element {
   const [theme, setTheme] = useState<Theme>(() => getStoredTheme());
+  const [accentColor, setAccentColor] = useState<string>(
+    () => getStoredAccentColor() ?? DEFAULT_ACCENT_COLOR,
+  );
   const [query, setQuery] = useState('');
   // Bumped on every shortcut change to force the effective-list memo
   // below to recompute — cheap, avoids needing a second state copy of
@@ -52,6 +61,16 @@ export function SettingsModal({ open, onClose }: SettingsModalProps): JSX.Elemen
     const next: Theme = theme === 'dark' ? 'light' : 'dark';
     setStoredTheme(next);
     setTheme(next);
+  }
+
+  function handleAccentColorChange(next: string): void {
+    setStoredAccentColor(next);
+    setAccentColor(next);
+  }
+
+  function handleResetAccentColor(): void {
+    resetAccentColor();
+    setAccentColor(DEFAULT_ACCENT_COLOR);
   }
 
   function refresh(): void {
@@ -96,6 +115,36 @@ export function SettingsModal({ open, onClose }: SettingsModalProps): JSX.Elemen
             >
               <Icon name={theme === 'dark' ? 'moon' : 'sun'} size={14} />
             </button>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <span className="text-[12.5px] text-text">Primary color</span>
+            <div className="flex items-center gap-2">
+              {accentColor !== DEFAULT_ACCENT_COLOR && (
+                <button
+                  type="button"
+                  className="text-[11.5px] text-text-faint hover:text-text-muted"
+                  onClick={handleResetAccentColor}
+                >
+                  Reset
+                </button>
+              )}
+              <label
+                className="relative flex h-7 w-7 cursor-pointer items-center justify-center overflow-hidden rounded-md border border-border-strong"
+                style={{ backgroundColor: accentColor }}
+                title="Choose a primary color"
+              >
+                <input
+                  type="color"
+                  value={accentColor}
+                  onChange={(e) => {
+                    handleAccentColorChange(e.target.value);
+                  }}
+                  aria-label="Primary color"
+                  className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                />
+              </label>
+            </div>
           </div>
 
           <div className="border-t border-border pt-4">

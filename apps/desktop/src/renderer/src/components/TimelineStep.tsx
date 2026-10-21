@@ -77,7 +77,7 @@ export function TimelineStep({
   return (
     <div className="flex gap-3.5">
       <div className="flex shrink-0 flex-col items-center">
-        <div className="flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-full border border-border-strong bg-bg-elevated text-[10.5px] font-semibold text-text-faint">
+        <div className="font-serif flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-full border border-border-strong bg-bg-elevated text-[10.5px] font-semibold text-accent">
           {index + 1}
         </div>
         {!isLast && <div className="mt-0.5 w-px flex-1 bg-border" />}

@@ -1,13 +1,12 @@
 /**
  * OS abstraction interface (docs/architecture.md #1). The rest of the
  * app — orchestrator, UI, config parser — calls this interface only,
- * never OS-specific code directly. Windows is the real, v1-target
- * implementation (claude.md's platform roadmap: Windows v1 -> Linux ->
- * macOS); the existing macOS implementation is kept working as interim
- * filler work while Windows VM access is unavailable (see claude.md's
- * 2026-09-17 note), not as the v1 target. Linux slots in next (Phase
- * 2) behind this same interface without touching anything that depends
- * on it.
+ * never OS-specific code directly. macOS is the primary, actively-
+ * worked implementation for now (claude.md's platform roadmap,
+ * reversed 2026-10-21); Windows stays built and unit-tested but paused
+ * until the founder's own daily machine switches to it, then Linux
+ * slots in next (Phase 2) behind this same interface without touching
+ * anything that depends on it.
  */
 export interface PlatformResult {
   success: boolean;
@@ -26,4 +25,12 @@ export interface PlatformLauncher {
    * case, not a degraded one.
    */
   openUrlInBrowserProfile(browser: string, profile: string, url?: string): Promise<PlatformResult>;
+  /**
+   * Opens a terminal window at `cwd`, running each of `commands` in
+   * order, left running/interactive afterward. An empty `commands`
+   * array still opens a terminal at `cwd` with nothing queued — a
+   * real, supported case, not a degraded one (same precedent as
+   * `openUrlInBrowserProfile`'s optional `url`).
+   */
+  openTerminal(cwd: string, commands: string[]): Promise<PlatformResult>;
 }

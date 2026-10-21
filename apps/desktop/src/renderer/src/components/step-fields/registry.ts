@@ -3,10 +3,12 @@ import { ChromeFields } from './chrome-fields';
 import { SpotifyFields } from './spotify-fields';
 import { AppFields } from './app-fields';
 import { ClockifyFields } from './clockify-fields';
+import { TerminalFields } from './terminal-fields';
 import {
   chromeStepSummary,
   clockifyStepSummary,
   spotifyStepSummary,
+  terminalStepSummary,
   vscodeStepSummary,
 } from './step-summaries';
 import type { StepFieldsComponent } from './types';
@@ -92,6 +94,15 @@ const STEP_FIELDS: Record<string, StepFieldsRegistryEntry> = {
     hasPrimaryInput: false,
     collapsible: true,
     summary: clockifyStepSummary,
+  },
+  // No primary input: starts with zero terminal cards, same
+  // click-Add-to-see-the-first-row precedent EditableStringList
+  // already establishes for commands/URLs.
+  terminal: {
+    Component: TerminalFields,
+    hasPrimaryInput: false,
+    collapsible: true,
+    summary: terminalStepSummary,
   },
 };
 

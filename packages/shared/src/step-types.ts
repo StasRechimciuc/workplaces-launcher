@@ -45,7 +45,7 @@ export const STEP_TYPES: readonly StepTypeDefinition[] = [
     icon: 'terminal',
     color: 'zinc',
     configHint: 'Commands',
-    implemented: false,
+    implemented: true,
   },
   {
     type: 'chrome',

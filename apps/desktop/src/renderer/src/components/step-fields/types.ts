@@ -25,6 +25,12 @@ export interface StepFieldsProps {
    */
   recentFolders?: string[];
   /**
+   * Distinct terminal commands already used across the user's saved
+   * workspaces (see lib/recent-commands.ts) — only terminal-fields.tsx
+   * reads it, same precedent as recentFolders above.
+   */
+  recentCommands?: string[];
+  /**
    * The shared, app-wide Spotify connection (see
    * lib/useSpotifyConnection.ts) — only spotify-fields.tsx reads it,
    * same precedent as recentFolders above. Bundles actions (connect/

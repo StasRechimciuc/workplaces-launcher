@@ -108,6 +108,12 @@ export const ERROR_CODES = {
     explanation:
       "Workspace Launcher wasn't able to complete the Spotify connection — the authorization may have been denied, cancelled, or interrupted. Try connecting again.",
   },
+  TERMINAL_STEP_FAILED: {
+    code: 'ER-TERM-01',
+    title: "Couldn't open a terminal",
+    explanation:
+      "One or more of this step's terminals couldn't be opened — the configured directory may no longer exist, Workspace Launcher couldn't hand off to your terminal app, or Terminal steps aren't supported yet on this platform.",
+  },
   SYSTEM_UNEXPECTED: {
     code: 'ER-SYS-01',
     title: 'Something went wrong',

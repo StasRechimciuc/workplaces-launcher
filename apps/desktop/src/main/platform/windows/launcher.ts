@@ -118,4 +118,8 @@ export const windowsLauncher: PlatformLauncher = {
       message: `Failed to open ${url} in ${browser}: ${result.message}`,
     };
   },
+
+  async openTerminal(): Promise<PlatformResult> {
+    return { success: false, message: "Terminal steps aren't implemented on Windows yet." };
+  },
 };

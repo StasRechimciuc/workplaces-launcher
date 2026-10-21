@@ -15,6 +15,7 @@ interface TimelineStepProps {
   isOpen: boolean;
   onToggle: () => void;
   recentFolders: string[];
+  recentCommands: string[];
   spotify: SpotifyConnection;
   /** See step-fields/types.ts's StepFieldsProps — forwarded verbatim,
    * only vscode/chrome/spotify/clockify-fields.tsx read it. Absent for
@@ -40,6 +41,7 @@ export function TimelineStep({
   isOpen,
   onToggle,
   recentFolders,
+  recentCommands,
   spotify,
   appPathDetection,
   draftParams,
@@ -147,6 +149,7 @@ export function TimelineStep({
               // ClockifyFields already establish for this prop.
               registerPrimaryInputRef={() => {}}
               {...(tool.type === 'vscode' ? { recentFolders } : {})}
+              {...(tool.type === 'terminal' ? { recentCommands } : {})}
               {...(tool.type === 'spotify' ? { spotify } : {})}
               {...(appPathDetection !== undefined ? { appPathDetection } : {})}
             />

@@ -11,32 +11,26 @@ describe('stepFieldsHasPrimaryInput', () => {
     expect(stepFieldsHasPrimaryInput('vscode')).toBe(true);
   });
 
-  it.each(['spotify', 'chrome', 'app', 'clockify'])(
+  it.each(['spotify', 'chrome', 'app', 'clockify', 'terminal'])(
     'is false for %s (collapsible, but its UI is buttons/a picker, not a plain input)',
     (type) => {
       expect(stepFieldsHasPrimaryInput(type)).toBe(false);
     },
   );
 
-  it.each(['docker', 'terminal', 'slack', 'unknown-type'])(
-    'is false for %s (no registry entry)',
-    (type) => {
-      expect(stepFieldsHasPrimaryInput(type)).toBe(false);
-    },
-  );
+  it.each(['docker', 'slack', 'unknown-type'])('is false for %s (no registry entry)', (type) => {
+    expect(stepFieldsHasPrimaryInput(type)).toBe(false);
+  });
 });
 
 describe('stepFieldsIsCollapsible', () => {
-  it.each(['vscode', 'chrome', 'spotify', 'app', 'clockify'])('is true for %s', (type) => {
+  it.each(['vscode', 'chrome', 'spotify', 'app', 'clockify', 'terminal'])('is true for %s', (type) => {
     expect(stepFieldsIsCollapsible(type)).toBe(true);
   });
 
-  it.each(['docker', 'terminal', 'slack', 'unknown-type'])(
-    'is false for %s (no registry entry)',
-    (type) => {
-      expect(stepFieldsIsCollapsible(type)).toBe(false);
-    },
-  );
+  it.each(['docker', 'slack', 'unknown-type'])('is false for %s (no registry entry)', (type) => {
+    expect(stepFieldsIsCollapsible(type)).toBe(false);
+  });
 });
 
 describe('stepRowSummary', () => {
@@ -48,6 +42,9 @@ describe('stepRowSummary', () => {
     expect(stepRowSummary('chrome', { profile: 'Default' })).toBe('Default');
     expect(stepRowSummary('spotify', { playlistName: 'Deep Focus' })).toBe('Deep Focus');
     expect(stepRowSummary('clockify', { appPath: '/Applications/Clockify.app' })).toBe('Clockify');
+    expect(stepRowSummary('terminal', { terminals: [{ cwd: '~/x', commands: [] }] })).toBe(
+      '1 terminal',
+    );
   });
 
   it('returns an empty string for a type with no summary entry (app) or no registry entry at all', () => {
@@ -63,6 +60,10 @@ describe('getStepFieldsComponent', () => {
 
   it('returns a component for app', () => {
     expect(getStepFieldsComponent('app')).toBeDefined();
+  });
+
+  it('returns a component for terminal', () => {
+    expect(getStepFieldsComponent('terminal')).toBeDefined();
   });
 
   it('returns undefined for an unregistered type', () => {

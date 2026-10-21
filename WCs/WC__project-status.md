@@ -565,6 +565,243 @@ is unchanged. Rewrote `app-detection.test.ts` for the new mdfind-based
 shape (573/574, net -1 test — fewer directory-walk edge cases to cover
 now that there's no directory walk).
 
+## Terminal step type (2026-10-21)
+
+The first non-"GUI app launch" step type: open one or more real macOS
+terminal windows, each `cd`'d into its own directory, each running its
+own ordered list of commands — directly chosen as the highest-impact
+next build, since the project's own pitch doc leads with "Docker's up,
+Tilt's running" and "The Wedge" names dev-service-orchestration as the
+actual differentiator, none of which existed yet. Went through a full,
+proper `/judge` round (founder's own request — "proper skill use with
+proper effort") rather than an abbreviated one: 4 parallel Stage-1
+research agents (user-comfort/prior-art, engineering/security,
+codebase-fit, edge-case), then a Stage-2 adversarial review of the
+concrete plan that found and fixed 5 real issues before any of it
+shipped.
+
+Config shape: `terminals: [{ cwd, commands: string[] }]` per step —
+confirmed against real prior art (tmuxinator, Warp, VS Code's own
+`tasks.json`) as the right model, and matches this app's own existing
+VS Code `terminals` array precedent, just adding the one field VS
+Code's version could skip (it inherits its cwd from the project
+folder; a standalone step has no such parent to inherit from).
+
+Mechanism — deliberately **no AppleScript at all**: generates a
+`.command` shell script via plain `fs.writeFile` (inert bytes, zero
+interpretation at construction time — the real fix for the two-layer
+AppleScript-string-escaping problem that `do script` would have
+introduced) and hands it to `open -a Terminal` via the same
+argv-only, `shell:false` `runCommand` helper every other platform
+method already uses. Side effect of this choice: no macOS Automation/
+TCC permission prompt is ever triggered (`open` is a Launch Services
+request, not an Apple Event) — a whole category of permission-denial
+handling just doesn't exist for this feature. Routed through a new
+`PlatformLauncher.openTerminal()` method (macOS implemented; Windows
+an honest "not implemented on this platform yet" failure, never a
+silent no-op) rather than shelling out directly from `terminal-tool.ts`
+— the adversarial review caught the first draft doing this and
+flagged it as the one place in the whole codebase that would have
+bypassed the OS-abstraction layer every other tool plugin obeys.
+
+The review's other real findings, all fixed before shipping: a genuine
+shell-injection bug in the `cd` failure's fallback line (the directory
+was re-embedded into a second, differently-quoted context without
+matching escaping); `open <path>` without an explicit `-a Terminal`
+would have silently done the wrong thing for anyone who's ever rebound
+`.command` files to a text editor; the self-deleting temp-script line
+was "optional hygiene" and got made mandatory (every restore was
+leaving a script behind in `$TMPDIR` otherwise); `expand()` was a bare
+`() => undefined` and got a real per-terminal row (cwd + joined
+commands), matching chrome-tool.ts/app-tool.ts's own precedent.
+
+Verified three ways, not just unit tests: 38 new tests (611/611 total,
+lint/typecheck/build clean) including literal assertions on the
+generated script's exact content; an isolated, zero-risk live check of
+the real mechanism (plain Node, no Electron, no app data touched) that
+confirmed a real Terminal.app window actually opened, `cd`'d, and ran
+a command; and a full real end-to-end pass through the actual app UI
+(add a Terminal step, save, Restore) against one of this session's own
+test workspaces, confirming "Opened 1 terminal." as a genuine success
+with the command's real side effect (a marker file) actually present
+afterward — cleaned up again immediately after.
+
+**Second review round** (2026-10-21, same day): the above covered the
+*plan*, reviewed before any code existed. A separate, later round — 4
+agents (correctness/async, security, renderer/UX, test coverage)
+against the actual *built* code — caught 4 more real issues the plan
+review couldn't have, since they only existed once the code was
+written:
+
+- **Renderer bug**: `terminal-fields.tsx`'s Browse-folder flow tracked
+  which terminal "card" was mid-dialog by raw array index, not by its
+  stable id — if an earlier card was removed while a later card's
+  native folder dialog was still open, the picked folder could land on
+  whichever entry now occupied that index (a different terminal
+  entirely), and the Browse button's own "busy" state would go stale
+  for the card actually still browsing. Fixed: tracks the entry's
+  stable id instead, re-resolving its current index only once the
+  dialog actually resolves (and silently no-ops if that entry was
+  removed in the meantime).
+- **Renderer UX bug**: the same "two different things stacked with
+  zero visual separation" class already found and fixed once this
+  session (`ResolvedAppPath`'s "App"/"Project folder" labels) — a
+  terminal card's directory field and its commands list had no section
+  labels distinguishing them. Fixed: added "Working directory"/
+  "Commands" labels, reusing `ResolvedAppPath.tsx`'s shared
+  `FIELD_GROUP_LABEL_CLASS` exactly as `vscode-fields.tsx` already
+  does.
+- `ERROR_CODES.TERMINAL_STEP_FAILED`'s explanation text described only
+  real failures (missing directory, hand-off failure), not the
+  Windows-stub "not implemented on this platform yet" case that reuses
+  the same code — broadened the explanation to cover both rather than
+  inventing a second code for a platform that isn't the active target.
+- `detail()`/`expand()`'s shared `readEntries()` let an array-shaped
+  malformed `terminals` entry (e.g. a hand-edited config containing
+  `[1, 2]` as one "terminal") through as a phantom terminal, since
+  arrays are `typeof 'object'` too — added an explicit
+  `!Array.isArray(t)` check.
+
+Security review came back fully clean — independently re-verified the
+plan-stage shell-injection fix actually landed correctly in the real
+code (it has: the fix eliminates the second quoting context entirely
+rather than trying to escape it, which the reviewer confirmed is the
+stronger fix). 8 more tests added for real gaps the coverage review
+found (not just "more tests" — each one covers a specific input that
+would currently pass unnoticed if broken): the generated script's full
+exact content asserted as one string instead of four independent
+substring checks (catches a line-reordering regression the old
+assertions couldn't); true sequential-execution proven via a
+controlled-resolution-order test, not just mock call-argument order
+(catches a `Promise.all` regression the old test couldn't); an
+all-terminals-fail case (previously only 1-of-2 failing was tested);
+the `.max(8)` cap's passing boundary (exactly 8), not just its failing
+side (9); a bare `'~'` through the real schema `.refine()` wiring, not
+just the underlying primitive; and a real integration test through
+`handlers.ts`'s actual registry/orchestrator wiring (not just
+terminal-tool.ts's own mocked unit test) — which also caught and fixed
+a stale doc comment in `handlers.test.ts` still claiming terminal had
+"no plugin built yet." 619/619 tests, lint/typecheck/build all clean.
+
+## Add-tool picker: search box + a real scroll fix, terminal UX polish (2026-10-21)
+
+Three small, founder-requested follow-ups on top of the Terminal step
+work above, same day:
+
+- **Add-tool dropdown couldn't scroll.** Founder caught this live on
+  their real workspace: the dropdown (now 8 entries, grown over this
+  session) had no `max-h-*`/`overflow-y-auto` at all — every other
+  dropdown in the app (Chrome's profile picker, Spotify's playlist
+  picker, the app-detection candidate list) already had this, this one
+  just never got it. In a short window the top of the list rendered
+  off-screen with no way to reach it. Fixed with the same `max-h-72
+  overflow-y-auto` convention; verified live by shrinking the window to
+  reproduce the original clipping and confirming a real scrollbar
+  appears with every item reachable.
+- **New terminal cards default to `~` (home), not a blank field** —
+  matching Terminal.app's own actual default for a fresh window, not
+  an arbitrary empty input. `~` was already a fully valid, tested `cwd`
+  value from the earlier review round.
+- **A "Recent" command picker**, reusing the exact same
+  no-separate-storage pattern VS Code's existing "Recent" folder picker
+  already uses — commands already saved across the user's own
+  workspaces' terminal steps are the only source (new `lib/recent-
+  commands.ts`, mirrors `recent-project-paths.ts` directly, +7 tests).
+  Appears per terminal card, excluding whatever's already in that
+  specific card's own list.
+- **A live search box inside the Add-tool dropdown itself**, pinned at
+  top above a scrollable filtered list, auto-focused the instant the
+  dropdown opens, and wired to the app's own *currently configured*
+  "focus search" shortcut (read fresh via `getEffectiveShortcuts` —
+  never hardcoded to a default combo, since the founder has this
+  rebound to ⌘F rather than the shipped default ⌘K). While the
+  dropdown is open, that shortcut refocuses this local search box
+  instead of bubbling up to the global sidebar search — via a plain
+  `e.stopPropagation()` on the synthetic keydown event (which does stop
+  the underlying native event from reaching `useGlobalShortcuts.ts`'s
+  window-level listener), not a new cross-component signal. Two real
+  implementation findings worth recording:
+  - `onOpenAutoFocus` is NOT available on `DropdownMenuContent`'s
+    public type — confirmed by reading `@radix-ui/react-menu`'s own
+    source, not assumed: it's deliberately omitted from the public
+    prop surface (`MenuRootContentTypeProps` explicitly `Omit`s every
+    key of `MenuContentImplPrivateProps`, which `onOpenAutoFocus`
+    belongs to). Reached for an `<input autoFocus>` instead — which
+    then *also* failed, losing the focus race against Radix's own
+    internal `FocusScope` (confirmed via its real source: it
+    synchronously focuses the first tabbable candidate in its own
+    mount effect, which — being a descendant — commits before this
+    component's own effects run). Fixed with a `requestAnimationFrame`-
+    deferred focus call in a `useEffect` keyed on the dropdown's own
+    (now controlled, not left uncontrolled) open state — confirmed live
+    via Playwright that this reliably wins the race.
+  - Ordinary typing in the search box is kept from also triggering
+    Radix's own built-in single-character typeahead (which would
+    otherwise try to jump-select a menu item per keystroke) by
+    stopping propagation on the input's own keydown for anything that
+    isn't Arrow/Enter/Escape/Tab — those are deliberately let through
+    so typing to filter, then pressing Down, moves naturally from
+    "search" into "pick an item."
+  All three live-verified via Playwright against this session's own
+  isolated test profile (confirmed earlier in this round to be
+  entirely separate from the founder's real app data) — autofocus
+  winning the race, live filtering, and the shortcut correctly staying
+  local while the dropdown is open. 626/626 tests, lint/typecheck/build
+  all clean (no new tests for the dropdown UI itself — no React
+  component/hook testing infra in this project, same established
+  precedent; `recent-commands.ts`'s own pure logic is fully tested).
+
+## Terminal: clear the Terminal.app preamble (2026-10-21)
+
+Founder caught this live: a restored terminal's first visible line was
+Terminal.app's own "typed" invocation of the generated `.command`
+file's full path plus a trailing `; exit` — not a bug in this app's
+own script content, just how macOS's Terminal.app has always visually
+represented opening a `.command` file (same whether via `open -a
+Terminal` or a double-click; nothing this project's own script
+controls). The trailing `; exit` never actually closes the window
+early, since the script's own last line (`exec "$SHELL" -l`) replaces
+the process before that `exit` gets a chance to act — confirmed by the
+founder's own pasted terminal output ending in a normal, live prompt.
+Added a `clear` as the script's third line (`macos/launcher.ts`,
+`terminal-tool.ts`'s `detail()`/`expand()` wiring unaffected) purely
+to wipe that noisy preamble before the user's own commands run —
+cosmetic only, confirmed live by generating the script directly and
+reading its contents back, plus a real `open -a Terminal` round trip.
+Updated both exact-script-content tests in `macos/launcher.test.ts`
+accordingly. 626/626 tests, lint/typecheck/build clean.
+
+## Terminal: echo each command before it runs (2026-10-21)
+
+Founder pushback, same day as the `clear` fix above: a plain shell
+script never echoes its own commands by default, so a restored
+terminal showed each command's *output* with nothing indicating what
+produced it — looked like nothing was happening at all for a silent
+command (confirmed earlier that day with `caffeinate`, which genuinely
+runs but prints nothing). Also surfaced a real "why not just open a
+terminal and type the command" design question, worth the record:
+that's effectively what AppleScript's `do script` would do, and it's
+exactly what this feature deliberately avoided — embedding command
+text into an AppleScript string is the same two-layer escaping problem
+already fixed once in this file; simulating real keystrokes via
+Accessibility/TCC would reopen the macOS permission-complexity class
+this project has repeatedly chosen not to reopen.
+
+Fixed by echoing each command as its own `$ <command>` line
+immediately before it runs — `macos/launcher.ts` now has a small
+`singleQuote()` helper (shared between `cwd` and each echoed command
+label) so the echo text is embedded into its own, separately-escaped
+single-quoted string rather than ever reusing one escaped string
+across two different quoting contexts — the exact mixed-context bug
+class the earlier security review caught once already. The command's
+own execution line stays completely verbatim and unescaped, same as
+before. New test confirms both the escaping (a command containing a
+literal apostrophe) and the ordering (echo line immediately precedes
+its command). Verified live: generated the real script, opened it, and
+confirmed via screenshot that `$ echo "..."` / `$ npm --version` lines
+appear correctly before their own output. 627/627 tests,
+lint/typecheck/build clean.
+
 ## Known, deliberately deferred issue
 
 `apps/desktop` has no plain `tsconfig.json` (only `tsconfig.node.json` +
@@ -575,15 +812,21 @@ regardless. Fix proposed once, declined once; still open, no urgency.
 
 ## Verified state as of the last real check
 
-Lint / typecheck (4 workspaces) / test (**574/574**) / build (main,
-preload, renderer, vscode-extension) all clean as of 2026-10-20
+Lint / typecheck (4 workspaces) / test (**619/619**) / build (main,
+preload, renderer, vscode-extension) all clean as of 2026-10-21
 (489 after removing the mock-workspace feature and its now-obsolete
 tests plus a new multi-active-workspace Switch regression test, +35
 for the real launch-time display, +2 from an 8-agent review pass
 across every change in this batch, +1 net from folding
 `step-row-summary.ts` into `step-fields/registry.ts`, +37 for real
 app-location detection (its own `/judge` round plus the adversarial
-review's fixes) — see "What's shipped since 2026-09-22" above). Three
+review's fixes), -1 from switching app-detection to mdfind (fewer
+directory-walk edge cases to cover), +38 for the Terminal step type
+(its own full `/judge` round plus the plan-stage adversarial review's
+fixes), +8 from a second, post-build 4-agent review round that found
+and fixed a real renderer bug, a real UX labeling bug, and 2 smaller
+correctness issues — see "What's shipped since 2026-09-22" and
+"Terminal step type" above). Three
 full multi-agent review rounds ran against this codebase earlier
 (round 1-2: 2026-09-18, round 3: 2026-09-22 — 12+ review-agent passes
 total); every real, concrete bug found across all three has been fixed
@@ -616,10 +859,14 @@ incremental features rather than a pre-ship audit.
    3. The `titleBarStyle: 'hidden'` + `titleBarOverlay` Windows/Linux
       title bar fix (round 3) — implemented from theme values and
       Electron's documented API, never visually confirmed.
-2. **The next tool plugin** — Docker, Terminal, or Slack, following the
-   now-three-times-proven `vscode-tool.ts`/`chrome-tool.ts`/
-   `spotify-tool.ts` pattern. The per-type-branching refactor this item
-   used to call for (2026-10-20) turned out mostly already done by
+2. **The next tool plugin** — Docker is the natural follow-up now that
+   Terminal has shipped (2026-10-21): Docker's "run compose/tilt
+   command" is a close cousin of what Terminal's `PlatformLauncher`
+   plumbing already does, and it's literally the other half of the
+   pitch doc's own lead line ("Docker's up, Tilt's running"). Slack
+   stays deprioritized per the founder's own earlier call. The
+   per-type-branching refactor this item used to call for (2026-10-20)
+   turned out mostly already done by
    earlier work in the same round: `WorkspaceFormModal.tsx`'s
    `StepParamsFields` and `workspace-display.ts`'s `describeStep`
    already dispatch through a type-keyed lookup, not an `if` chain

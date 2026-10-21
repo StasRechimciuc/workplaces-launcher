@@ -6,12 +6,12 @@
 - [x] Define workspace config format (JSON) — `WorkspaceConfigSchema` (`packages/shared/src/config-schema.ts`)
 - [x] Config holds ordered list of steps
 - [x] Each step: tool type + params
-- [x] App reads config, runs steps in order — `orchestrator.ts`, platform-agnostic; unit-tested on macOS/Windows both, real end-to-end manual run on Windows still pending (blocked on VM access, see claude.md's 2026-09-17 note)
+- [x] App reads config, runs steps in order — `orchestrator.ts`, platform-agnostic; unit-tested on macOS/Windows both, real end-to-end manual run on Windows paused along with the rest of Windows work (see claude.md's Platform roadmap, updated 2026-10-21 — macOS primary until the founder's daily machine switches to Windows)
 - [x] Simple UI: workspace list + detail — real, not mocked (persisted configs + create/edit/delete)
 
 ### Step types to support
 - [x] VS Code — open folder path (plus optional terminal/command restore via the companion extension, below)
-- [ ] Terminal — open pane(s), run command(s) as its own standalone step type (distinct from the VS Code step's narrower terminal restore, which is scoped to that step only)
+- [x] Terminal — open pane(s), run command(s) as its own standalone step type (distinct from the VS Code step's narrower terminal restore, which is scoped to that step only). Went through a full `/judge` round; see `WC__project-status.md`'s "Terminal step type" entry for the shipped design.
 - [ ] Docker — run compose/tilt command
 - [x] Chrome — open profile + URLs
 - [x] Spotify — open playlist URI
@@ -31,7 +31,7 @@
 - [x] Sequence steps (wait where needed)
 - [x] Show per-step status (success/fail)
 - [x] Basic retry button per failed step — `orchestrator.ts`'s `retryStep` + `ipc/handlers.ts`'s `retryWorkspaceStep`, reachable post-restore only, replaces the failed row in place; see `WCs/WC__retry-per-step.md`
-- [x] Keep the Workspace Launcher window on top / refocused during restore — minimal live "Step X of N" IPC signal (`packages/shared/src/restore-progress.ts`) + a reference-counted, self-expiring always-on-top session (`apps/desktop/src/main/ipc/restore-focus.ts`), wired through `handlers.ts`'s restore IPC handler via `BrowserWindow.fromWebContents`. Deliberately minimal — not the fuller Tier 2 "Real per-step state" UI (force-stop, manual override, rich state icons), which stays deferred. Windows/Linux focus behavior is unit-tested but not yet manually verified (still blocked on VM access).
+- [x] Keep the Workspace Launcher window on top / refocused during restore — minimal live "Step X of N" IPC signal (`packages/shared/src/restore-progress.ts`) + a reference-counted, self-expiring always-on-top session (`apps/desktop/src/main/ipc/restore-focus.ts`), wired through `handlers.ts`'s restore IPC handler via `BrowserWindow.fromWebContents`. Deliberately minimal — not the fuller Tier 2 "Real per-step state" UI (force-stop, manual override, rich state icons), which stays deferred. Windows/Linux focus behavior is unit-tested but not yet manually verified (Windows work paused — see claude.md's Platform roadmap).
 
 ### Config UX — no manual typing (must-have before ship)
 - [x] Replace free-text fields with real pickers across all tool steps: VS Code project path via native folder-browse dialog (+ recent list) instead of typing a path; Spotify playlist via a real account connection + picker instead of pasting a URI; Chrome profile via real on-disk profile enumeration instead of typing a folder name — see `WC__project-status.md`'s "Config UX pickers" entry
@@ -78,6 +78,7 @@
 - [ ] Isolated docker networks per workspace
 - [ ] Separate k8s namespaces/contexts concurrently
 - [ ] Track N independent process trees, not one
+- [ ] Workspace migration between devices and between OSes (e.g. Mac -> Windows once the founder switches). Raised 2026-10-21 — explicitly "not yet, its big," not scoped. Likely touches: config portability/sync (today's configs live in per-machine `electron-store`), cross-platform path translation (`~/projects/x` on macOS vs `C:\Users\...` on Windows), and reconciling which tool plugins exist on the source vs. target OS.
 
 ## Rule while building
 

@@ -42,6 +42,7 @@ beforeEach(() => {
     launchApp: vi.fn(),
     openInApp,
     openUrlInBrowserProfile: vi.fn(),
+    openTerminal: vi.fn(),
   });
   mockedResolveAppLaunchTarget.mockReset().mockResolvedValue({
     ok: true,

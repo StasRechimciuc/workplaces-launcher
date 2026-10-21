@@ -17,6 +17,7 @@ beforeEach(() => {
     launchApp,
     openInApp: vi.fn(),
     openUrlInBrowserProfile: vi.fn(),
+    openTerminal: vi.fn(),
   });
 });
 

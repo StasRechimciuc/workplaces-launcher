@@ -3,6 +3,7 @@ import {
   chromeStepSummary,
   clockifyStepSummary,
   spotifyStepSummary,
+  terminalStepSummary,
   vscodeStepSummary,
 } from './step-summaries';
 
@@ -75,5 +76,24 @@ describe('clockifyStepSummary', () => {
 
   it('shows the resolved app name when a path is set', () => {
     expect(clockifyStepSummary({ appPath: '/Applications/Clockify.app' })).toBe('Clockify');
+  });
+});
+
+describe('terminalStepSummary', () => {
+  it('reports no terminals configured when empty', () => {
+    expect(terminalStepSummary({})).toBe('No terminals configured');
+    expect(terminalStepSummary({ terminals: [] })).toBe('No terminals configured');
+  });
+
+  it('reports a singular/plural terminal count', () => {
+    expect(terminalStepSummary({ terminals: [{ cwd: '~/x', commands: [] }] })).toBe('1 terminal');
+    expect(
+      terminalStepSummary({
+        terminals: [
+          { cwd: '~/x', commands: [] },
+          { cwd: '~/y', commands: [] },
+        ],
+      }),
+    ).toBe('2 terminals');
   });
 });

@@ -4,9 +4,7 @@
 
 An app that lets developers save and restore full "workspaces" with one click: project-specific app sets, terminal commands already running, Docker/Tilt startup, IDE state (VS Code project open), Chrome profile, background apps (e.g. Spotify).
 
-**Platform roadmap (updated 2026-09-07): Windows v1 → Linux → macOS.** Originally scoped macOS-first; reversed because macOS's AppleScript/TCC-permission surface was the harder, slower path to a validated end-to-end restore flow. Windows now ships first, end-to-end, as v1. Linux is next. macOS returns last. See "Scope Discipline" below — this is a deliberate, one-time reorder, not permission to keep reshuffling platform order later.
-
-**Temporary note (2026-09-17):** the founder has no Windows VM/virtualizer set up yet, so real end-to-end Windows testing is blocked for now (the Windows platform layer itself is built and unit-tested — see `apps/desktop/src/main/platform/windows/`). Feature work has resumed on the existing macOS platform code in the meantime, so progress isn't fully stalled. **This does not change the roadmap above** — Windows is still the v1/primary target; macOS work here is filler until a Windows VM exists, not a reversion. Remove this note once a VM is set up and Windows work resumes as primary.
+**Platform roadmap (updated 2026-10-21): macOS is primary for now.** History: originally macOS-first; reversed to Windows-first on 2026-09-07 (macOS's AppleScript/TCC-permission surface was judged the harder, slower path to a validated end-to-end restore flow); then blocked on 2026-09-17 by having no Windows VM/virtualizer, with macOS work explicitly framed at the time as *filler only, not a reversion*. Founder's call on 2026-10-21: drop that "filler" framing — macOS is now the real, primary focus, full stop, until the founder's own daily machine switches to Windows (not just "until a VM exists," which was the old bar). Windows and Linux both stay deferred, not dropped, until then; the Windows platform layer already built (`apps/desktop/src/main/platform/windows/`) stays as-is, untouched, not actively worked. See "Scope Discipline" below.
 
 ## Core Pain Being Solved
 
@@ -24,12 +22,12 @@ Devs lose 10-30+ min every session rebuilding their environment: reopening Docke
 
 ## The Wedge / Differentiation
 
-GUI-based (not config-file-based), dev-service-orchestration focus (Docker/Tilt/background dev processes as first-class objects, not just windows and env vars). No competitor found combines all three. Note: PowerToys Workspaces is Windows-only and in the same category as our v1 platform — the dev-service-orchestration gap (no Docker/Tilt/dev-server management) is still the differentiator against it, not the platform choice.
+GUI-based (not config-file-based), dev-service-orchestration focus (Docker/Tilt/background dev processes as first-class objects, not just windows and env vars). No competitor found combines all three. Note: PowerToys Workspaces is Windows-only, so it isn't a direct competitor on macOS right now — but it's the same category and will be once Windows work resumes; the dev-service-orchestration gap (no Docker/Tilt/dev-server management) is the real differentiator against it either way, not the platform choice.
 
 ## Scope Discipline (do not violate without a real reason)
 
-- **Windows only for v1** — full end-to-end restore flow (config → orchestrator → tool steps → real apps/processes) working on Windows is what "v1 done" means now. **Linux is next** (Phase 2 — a team member already has Linux/VPN background and owns this). **macOS is last** (Phase 3) — the original platform, deliberately deferred until Windows and Linux both work, not dropped.
-- Do not build platform code for more than one OS at a time. Windows-only until Windows v1 is validated end-to-end; only then move to Linux.
+- **macOS is primary for now** (reversed 2026-10-21 — see Platform roadmap above) — full end-to-end restore flow (config → orchestrator → tool steps → real apps/processes) working on macOS is what "v1 done" means right now. **Windows** resumes as primary once the founder's own daily machine switches to it — not dropped, just paused. **Linux** stays after that (a team member already has Linux/VPN background and owns this).
+- Do not build platform code for more than one OS at a time. macOS-only until the founder switches to Windows; only then does Windows work resume, followed by Linux.
 - **Desktop-only layout, no phone/tablet responsive design.** This is a native desktop app, not a website — there is no mobile context to design for. Build and test against a minimum window width of 1200px; don't spend effort on narrow-viewport/touch layouts.
 - **No feature creep** into adjacent verticals (design tools, rendering pipelines, etc.) until the core dev use case is validated and working.
 - If a new idea or expansion surfaces mid-build, default answer is "not now" unless it's required to ship the core one-click restore flow.
@@ -47,13 +45,13 @@ This is being built as a real, sellable SaaS product, not a throwaway prototype 
 ## Team & Roles
 
 - **Founder (primary builder) - Stas:** Owns product, design, and full build of the prototype/MVP.
-- **Ally (cybersecurity/software background) - Den:** Owns outreach, marketing, and the Linux/VPN/OS-level port (now Phase 2, after Windows v1). Has a base of established, trusted potential customers. Will present the idea to them once there's something to show. Does not touch the core Windows v1 build.
+- **Ally (cybersecurity/software background) - Den:** Owns outreach, marketing, and the Linux/VPN/OS-level port (after macOS, then Windows — see Platform roadmap above). Has a base of established, trusted potential customers. Will present the idea to them once there's something to show. Does not touch the core build.
 
 ## Current Status
 
-**A working prototype now exists.** This section intentionally stays a short pointer, not a running log — `WCs/WC__project-status.md` is the single source of truth for current build status (what's real/tested/verified, known gaps, next steps); read that for the actual state and keep it, not this section, updated day to day.
+**A working prototype now exists.** This section intentionally stays a short pointer, not a running log — `WCs/WC__project-status.md` is the single source of truth for current build status (what's real/tested/verified, known gaps, next steps); read that for the actual state and keep it, not this section, updated day to day. `docs/build-shell.md` is the single source of truth for the Tier 1/2/3 scope checklist — it used to be duplicated into this file too, which silently drifted out of sync; don't recreate that duplicate.
 
-Summary as of the last check there: real workspace persistence + full CRUD (create/edit/delete), three working tool plugins (VS Code, Chrome, Spotify), a working Windows platform layer (unit-tested; real end-to-end verification still blocked on VM access — see the temporary note above), and a working VS Code companion extension that restores terminal commands on workspace restore.
+Summary as of the last check there: real workspace persistence + full CRUD (create/edit/delete), four working tool plugins (VS Code, Chrome, Spotify, Clockify — each now with real app-location detection, not a hardcoded name guess), a working Windows platform layer built and unit-tested but currently paused, not actively worked (see Platform roadmap above), and a working VS Code companion extension that restores terminal commands on workspace restore.
 
 - Validation-first approach unchanged: get real signal from warm, trusted contacts (via the ally) before or alongside building — NOT cold outreach to strangers (already tried on a prior project, failed due to channel, not idea quality).
 - The landing page (the validation/pitch asset for the ally's trusted customer base) can now use real screenshots of the actual prototype instead of early mockups.
@@ -71,93 +69,6 @@ Recurring pattern to watch for: when a commitment starts to cost something real,
 
 ## Non-Goals For Now
 
-- No macOS or Linux work until Windows v1 is validated end-to-end (see Platform roadmap above).
+- No active Windows or Linux work until the founder's daily machine switches to Windows (see Platform roadmap above).
 - No pivoting into adjacent tool categories (design, rendering, etc.).
 - No building without a name for the validation asset already in motion — naming the project itself is explicitly deprioritized until after the landing page ships.
-
-# Workspace Launcher — Build Shell
-
-## Tier 1 — v1 (build now)
-
-### Core
-- [x] Define workspace config format (JSON) — `WorkspaceConfigSchema` (`packages/shared/src/config-schema.ts`)
-- [x] Config holds ordered list of steps
-- [x] Each step: tool type + params
-- [x] App reads config, runs steps in order — `orchestrator.ts`, platform-agnostic; unit-tested on macOS/Windows both, real end-to-end manual run on Windows still pending (blocked on VM access, see claude.md's 2026-09-17 note)
-- [x] Simple UI: workspace list + detail — real, not mocked (persisted configs + create/edit/delete)
-
-### Step types to support
-- [x] VS Code — open folder path (plus optional terminal/command restore via the companion extension, below)
-- [ ] Terminal — open pane(s), run command(s) as its own standalone step type (distinct from the VS Code step's narrower terminal restore, which is scoped to that step only)
-- [ ] Docker — run compose/tilt command
-- [x] Chrome — open profile + URLs
-- [x] Spotify — open playlist URI
-- [ ] Slack — open channel deep link
-
-### VS Code companion extension
-- [x] Scaffold extension (yo code)
-- [x] Extension reads config on activation — `onStartupFinished`, plus a window-refocus listener and a manual "Restore Terminals" command for the two gaps startup activation alone can't cover
-- [x] Create terminal(s) via `createTerminal()`
-- [x] Run commands via `terminal.sendText()`
-- [x] Position terminals — fixed to the editor's Panel location (`TerminalLocation.Panel`); a user-facing editor-vs-panel choice was never on the approved scope
-- Handoff is a versioned, TTL-expiring per-folder file in a shared app-data directory (`packages/shared/src/vscode-restore.ts`), not IPC — see `WCs/WC__project-status.md` for the full design writeup
-
-### Orchestrator logic
-- [ ] Shell out for CLI tools (Docker, git) — `lib/shell-exec.ts`'s `runCommand`/`runDetached` exist and are used by every platform launcher; no Docker-specific tool built yet
-- [x] Windows GUI-app launch — built as direct `.exe` resolution + spawn (`platform/windows/`), deliberately *not* `start`/ShellExecute (both route through `cmd.exe`, the same risk class as Node's CVE-2024-27980 for `.cmd`/`.bat` shims — see that file's own doc comment); replaces the old macOS `open -a`/AppleScript step
-- [x] Sequence steps (wait where needed)
-- [x] Show per-step status (success/fail)
-- [ ] Basic retry button per failed step
-- [x] Keep the Workspace Launcher window on top / refocused during restore — minimal live "Step X of N" IPC signal (`packages/shared/src/restore-progress.ts`) + a reference-counted, self-expiring always-on-top session (`apps/desktop/src/main/ipc/restore-focus.ts`), wired through `handlers.ts`'s restore IPC handler via `BrowserWindow.fromWebContents`. Deliberately minimal — not the fuller Tier 2 "Real per-step state" UI (force-stop, manual override, rich state icons), which stays deferred. Windows/Linux focus behavior is unit-tested but not yet manually verified (still blocked on VM access).
-
-### Config UX — no manual typing (must-have before ship)
-- [ ] Replace free-text fields with real pickers across all tool steps: VS Code project path via native folder-browse dialog (+ recent list) instead of typing a path; Spotify playlist via a real account connection + picker instead of pasting a URI; Chrome profile via real on-disk profile enumeration instead of typing a folder name
-- [ ] Auto-locate each tool's real installed app path instead of relying on a hardcoded name lookup
-- Added to Tier 1 on 2026-09-24 (founder call: "people wont type each shit by themselves... its a must have for users before shipping"). Explicitly scheduled for *after* the current Edit-workspace-modal redesign ships, not blocking it. Still not started — the real tool logos shipped this session (below) are a display-only step toward the redesign, not this item.
-
-### Tool badge assets
-- [x] Real per-tool brand logos (VS Code/Spotify/Chrome/Clockify), served from `apps/desktop/src/renderer/public/tool-logos/` — see that folder's `NOTICE.md` for sources/licenses. Rendered via a new `ToolBadge` component (`apps/desktop/src/renderer/src/components/ToolBadge.tsx`) that falls back to the existing generic tinted-icon badge for any step type without a real logo (docker/terminal/slack today).
-
-### Explicitly NOT in v1
-- No teardown of previous workspace
-- No conflict/port detection
-- No k8s context switching
-- No parallel workspace support
-- No AI-driven decisions — rules only
-
-## Tier 2 — v2 (after v1 validated)
-
-### State tracking
-- [ ] Track what's currently running
-- [ ] Track active k8s context
-- [ ] Track occupied ports
-
-### Teardown
-- [ ] Stop containers on switch (`compose down` / `tilt down`)
-- [ ] Close/repurpose terminals on switch
-- [ ] Reset k8s context if needed
-
-### Conflict handling
-- [ ] Check port availability before start
-- [ ] Check current k8s context before switch
-- [ ] Switch context only if different
-- [ ] Fail with clear message, not silently
-
-### UI
-- [ ] Real per-step state (running/stopped/failed/needs attention)
-- [ ] Manual override / force-stop option
-
-## Tier 3 — vision (not scoped yet)
-
-- [ ] Read machine specs (RAM/CPU/disk)
-- [ ] Warn/block if specs can't support parallel run
-- [ ] Dynamic port allocation
-- [ ] Isolated docker networks per workspace
-- [ ] Separate k8s namespaces/contexts concurrently
-- [ ] Track N independent process trees, not one
-
-## Rule while building
-
-- Do not touch Tier 2/3 items until Tier 1 ships
-- Do not add steps not on this list mid-build
-- If a new idea surfaces, write it under Tier 3, move on

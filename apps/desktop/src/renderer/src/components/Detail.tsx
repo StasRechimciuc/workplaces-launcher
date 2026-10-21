@@ -10,6 +10,7 @@ import type { WorkspaceDisplay } from '../../../preload';
 import { Icon } from '../icons';
 import { useIsMounted } from '../lib/useIsMounted';
 import { getRecentProjectPaths } from '../lib/recent-project-paths';
+import { getRecentCommands } from '../lib/recent-commands';
 import { workspaceLaunchTimeLabel, workspaceLaunchTimeTooltip } from '../lib/launch-time-display';
 import { replaceStepParams } from '../lib/replace-step-params';
 import { useSpotifyConnection } from '../lib/useSpotifyConnection';
@@ -100,6 +101,7 @@ export function Detail({
   const [isSavingStep, setIsSavingStep] = useState(false);
   const [saveStepError, setSaveStepError] = useState<DisplayError | null>(null);
   const recentFolders = useMemo(() => getRecentProjectPaths(allWorkspaces), [allWorkspaces]);
+  const recentCommands = useMemo(() => getRecentCommands(allWorkspaces), [allWorkspaces]);
   // Independently instantiated from WorkspaceFormModal's own instance —
   // it's cheap and self-contained (status is a no-network local read,
   // see useSpotifyConnection.ts's own doc comment), not worth lifting
@@ -495,6 +497,7 @@ export function Detail({
               handleToggleStep(i);
             }}
             recentFolders={recentFolders.filter((p) => p !== tool.params['path'])}
+            recentCommands={recentCommands}
             spotify={spotify}
             {...(isToolAppKey(tool.type)
               ? { appPathDetection: appPathDetections.forTool(tool.type) }

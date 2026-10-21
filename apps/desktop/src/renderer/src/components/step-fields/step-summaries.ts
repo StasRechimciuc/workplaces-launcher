@@ -54,3 +54,10 @@ export function clockifyStepSummary(params: Record<string, unknown>): string {
   const appPath = typeof params['appPath'] === 'string' ? params['appPath'].trim() : '';
   return appPath ? appDisplayName(appPath) : 'App not detected yet';
 }
+
+export function terminalStepSummary(params: Record<string, unknown>): string {
+  const terminals = Array.isArray(params['terminals']) ? params['terminals'] : [];
+  const count = terminals.length;
+  if (count === 0) return 'No terminals configured';
+  return `${count} terminal${count === 1 ? '' : 's'}`;
+}

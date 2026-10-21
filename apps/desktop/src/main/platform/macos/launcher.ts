@@ -1,9 +1,25 @@
+import { randomUUID } from 'node:crypto';
+import { stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { PlatformLauncher, PlatformResult } from '../types';
 import { runCommand } from '../../lib/shell-exec';
+import { expandHome } from '../../lib/paths';
+
+/**
+ * Safe to embed in a single-quoted shell string — the only quoting
+ * context any dynamic text in openTerminal's generated script is ever
+ * placed into (never re-embedded into a second, differently-quoted
+ * context — that mismatch was a real bug here once, see openTerminal's
+ * own comment on it).
+ */
+function singleQuote(text: string): string {
+  return `'${text.replace(/'/g, `'\\''`)}'`;
+}
 
 /**
  * macOS implementation of PlatformLauncher, via `open -a`
- * (docs/architecture.md #1). All three methods shell out through
+ * (docs/architecture.md #1). All methods shell out through
  * lib/shell-exec.ts's runCommand — argv arrays only, shell:false — so
  * an app name or path coming from workspace config data can never be
  * interpreted as shell syntax, no matter what it contains.
@@ -77,5 +93,89 @@ export const macosLauncher: PlatformLauncher = {
       success: false,
       message: `Failed to open ${url} in ${browser}: ${result.message}`,
     };
+  },
+
+  async openTerminal(cwd, commands): Promise<PlatformResult> {
+    const expandedCwd = expandHome(cwd);
+
+    try {
+      const dirStat = await stat(expandedCwd);
+      if (!dirStat.isDirectory()) {
+        return { success: false, message: `"${cwd}" is not a directory.` };
+      }
+    } catch {
+      return { success: false, message: `"${cwd}" doesn't exist.` };
+    }
+
+    // Deliberately NOT AppleScript (`do script`) — embedding dynamic
+    // content into an AppleScript string is a real, two-layer escaping
+    // problem (AppleScript-string escaping, then shell-interpretation
+    // of whatever ends up typed into the terminal), confirmed during
+    // this feature's own planning to be a genuine, non-theoretical risk
+    // class. Instead: a plain Node fs.writeFile writes an executable
+    // `.command` script — inert bytes, no interpretation at all — and
+    // `open -a Terminal` (the same `open`-based, argv-only mechanism
+    // every other method here already uses) hands it to Terminal the
+    // same way a double-click would. This also means no macOS
+    // Automation/TCC permission prompt is ever triggered (`open` is a
+    // Launch Services request, not an Apple Event).
+    //
+    // `-a Terminal` is explicit, not left to Launch Services' default
+    // `.command` handler — matching every other call in this file's own
+    // explicit `-a <app>` convention, and avoiding a real silent-wrong-
+    // outcome risk: a user who has ever rebound `.command`/`.sh` files
+    // to open in a text editor instead of running them would otherwise
+    // get an `open` call that exits 0 ("success") while doing something
+    // entirely different from what this step promises.
+    const safeCwd = singleQuote(expandedCwd);
+    const lines = [
+      '#!/bin/zsh -l',
+      // Self-deletes immediately — the interpreter already has the
+      // file open by the time this runs, so unlinking it doesn't
+      // disturb execution. Required, not optional: without it, every
+      // restore leaves a new script behind in the temp dir forever.
+      'rm -f -- "$0"',
+      // Terminal.app's own behavior when it opens a .command file (via
+      // `open -a Terminal`, same as a double-click) — not anything this
+      // script controls — is to visibly "type" the script's full path
+      // plus a trailing `; exit` into a fresh shell before running it.
+      // Wiping that noisy preamble here is purely cosmetic (the window
+      // stays open and interactive regardless, since `exec "$SHELL" -l`
+      // below replaces the process before that trailing `exit` could
+      // ever act on it) — it just means the user sees a clean prompt
+      // instead of their own temp file's path first.
+      'clear',
+      `cd ${safeCwd} || { echo "cd into the configured directory failed."; exec "$SHELL" -l; }`,
+      // Each command is echoed as its own, separately-escaped
+      // `echo '$ <command>'` line before it actually runs — a plain
+      // shell script never echoes its own commands by default, so
+      // without this there'd be no visible indication of what's
+      // running before its output starts. The echoed text is embedded
+      // into its OWN single-quoted string via the same singleQuote()
+      // helper as cwd above — never the same escaped string reused for
+      // two different quoting contexts, which is exactly the mixed-
+      // context bug a prior version of this file had elsewhere. The
+      // command's own execution line (the second of the pair) stays
+      // completely verbatim and unescaped — it's meant to run exactly
+      // as the user typed it, in their own real shell.
+      ...commands.flatMap((command) => [`echo ${singleQuote(`$ ${command}`)}`, command]),
+      'exec "$SHELL" -l',
+    ];
+    const scriptPath = join(tmpdir(), `workspace-launcher-terminal-${randomUUID()}.command`);
+
+    try {
+      await writeFile(scriptPath, `${lines.join('\n')}\n`, { mode: 0o755 });
+    } catch (err) {
+      return {
+        success: false,
+        message: `Couldn't create the terminal script: ${(err as Error).message}`,
+      };
+    }
+
+    const result = await runCommand('open', ['-a', 'Terminal', scriptPath]);
+    if (result.success) {
+      return { success: true, message: `Opened a terminal at ${cwd}.` };
+    }
+    return { success: false, message: `Failed to open a terminal at ${cwd}: ${result.message}` };
   },
 };

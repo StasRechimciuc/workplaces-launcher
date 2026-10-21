@@ -11,6 +11,9 @@ import { Icon } from '../icons';
 import { CREATE_TOOL_PRESETS, type CreateToolPreset } from '../constants';
 import { useIsMounted } from '../lib/useIsMounted';
 import { getRecentProjectPaths } from '../lib/recent-project-paths';
+import { getRecentCommands } from '../lib/recent-commands';
+import { matchesCombo } from '../lib/useGlobalShortcuts';
+import { SHORTCUTS, getEffectiveShortcuts, getStoredOverrides } from '../lib/shortcuts';
 import { useSpotifyConnection } from '../lib/useSpotifyConnection';
 import { useAppPathDetections } from '../lib/useAppPathDetections';
 import { cn } from '../lib/utils';
@@ -35,6 +38,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
 
@@ -176,6 +180,9 @@ interface StepParamsFieldsProps {
    * only vscode-fields.tsx currently reads it. */
   recentFolders?: string[];
   /** See step-fields/types.ts's StepFieldsProps — forwarded verbatim,
+   * only terminal-fields.tsx currently reads it. */
+  recentCommands?: string[];
+  /** See step-fields/types.ts's StepFieldsProps — forwarded verbatim,
    * only spotify-fields.tsx currently reads it. */
   spotify?: StepFieldsProps['spotify'];
   /** See step-fields/types.ts's StepFieldsProps — forwarded verbatim,
@@ -196,6 +203,7 @@ function StepParamsFields({
   onChange,
   registerPrimaryInputRef,
   recentFolders,
+  recentCommands,
   spotify,
   appPathDetection,
 }: StepParamsFieldsProps): JSX.Element | null {
@@ -209,6 +217,7 @@ function StepParamsFields({
       onChange={onChange}
       registerPrimaryInputRef={registerPrimaryInputRef}
       {...(recentFolders !== undefined ? { recentFolders } : {})}
+      {...(recentCommands !== undefined ? { recentCommands } : {})}
       {...(spotify !== undefined ? { spotify } : {})}
       {...(appPathDetection !== undefined ? { appPathDetection } : {})}
     />
@@ -240,12 +249,49 @@ export function WorkspaceFormModal({
   // reads it for that case.
   const [openKeys, setOpenKeys] = useState<Set<number>>(new Set());
 
+  // The Add-tool picker's own open state (controlled, not left to
+  // Radix's default uncontrolled mode) purely so its search query can
+  // be reset to '' on close — nothing else here depends on reading it.
+  const [isAddToolOpen, setIsAddToolOpen] = useState(false);
+  const [toolSearchQuery, setToolSearchQuery] = useState('');
+  const toolSearchInputRef = useRef<HTMLInputElement>(null);
+  const isMac = window.api.platform === 'darwin';
+  const filteredToolPresets = useMemo(() => {
+    const q = toolSearchQuery.toLowerCase();
+    return q ? CREATE_TOOL_PRESETS.filter((p) => p.name.toLowerCase().includes(q)) : CREATE_TOOL_PRESETS;
+  }, [toolSearchQuery]);
+
+  // Plain `autoFocus` loses the race against Radix's own internal
+  // FocusScope, which auto-focuses the first menu item the instant the
+  // content mounts (`onOpenAutoFocus` would prevent that, but it's
+  // deliberately excluded from DropdownMenuContent's public prop type
+  // — confirmed by reading @radix-ui/react-menu's own source, not
+  // assumed). This effect runs after that child-level focus-scope
+  // effect has already committed (child effects fire before parent
+  // effects), so it reliably "steals" focus back to the search box one
+  // tick later instead.
+  useEffect(() => {
+    if (isAddToolOpen) {
+      const frame = requestAnimationFrame(() => {
+        toolSearchInputRef.current?.focus();
+      });
+      return () => {
+        cancelAnimationFrame(frame);
+      };
+    }
+  }, [isAddToolOpen]);
+
   // Base list of every distinct VS Code path already saved across all
   // workspaces — computed once per workspaces change, not per row.
   // Each row further excludes its OWN current path at the render call
   // site below (a cheap inline filter, not a second memo — createSteps
   // rows already get fresh params every render).
   const recentFolders = useMemo(() => getRecentProjectPaths(workspaces), [workspaces]);
+
+  // Same precedent as recentFolders above — each terminal card further
+  // excludes its OWN already-added commands at the render call site in
+  // terminal-fields.tsx itself (per-card, not per-row here).
+  const recentCommands = useMemo(() => getRecentCommands(workspaces), [workspaces]);
 
   // Instantiated once per modal mount, not per row — see
   // lib/useSpotifyConnection.ts's own doc comment for why connection
@@ -583,6 +629,7 @@ export function WorkspaceFormModal({
                             }
                           }}
                           recentFolders={recentFolders.filter((p) => p !== params['path'])}
+                          recentCommands={recentCommands}
                           spotify={spotify}
                           {...(isToolAppKey(preset.type)
                             ? { appPathDetection: appPathDetections.forTool(preset.type) }
@@ -596,7 +643,17 @@ export function WorkspaceFormModal({
             })}
           </div>
 
-          <DropdownMenu>
+          <DropdownMenu
+            open={isAddToolOpen}
+            onOpenChange={(open) => {
+              setIsAddToolOpen(open);
+              if (!open) {
+                // Fresh next time it opens — stale leftover text would
+                // otherwise silently hide tools on the next open.
+                setToolSearchQuery('');
+              }
+            }}
+          >
             <DropdownMenuTrigger asChild>
               <button
                 className="flex h-8 w-full items-center justify-center gap-1.5 rounded-sm border border-dashed border-border-strong text-xs text-text-faint hover:border-text-faint hover:text-text-muted"
@@ -607,8 +664,29 @@ export function WorkspaceFormModal({
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
-              className="w-72"
+              className="flex max-h-72 w-72 flex-col overflow-hidden p-0"
               align="start"
+              onKeyDown={(e) => {
+                // While this menu is open, the app's own configured
+                // "focus search" shortcut (e.g. ⌘K — whatever the user
+                // has it bound to, read fresh, never hardcoded) should
+                // refocus THIS search box, not bubble up to the global
+                // window-level listener (lib/useGlobalShortcuts.ts)
+                // and jump focus to the sidebar's workspace search
+                // instead. stopPropagation() on the synthetic event
+                // also stops the underlying native event, which is
+                // what actually keeps it from ever reaching that
+                // window listener — not a cross-component flag/ref,
+                // just the DOM's own propagation model.
+                const effective = getEffectiveShortcuts(SHORTCUTS, getStoredOverrides());
+                const searchShortcut = effective.find((s) => s.id === 'search.focus');
+                if (searchShortcut && matchesCombo(e.nativeEvent, searchShortcut.combo, isMac)) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  toolSearchInputRef.current?.focus();
+                  toolSearchInputRef.current?.select();
+                }
+              }}
               onCloseAutoFocus={(e) => {
                 // Without this, Radix's own FocusScope unmount handler
                 // snaps focus back to this trigger button on close
@@ -634,15 +712,48 @@ export function WorkspaceFormModal({
                 }
               }}
             >
-              {CREATE_TOOL_PRESETS.map((preset) => (
-                <ToolPickerItem
-                  key={preset.type}
-                  preset={preset}
-                  onSelect={() => {
-                    addTool(preset);
+              <div className="flex items-center gap-1.5 px-2 pt-1.5 pb-1">
+                <Icon name="search" size={12} className="shrink-0 text-text-faint" />
+                <input
+                  ref={toolSearchInputRef}
+                  type="text"
+                  value={toolSearchQuery}
+                  onChange={(e) => {
+                    setToolSearchQuery(e.target.value);
                   }}
+                  onKeyDown={(e) => {
+                    // Let navigation/selection keys bubble to Radix's
+                    // own roving-focus/typeahead handling so Down/Enter
+                    // move from "typing" into "picking an item" — stop
+                    // everything else (ordinary letters) from reaching
+                    // it, so typing a tool's name doesn't also trigger
+                    // Radix's built-in single-character typeahead jump.
+                    if (!['ArrowDown', 'ArrowUp', 'Enter', 'Escape', 'Tab'].includes(e.key)) {
+                      e.stopPropagation();
+                    }
+                  }}
+                  placeholder="Search tools…"
+                  className="min-w-0 flex-1 bg-transparent text-[12.5px] text-text placeholder:text-text-faint focus:outline-none"
                 />
-              ))}
+              </div>
+              <DropdownMenuSeparator className="mx-0 my-0" />
+              <div className="flex-1 overflow-y-auto p-1">
+                {filteredToolPresets.length === 0 ? (
+                  <p className="px-2.5 py-2 text-[12px] text-text-faint">
+                    No tools match &ldquo;{toolSearchQuery}&rdquo;
+                  </p>
+                ) : (
+                  filteredToolPresets.map((preset) => (
+                    <ToolPickerItem
+                      key={preset.type}
+                      preset={preset}
+                      onSelect={() => {
+                        addTool(preset);
+                      }}
+                    />
+                  ))
+                )}
+              </div>
             </DropdownMenuContent>
           </DropdownMenu>
 

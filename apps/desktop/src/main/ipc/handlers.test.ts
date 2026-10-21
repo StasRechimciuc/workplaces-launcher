@@ -146,6 +146,7 @@ vi.mock('electron', () => ({
 const mockedGetPlatformLauncher = vi.mocked(getPlatformLauncher);
 const openInApp = vi.fn();
 const openUrlInBrowserProfile = vi.fn();
+const openTerminal = vi.fn();
 
 beforeAll(() => {
   // Real startup wiring (main/index.ts calls this once) — needed so
@@ -158,10 +159,12 @@ beforeEach(async () => {
   testUserDataDir = await mkdtemp(join(tmpdir(), 'workspace-launcher-test-'));
   openInApp.mockReset().mockResolvedValue({ success: true, message: 'Opened.' });
   openUrlInBrowserProfile.mockReset().mockResolvedValue({ success: true, message: 'Opened.' });
+  openTerminal.mockReset().mockResolvedValue({ success: true, message: 'Opened a terminal.' });
   mockedGetPlatformLauncher.mockReset().mockReturnValue({
     launchApp: vi.fn(),
     openInApp,
     openUrlInBrowserProfile,
+    openTerminal,
   });
   mockWin.isDestroyed.mockReset().mockReturnValue(false);
   mockWin.isMinimized.mockReset().mockReturnValue(false);
@@ -185,7 +188,7 @@ afterEach(async () => {
 
 /**
  * A real, saved workspace mixing registered tool types (vscode, chrome,
- * spotify — run for real) with unregistered ones (docker, terminal,
+ * spotify, terminal — run for real) with unregistered ones (docker,
  * slack — no plugin built yet, so they report a graceful per-step
  * failure). Mirrors the shape the old bundled demo workspace used to
  * cover in these tests, now built fresh per test via the real
@@ -197,7 +200,7 @@ async function createMixedWorkspace(): Promise<string> {
     steps: [
       { type: 'vscode', params: { path: '~/real' } },
       { type: 'docker', params: {} },
-      { type: 'terminal', params: {} },
+      { type: 'terminal', params: { terminals: [{ cwd: '~/real', commands: ['npm run dev'] }] } },
       { type: 'chrome', params: { profile: 'Default', urls: ['https://example.com'] } },
       { type: 'spotify', params: { playlist: 'spotify:playlist:abc' } },
       { type: 'slack', params: {} },
@@ -239,6 +242,14 @@ describe('restoreWorkspace', () => {
     const dockerResult = results[1];
     expect(dockerResult?.success).toBe(false);
     expect(dockerResult?.message).toContain('docker');
+  });
+
+  it('runs the registered terminal step through the real platform launcher, not just a mocked unit test', async () => {
+    const id = await createMixedWorkspace();
+    const results = await restoreWorkspace(id);
+
+    expect(openTerminal).toHaveBeenCalledWith('~/real', ['npm run dev']);
+    expect(results[2]).toMatchObject({ success: true });
   });
 
   it('restores a real saved workspace loaded from disk', async () => {

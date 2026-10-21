@@ -132,4 +132,16 @@ describe('windowsLauncher', () => {
       expect(result).toEqual({ success: true, message: 'Opened Google Chrome (profile: Work).' });
     });
   });
+
+  describe('openTerminal', () => {
+    it('reports an honest not-yet-implemented failure, never a silent no-op', async () => {
+      const result = await windowsLauncher.openTerminal('C:\\projects\\x', ['npm run dev']);
+
+      expect(result).toEqual({
+        success: false,
+        message: "Terminal steps aren't implemented on Windows yet.",
+      });
+      expect(runDetached).not.toHaveBeenCalled();
+    });
+  });
 });

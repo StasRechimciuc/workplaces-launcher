@@ -638,6 +638,18 @@ export function registerIpcHandlers(): void {
     return result.canceled ? null : (result.filePaths[0] ?? null);
   });
 
+  ipcMain.handle('dialog:selectFile', async (event): Promise<string | null> => {
+    // No filter/defaultPath restriction, unlike selectApp above — the
+    // "File or Link" step's whole point is opening an arbitrary
+    // document (any extension, anywhere on disk), not a constrained
+    // category like an Applications-folder .app bundle.
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const result = win
+      ? await dialog.showOpenDialog(win, { properties: ['openFile'] })
+      : await dialog.showOpenDialog({ properties: ['openFile'] });
+    return result.canceled ? null : (result.filePaths[0] ?? null);
+  });
+
   ipcMain.handle('spotify:connect', async () => {
     return spotifyAuth.connect();
   });

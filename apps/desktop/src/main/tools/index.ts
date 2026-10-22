@@ -5,6 +5,7 @@ import { spotifyTool } from './spotify-tool';
 import { clockifyTool } from './clockify-tool';
 import { appTool } from './app-tool';
 import { terminalTool } from './terminal-tool';
+import { linkTool } from './link-tool';
 
 /**
  * Registers every built tool plugin into the registry. Call once at
@@ -19,4 +20,5 @@ export function registerBuiltInTools(): void {
   registerTool(clockifyTool);
   registerTool(appTool);
   registerTool(terminalTool);
+  registerTool(linkTool);
 }

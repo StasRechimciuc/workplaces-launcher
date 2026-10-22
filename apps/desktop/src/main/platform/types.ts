@@ -33,4 +33,17 @@ export interface PlatformLauncher {
    * `openUrlInBrowserProfile`'s optional `url`).
    */
   openTerminal(cwd: string, commands: string[]): Promise<PlatformResult>;
+  /**
+   * Opens a file with the OS's default handler app for its type (the
+   * "File or Link" step's no-`appPath`-override case). `path` must
+   * already be an absolute, existing path — callers validate that
+   * first (tools/link-tool.ts), this just performs the open.
+   */
+  openFileDefault(path: string): Promise<PlatformResult>;
+  /**
+   * Opens a URL with the system's default browser (the "File or Link"
+   * step's no-`appPath`-override case for a link). Callers restrict
+   * `url` to http/https before calling this — see link-tool.ts.
+   */
+  openUrlDefault(url: string): Promise<PlatformResult>;
 }

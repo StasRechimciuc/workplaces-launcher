@@ -4,9 +4,11 @@ import { SpotifyFields } from './spotify-fields';
 import { AppFields } from './app-fields';
 import { ClockifyFields } from './clockify-fields';
 import { TerminalFields } from './terminal-fields';
+import { LinkFields } from './link-fields';
 import {
   chromeStepSummary,
   clockifyStepSummary,
+  linkStepSummary,
   spotifyStepSummary,
   terminalStepSummary,
   vscodeStepSummary,
@@ -103,6 +105,12 @@ const STEP_FIELDS: Record<string, StepFieldsRegistryEntry> = {
     hasPrimaryInput: false,
     collapsible: true,
     summary: terminalStepSummary,
+  },
+  link: {
+    Component: LinkFields,
+    hasPrimaryInput: true,
+    collapsible: true,
+    summary: linkStepSummary,
   },
 };
 

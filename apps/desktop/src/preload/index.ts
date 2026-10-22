@@ -152,6 +152,10 @@ const api = {
   // Resolves to the picked .app bundle's absolute path, or null if the
   // user cancelled — the generic "App" step type's only input.
   selectApp: (): Promise<string | null> => ipcRenderer.invoke('dialog:selectApp'),
+  // Resolves to the picked file's absolute path, or null if the user
+  // cancelled — no extension filter, unlike selectApp above. The
+  // "File or Link" step type's Browse… button.
+  selectFile: (): Promise<string | null> => ipcRenderer.invoke('dialog:selectFile'),
   // Opens the system browser to Spotify's consent page and resolves
   // once the OAuth round trip completes (or fails) — see
   // main/spotify/auth.ts's connect().

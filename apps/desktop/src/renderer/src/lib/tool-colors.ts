@@ -16,6 +16,13 @@ const TOOL_BADGE_CLASSES: Record<string, string> = {
   violet: 'bg-tool-violet-soft text-tool-violet',
   green: 'bg-tool-green-soft text-tool-green',
   amber: 'bg-tool-amber-soft text-tool-amber',
+  // 'teal' (the "App" step's color) previously had NO entry here at
+  // all — step-types.ts declared it but no CSS variable or class ever
+  // backed it, so it silently fell back to zinc. Found and fixed while
+  // adding 'rose' for the new "File or Link" step below, since both
+  // need the same real-token treatment — see styles.css's @theme block.
+  teal: 'bg-tool-teal-soft text-tool-teal',
+  rose: 'bg-tool-rose-soft text-tool-rose',
 };
 
 const TAG_DOT_CLASSES: Record<string, string> = {

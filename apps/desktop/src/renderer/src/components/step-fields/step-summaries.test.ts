@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   chromeStepSummary,
   clockifyStepSummary,
+  linkStepSummary,
   spotifyStepSummary,
   terminalStepSummary,
   vscodeStepSummary,
@@ -95,5 +96,22 @@ describe('terminalStepSummary', () => {
         ],
       }),
     ).toBe('2 terminals');
+  });
+});
+
+describe('linkStepSummary', () => {
+  it('reports no file or link set when empty', () => {
+    expect(linkStepSummary({})).toBe('No file or link set');
+    expect(linkStepSummary({ target: '   ' })).toBe('No file or link set');
+  });
+
+  it('shows just the target with no open-with override', () => {
+    expect(linkStepSummary({ target: 'https://example.com' })).toBe('https://example.com');
+  });
+
+  it('appends the resolved app name when appPath is set', () => {
+    expect(
+      linkStepSummary({ target: 'https://www.figma.com/file/abc', appPath: '/Applications/Figma.app' }),
+    ).toBe('https://www.figma.com/file/abc, opens with Figma');
   });
 });

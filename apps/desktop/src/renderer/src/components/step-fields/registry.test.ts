@@ -11,6 +11,10 @@ describe('stepFieldsHasPrimaryInput', () => {
     expect(stepFieldsHasPrimaryInput('vscode')).toBe(true);
   });
 
+  it('is true for link (its target field, same as vscode\'s project path)', () => {
+    expect(stepFieldsHasPrimaryInput('link')).toBe(true);
+  });
+
   it.each(['spotify', 'chrome', 'app', 'clockify', 'terminal'])(
     'is false for %s (collapsible, but its UI is buttons/a picker, not a plain input)',
     (type) => {
@@ -24,9 +28,12 @@ describe('stepFieldsHasPrimaryInput', () => {
 });
 
 describe('stepFieldsIsCollapsible', () => {
-  it.each(['vscode', 'chrome', 'spotify', 'app', 'clockify', 'terminal'])('is true for %s', (type) => {
-    expect(stepFieldsIsCollapsible(type)).toBe(true);
-  });
+  it.each(['vscode', 'chrome', 'spotify', 'app', 'clockify', 'terminal', 'link'])(
+    'is true for %s',
+    (type) => {
+      expect(stepFieldsIsCollapsible(type)).toBe(true);
+    },
+  );
 
   it.each(['docker', 'slack', 'unknown-type'])('is false for %s (no registry entry)', (type) => {
     expect(stepFieldsIsCollapsible(type)).toBe(false);
@@ -45,6 +52,7 @@ describe('stepRowSummary', () => {
     expect(stepRowSummary('terminal', { terminals: [{ cwd: '~/x', commands: [] }] })).toBe(
       '1 terminal',
     );
+    expect(stepRowSummary('link', { target: 'https://example.com' })).toBe('https://example.com');
   });
 
   it('returns an empty string for a type with no summary entry (app) or no registry entry at all', () => {
@@ -64,6 +72,10 @@ describe('getStepFieldsComponent', () => {
 
   it('returns a component for terminal', () => {
     expect(getStepFieldsComponent('terminal')).toBeDefined();
+  });
+
+  it('returns a component for link', () => {
+    expect(getStepFieldsComponent('link')).toBeDefined();
   });
 
   it('returns undefined for an unregistered type', () => {

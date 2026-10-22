@@ -144,4 +144,28 @@ describe('windowsLauncher', () => {
       expect(runDetached).not.toHaveBeenCalled();
     });
   });
+
+  describe('openFileDefault', () => {
+    it('reports an honest not-yet-implemented failure, never a silent no-op — stubbed deliberately, matching openTerminal, per claude.md\'s one-OS-at-a-time rule', async () => {
+      const result = await windowsLauncher.openFileDefault('C:\\projects\\plan.pdf');
+
+      expect(result).toEqual({
+        success: false,
+        message: "File/Link steps aren't implemented on Windows yet.",
+      });
+      expect(runDetached).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('openUrlDefault', () => {
+    it('reports an honest not-yet-implemented failure, never a silent no-op', async () => {
+      const result = await windowsLauncher.openUrlDefault('https://example.com');
+
+      expect(result).toEqual({
+        success: false,
+        message: "File/Link steps aren't implemented on Windows yet.",
+      });
+      expect(runDetached).not.toHaveBeenCalled();
+    });
+  });
 });

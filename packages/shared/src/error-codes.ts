@@ -108,6 +108,18 @@ export const ERROR_CODES = {
     explanation:
       "Workspace Launcher wasn't able to complete the Spotify connection — the authorization may have been denied, cancelled, or interrupted. Try connecting again.",
   },
+  LINK_TARGET_NOT_FOUND: {
+    code: 'ER-LINK-01',
+    title: "Couldn't find the file",
+    explanation:
+      "This step's configured file no longer exists at its saved location — it may have been moved, renamed, or deleted since this workspace was set up.",
+  },
+  LINK_OPEN_FAILED: {
+    code: 'ER-LINK-02',
+    title: "Couldn't open the file or link",
+    explanation:
+      'The file or link could not be opened — there may be no app installed that can handle it, or the chosen app (if one was set) could not be launched.',
+  },
   TERMINAL_STEP_FAILED: {
     code: 'ER-TERM-01',
     title: "Couldn't open a terminal",

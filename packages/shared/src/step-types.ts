@@ -97,6 +97,19 @@ export const STEP_TYPES: readonly StepTypeDefinition[] = [
     configHint: 'Pick an app',
     implemented: true,
   },
+  // The second of the three "wider range of users" ideas (claude.md's
+  // Tier 3, pulled forward 2026-10-22): one field, auto-detects file
+  // vs. link rather than asking the user to declare which upfront (see
+  // WCs/WC__file-or-link.md for the full design/why). Optional "open
+  // with a specific app" override reuses the App step's own picker.
+  {
+    type: 'link',
+    name: 'File or Link',
+    icon: 'externalLink',
+    color: 'rose',
+    configHint: 'Pick a file or paste a link',
+    implemented: true,
+  },
 ];
 
 const STEP_TYPES_BY_TYPE: ReadonlyMap<string, StepTypeDefinition> = new Map(

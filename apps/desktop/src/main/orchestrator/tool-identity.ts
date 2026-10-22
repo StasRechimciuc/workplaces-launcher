@@ -10,7 +10,7 @@ import {
  * Maps a step to the macOS application name it launches, for workspace
  * activity tracking (Restore/Switch/Close — see
  * WCs/WC__workspace-activity.md). This is deliberately NOT a
- * ToolPlugin method: only five step
+ * ToolPlugin method: only these step
  * types need this, and reusing each tool's product-family name
  * constant (packages/shared/src/app-detection.ts — the same single
  * source of truth platform/app-detection.ts's real-install-path scan
@@ -37,6 +37,14 @@ export function getMacAppName(type: string, params: Record<string, unknown>): st
     case 'app': {
       const path = params['path'];
       return typeof path === 'string' && path.length > 0 ? appDisplayName(path) : undefined;
+    }
+    case 'link': {
+      // Only tracked when an explicit "open with" app was chosen — a
+      // bare file/URL open with no override isn't itself a trackable
+      // running app (it hands off to whatever the OS/browser default
+      // is, which isn't something this app launched or can quit).
+      const appPath = params['appPath'];
+      return typeof appPath === 'string' && appPath.length > 0 ? appDisplayName(appPath) : undefined;
     }
     default:
       return undefined;

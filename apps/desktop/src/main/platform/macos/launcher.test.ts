@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { shell } from 'electron';
 import { macosLauncher } from './launcher';
 import * as shellExec from '../../lib/shell-exec';
 import * as fsPromises from 'node:fs/promises';
@@ -12,14 +13,25 @@ vi.mock('node:fs/promises', () => ({
   writeFile: vi.fn(),
 }));
 
+vi.mock('electron', () => ({
+  shell: {
+    openPath: vi.fn(),
+    openExternal: vi.fn(),
+  },
+}));
+
 const runCommand = vi.mocked(shellExec.runCommand);
 const stat = vi.mocked(fsPromises.stat);
 const writeFile = vi.mocked(fsPromises.writeFile);
+const openPath = vi.mocked(shell.openPath);
+const openExternal = vi.mocked(shell.openExternal);
 
 beforeEach(() => {
   runCommand.mockClear();
   stat.mockReset();
   writeFile.mockReset();
+  openPath.mockReset();
+  openExternal.mockReset();
 });
 
 describe('macosLauncher', () => {
@@ -311,6 +323,56 @@ describe('macosLauncher', () => {
       expect(result.success).toBe(false);
       expect(result.message).toContain('/tmp/x');
       expect(result.message).toContain('no such app');
+    });
+  });
+
+  describe('openFileDefault', () => {
+    it('reports success when shell.openPath resolves empty', async () => {
+      openPath.mockResolvedValueOnce('');
+
+      const result = await macosLauncher.openFileDefault('/tmp/plan.pdf');
+
+      expect(openPath).toHaveBeenCalledWith('/tmp/plan.pdf');
+      expect(result).toEqual({ success: true, message: 'Opened /tmp/plan.pdf.' });
+    });
+
+    it('treats a non-empty resolved string as a failure, not a throw — shell.openPath never throws for a normal "can\'t open" failure', async () => {
+      openPath.mockResolvedValueOnce('No application knows how to open this file.');
+
+      const result = await macosLauncher.openFileDefault('/tmp/weird.xyz');
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('/tmp/weird.xyz');
+      expect(result.message).toContain('No application knows how to open this file.');
+    });
+
+    it('reports a thrown rejection without throwing', async () => {
+      openPath.mockRejectedValueOnce(new Error('unexpected'));
+
+      const result = await macosLauncher.openFileDefault('/tmp/plan.pdf');
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('unexpected');
+    });
+  });
+
+  describe('openUrlDefault', () => {
+    it('shells out via shell.openExternal and reports success', async () => {
+      openExternal.mockResolvedValueOnce(undefined);
+
+      const result = await macosLauncher.openUrlDefault('https://example.com');
+
+      expect(openExternal).toHaveBeenCalledWith('https://example.com');
+      expect(result).toEqual({ success: true, message: 'Opened https://example.com.' });
+    });
+
+    it('reports a rejection without throwing', async () => {
+      openExternal.mockRejectedValueOnce(new Error('blocked'));
+
+      const result = await macosLauncher.openUrlDefault('https://example.com');
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('blocked');
     });
   });
 });

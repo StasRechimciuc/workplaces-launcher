@@ -61,3 +61,10 @@ export function terminalStepSummary(params: Record<string, unknown>): string {
   if (count === 0) return 'No terminals configured';
   return `${count} terminal${count === 1 ? '' : 's'}`;
 }
+
+export function linkStepSummary(params: Record<string, unknown>): string {
+  const target = typeof params['target'] === 'string' ? params['target'].trim() : '';
+  if (!target) return 'No file or link set';
+  const appPath = typeof params['appPath'] === 'string' ? params['appPath'].trim() : '';
+  return appPath ? `${target}, opens with ${appDisplayName(appPath)}` : target;
+}

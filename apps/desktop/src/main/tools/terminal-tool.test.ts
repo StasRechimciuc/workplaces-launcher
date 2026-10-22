@@ -18,6 +18,8 @@ beforeEach(() => {
     openInApp: vi.fn(),
     openUrlInBrowserProfile: vi.fn(),
     openTerminal,
+    openFileDefault: vi.fn(),
+    openUrlDefault: vi.fn(),
   });
 });
 

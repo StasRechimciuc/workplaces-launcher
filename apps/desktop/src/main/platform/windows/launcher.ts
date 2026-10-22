@@ -122,4 +122,19 @@ export const windowsLauncher: PlatformLauncher = {
   async openTerminal(): Promise<PlatformResult> {
     return { success: false, message: "Terminal steps aren't implemented on Windows yet." };
   },
+
+  // Stubbed, not a real Electron shell.openPath/openExternal wrapper —
+  // matching openTerminal's own precedent above and app-tool.ts's "not
+  // solved here" scope cut. CLAUDE.md: "Do not build platform code for
+  // more than one OS at a time" — that still applies even though the
+  // real implementation would be nearly identical on Windows (Electron's
+  // shell module is itself cross-platform), since the rule is about not
+  // building ahead, not about how much work a given OS would take.
+  async openFileDefault(): Promise<PlatformResult> {
+    return { success: false, message: "File/Link steps aren't implemented on Windows yet." };
+  },
+
+  async openUrlDefault(): Promise<PlatformResult> {
+    return { success: false, message: "File/Link steps aren't implemented on Windows yet." };
+  },
 };

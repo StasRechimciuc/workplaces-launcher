@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { shell } from 'electron';
 import type { PlatformLauncher, PlatformResult } from '../types';
 import { runCommand } from '../../lib/shell-exec';
 import { expandHome } from '../../lib/paths';
@@ -177,5 +178,39 @@ export const macosLauncher: PlatformLauncher = {
       return { success: true, message: `Opened a terminal at ${cwd}.` };
     }
     return { success: false, message: `Failed to open a terminal at ${cwd}: ${result.message}` };
+  },
+
+  async openFileDefault(path): Promise<PlatformResult> {
+    // shell.openPath's documented contract: it does NOT throw for a
+    // normal "couldn't open" failure (no handler app, permissions,
+    // etc.) — it resolves with '' on success, or a non-empty
+    // human-readable error string on failure. Checking only for a
+    // thrown exception here would silently treat every such failure as
+    // success — confirmed as a real risk during this feature's own
+    // planning, not a hypothetical.
+    try {
+      const errorMessage = await shell.openPath(path);
+      if (errorMessage === '') {
+        return { success: true, message: `Opened ${path}.` };
+      }
+      return { success: false, message: `Failed to open ${path}: ${errorMessage}` };
+    } catch (err) {
+      return {
+        success: false,
+        message: `Failed to open ${path}: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+  },
+
+  async openUrlDefault(url): Promise<PlatformResult> {
+    try {
+      await shell.openExternal(url);
+      return { success: true, message: `Opened ${url}.` };
+    } catch (err) {
+      return {
+        success: false,
+        message: `Failed to open ${url}: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
   },
 };

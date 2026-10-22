@@ -14,11 +14,12 @@ describe('STEP_TYPES', () => {
       'spotify',
       'clockify',
       'app',
+      'link',
     ]);
   });
 
   it('marks the built tool types as implemented and the rest as not yet built', () => {
-    for (const type of ['vscode', 'chrome', 'spotify', 'clockify', 'app', 'terminal']) {
+    for (const type of ['vscode', 'chrome', 'spotify', 'clockify', 'app', 'terminal', 'link']) {
       expect(getStepTypeDefinition(type)?.implemented).toBe(true);
     }
     for (const type of ['docker', 'slack']) {

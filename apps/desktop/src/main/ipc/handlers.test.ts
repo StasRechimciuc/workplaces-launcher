@@ -215,6 +215,8 @@ beforeEach(async () => {
     openInApp,
     openUrlInBrowserProfile,
     openTerminal,
+    openFileDefault: vi.fn(),
+    openUrlDefault: vi.fn(),
   });
   mockWin.isDestroyed.mockReset().mockReturnValue(false);
   mockWin.isMinimized.mockReset().mockReturnValue(false);

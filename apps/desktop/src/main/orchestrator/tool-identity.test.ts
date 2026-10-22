@@ -23,6 +23,19 @@ describe('getMacAppName', () => {
     expect(getMacAppName('docker', {})).toBeUndefined();
     expect(getMacAppName('nonexistent', {})).toBeUndefined();
   });
+
+  it('derives the app name from appPath for a "link" step with an open-with override', () => {
+    expect(getMacAppName('link', { target: 'https://x.com', appPath: '/Applications/Figma.app' })).toBe(
+      'Figma',
+    );
+  });
+
+  it('returns undefined for a "link" step with no open-with override — nothing trackable to close', () => {
+    expect(getMacAppName('link', { target: 'https://x.com' })).toBeUndefined();
+    expect(getMacAppName('link', { target: '/Users/stas/plan.pdf' })).toBeUndefined();
+    expect(getMacAppName('link', { target: 'https://x.com', appPath: '' })).toBeUndefined();
+    expect(getMacAppName('link', { target: 'https://x.com', appPath: 42 })).toBeUndefined();
+  });
 });
 
 describe('isExcludedFromAutoClose', () => {

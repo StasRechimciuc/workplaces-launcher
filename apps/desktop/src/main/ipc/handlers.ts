@@ -6,6 +6,7 @@ import type {
   CreateWorkspaceResult,
   DeleteWorkspaceResult,
   DetectAppResult,
+  DetectWorkspaceDraftResult,
   GetLaunchOnLoginResult,
   RestoreProgressEvent,
   SetHotkeyBindingResult,
@@ -21,6 +22,7 @@ import {
   ERROR_CODES,
   isToolAppKey,
   isWellFormedAccelerator,
+  switchAccelerator,
   parseWorkspaceConfig,
   RESTORE_PROGRESS_CHANNEL,
 } from '@workspace-launcher/shared';
@@ -33,13 +35,21 @@ import {
   runWorkspace,
   switchToWorkspace,
 } from '../orchestrator/orchestrator';
-import { syncHotkeys, getFailedHotkeyBindings } from '../orchestrator/hotkey-service';
+import { withOrchestratorBusy } from '../orchestrator/orchestrator-busy';
+import { getAppHotkeyFailed, syncHotkeys, getFailedHotkeyBindings } from '../orchestrator/hotkey-service';
 import {
   clearHotkeyBinding,
   getAllHotkeyBindings,
   getHotkeyBinding,
   setHotkeyBinding,
 } from '../orchestrator/workspace-hotkeys-store';
+import {
+  clearSaveCurrentWorkspaceHotkey,
+  getSaveCurrentWorkspaceHotkey,
+  setSaveCurrentWorkspaceHotkey,
+} from '../orchestrator/app-hotkeys-store';
+import { detectCurrentWorkspaceDraft } from '../orchestrator/workspace-detection';
+import { setIntentActive } from '../orchestrator/workspace-activity-store';
 import { settingsStore } from '../settings/store';
 import { validateStepsWithRegisteredTools } from '../tools/validate-steps';
 import {
@@ -117,8 +127,14 @@ export async function restoreWorkspace(
     throw new Error('workspaces:restore expects a workspace id (string).');
   }
 
-  const config = await resolveWorkspaceConfig(workspaceId);
-  return runWorkspace(config, onProgress ? { onStepProgress: onProgress } : {});
+  // Held for the whole run, not just a check at the start — "Save my
+  // current workspace" detection (workspace-detection.ts) needs this to
+  // be true for as long as a restore is actually in progress, not just
+  // at the instant it began (see orchestrator-busy.ts's own doc comment).
+  return withOrchestratorBusy(async () => {
+    const config = await resolveWorkspaceConfig(workspaceId);
+    return runWorkspace(config, onProgress ? { onStepProgress: onProgress } : {});
+  });
 }
 
 /**
@@ -221,12 +237,14 @@ export async function switchWorkspace(workspaceId: unknown): Promise<SwitchResul
   if (typeof workspaceId !== 'string') {
     throw new Error('workspaces:switchTo expects a workspace id (string).');
   }
-  const target = await resolveWorkspaceConfig(workspaceId);
-  if (!SUPPORTS_WORKSPACE_ACTIVITY) {
-    return { stepResults: await runWorkspace(target), closed: [], leftOpen: [] };
-  }
-  const allConfigs = await resolveAllWorkspaceConfigs();
-  return switchToWorkspace(target, allConfigs);
+  return withOrchestratorBusy(async () => {
+    const target = await resolveWorkspaceConfig(workspaceId);
+    if (!SUPPORTS_WORKSPACE_ACTIVITY) {
+      return { stepResults: await runWorkspace(target), closed: [], leftOpen: [] };
+    }
+    const allConfigs = await resolveAllWorkspaceConfigs();
+    return switchToWorkspace(target, allConfigs);
+  });
 }
 
 /**
@@ -237,12 +255,14 @@ export async function closeWorkspaceStep(workspaceId: unknown): Promise<CloseRes
   if (typeof workspaceId !== 'string') {
     throw new Error('workspaces:close expects a workspace id (string).');
   }
-  if (!SUPPORTS_WORKSPACE_ACTIVITY) {
-    return { closed: [], leftOpen: [] };
-  }
-  const target = await resolveWorkspaceConfig(workspaceId);
-  const allConfigs = await resolveAllWorkspaceConfigs();
-  return closeWorkspace(target, allConfigs);
+  return withOrchestratorBusy(async () => {
+    if (!SUPPORTS_WORKSPACE_ACTIVITY) {
+      return { closed: [], leftOpen: [] };
+    }
+    const target = await resolveWorkspaceConfig(workspaceId);
+    const allConfigs = await resolveAllWorkspaceConfigs();
+    return closeWorkspace(target, allConfigs);
+  });
 }
 
 /**
@@ -428,6 +448,28 @@ export async function setWorkspaceHotkey(
       code: ERROR_CODES.HOTKEY_ALREADY_IN_USE.code,
     };
   }
+  // Symmetric to setAppHotkey's own identical check below — Electron's
+  // globalShortcut.register() never reports a same-process double-
+  // registration as a failure (it silently reassigns the callback to
+  // whichever registration ran last), so syncHotkeys()'s own OS-level
+  // failure detection can't catch a workspace binding colliding with
+  // the app-level "Save current workspace" hotkey — this has to be
+  // checked explicitly, before persisting, same as the check above.
+  //
+  // Checked against the app hotkey's value directly AND against
+  // switchAccelerator(accelerator) — THIS workspace's own derived
+  // Switch combo, which syncHotkeys() also registers but which never
+  // appears anywhere getAllHotkeyBindings() exposes, so it could
+  // otherwise silently steal an already-working app hotkey with no
+  // error surfaced anywhere (a real gap, caught in review).
+  const appHotkey = getSaveCurrentWorkspaceHotkey();
+  if (appHotkey === accelerator || appHotkey === switchAccelerator(accelerator)) {
+    return {
+      success: false,
+      error: 'Already bound to "Save current workspace".',
+      code: ERROR_CODES.HOTKEY_ALREADY_IN_USE.code,
+    };
+  }
 
   const previous = getHotkeyBinding(workspaceId);
   setHotkeyBinding(workspaceId, accelerator);
@@ -474,6 +516,104 @@ export function getAllWorkspaceHotkeys(): Record<string, string> {
  * sync — the Settings UI's "needs to be re-picked" indicator. */
 export function getFailedWorkspaceHotkeys(): string[] {
   return getFailedHotkeyBindings();
+}
+
+/**
+ * Persists and (re-)registers the single app-level "Save current
+ * workspace" accelerator — mirrors setWorkspaceHotkey's shape/
+ * rollback-on-failure behavior exactly, minus the per-workspace id
+ * (there's only ever one of these) and with Shift allowed in the combo
+ * itself (no derived variant reserves it here — see
+ * WCs/WC__save-current-workspace.md).
+ */
+export async function setAppHotkey(accelerator: unknown): Promise<SetHotkeyBindingResult> {
+  if (typeof accelerator !== 'string' || !isWellFormedAccelerator(accelerator, { allowShift: true })) {
+    return { success: false, error: 'Not a valid shortcut.', code: ERROR_CODES.HOTKEY_INVALID.code };
+  }
+
+  // Symmetric to setWorkspaceHotkey's own identical check above —
+  // checked against each workspace's stored BASE value AND its derived
+  // Switch combo (switchAccelerator(existing)), which syncHotkeys()
+  // also registers live but which getAllHotkeyBindings() never exposes
+  // directly — without this, a new app hotkey could silently steal an
+  // already-working workspace's Switch trigger (a real gap, caught in
+  // review).
+  const collision = Object.entries(getAllHotkeyBindings()).find(
+    ([, existing]) => existing === accelerator || switchAccelerator(existing) === accelerator,
+  );
+  if (collision) {
+    const conflictName = await getWorkspaceName(collision[0]);
+    return {
+      success: false,
+      error: `Already bound to "${conflictName}".`,
+      code: ERROR_CODES.HOTKEY_ALREADY_IN_USE.code,
+    };
+  }
+
+  const previous = getSaveCurrentWorkspaceHotkey();
+  setSaveCurrentWorkspaceHotkey(accelerator);
+  const { appHotkeyFailed } = syncHotkeys();
+
+  if (appHotkeyFailed) {
+    if (previous) {
+      setSaveCurrentWorkspaceHotkey(previous);
+    } else {
+      clearSaveCurrentWorkspaceHotkey();
+    }
+    syncHotkeys(); // restore the previous, known-good registration state
+    return {
+      success: false,
+      error: 'That shortcut is already in use.',
+      code: ERROR_CODES.HOTKEY_ALREADY_IN_USE.code,
+    };
+  }
+
+  return { success: true };
+}
+
+/** Removes the app-level hotkey entirely and re-syncs. */
+export function clearAppHotkey(): void {
+  clearSaveCurrentWorkspaceHotkey();
+  syncHotkeys();
+}
+
+export function getAppHotkey(): string | undefined {
+  return getSaveCurrentWorkspaceHotkey();
+}
+
+/** Whether the app-level hotkey failed to register on the most recent
+ * sync — the Settings UI's own "needs to be re-picked" indicator. */
+export function getAppHotkeyFailedBinding(): boolean {
+  return getAppHotkeyFailed();
+}
+
+/**
+ * Runs a "Save my current workspace" detection pass — see
+ * orchestrator/workspace-detection.ts. Nothing is saved here; this only
+ * returns a draft for the renderer's review screen to show, edit, and
+ * eventually hand to the existing createWorkspace flow unchanged.
+ */
+export async function detectCurrentWorkspace(): Promise<DetectWorkspaceDraftResult> {
+  return detectCurrentWorkspaceDraft();
+}
+
+/**
+ * Marks a freshly-saved, detected-from-live-state workspace as
+ * currently active (see WCs/WC__workspace-activity.md's intent+liveness
+ * model) — everything in it was, by construction, already running at
+ * detection time. Deliberately NOT folded into createWorkspace itself:
+ * that function is also the ordinary manual "New workspace" save path,
+ * where a hand-built, never-run config is correctly NOT active. Setting
+ * intent here is safe even if some detected process has already exited
+ * by the time the save completes — the displayed "Active" state always
+ * ANDs intent with real liveness (isConfigActive), never trusts intent
+ * alone.
+ */
+export function markWorkspaceActive(workspaceId: unknown): void {
+  if (typeof workspaceId !== 'string' || workspaceId.length === 0) {
+    throw new Error('workspaces:markActive expects a non-empty workspace id (string).');
+  }
+  setIntentActive(workspaceId, true);
 }
 
 /**
@@ -746,6 +886,30 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('hotkeys:getFailedBindings', async () => {
     return getFailedWorkspaceHotkeys();
+  });
+
+  ipcMain.handle('hotkeys:getAppHotkey', async () => {
+    return getAppHotkey();
+  });
+
+  ipcMain.handle('hotkeys:setAppHotkey', async (_event, accelerator: unknown) => {
+    return setAppHotkey(accelerator);
+  });
+
+  ipcMain.handle('hotkeys:clearAppHotkey', async () => {
+    clearAppHotkey();
+  });
+
+  ipcMain.handle('hotkeys:getAppHotkeyFailed', async () => {
+    return getAppHotkeyFailedBinding();
+  });
+
+  ipcMain.handle('workspaces:detectCurrent', async () => {
+    return detectCurrentWorkspace();
+  });
+
+  ipcMain.handle('workspaces:markActive', async (_event, workspaceId: unknown) => {
+    markWorkspaceActive(workspaceId);
   });
 
   ipcMain.handle('settings:getLaunchOnLogin', async () => {

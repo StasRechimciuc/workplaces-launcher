@@ -5,7 +5,7 @@ vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(),
 }));
 
-import { listChromeProfiles } from './chrome-profiles';
+import { getLastUsedChromeProfileFolder, listChromeProfiles } from './chrome-profiles';
 
 const originalPlatform = process.platform;
 const originalLocalAppData = process.env['LOCALAPPDATA'];
@@ -141,5 +141,47 @@ describe('listChromeProfiles', () => {
 
     expect(profiles).toEqual([{ folder: 'Default', name: 'Stas' }]);
     expect(Object.keys(profiles[0]!)).toEqual(['folder', 'name']);
+  });
+});
+
+describe('getLastUsedChromeProfileFolder', () => {
+  beforeEach(() => {
+    vi.mocked(readFile).mockReset();
+  });
+
+  afterEach(() => {
+    setPlatform(originalPlatform);
+  });
+
+  it('returns the last_used profile folder', async () => {
+    setPlatform('darwin');
+    vi.mocked(readFile).mockResolvedValueOnce(
+      JSON.stringify({ profile: { last_used: 'Profile 2' } }),
+    );
+
+    expect(await getLastUsedChromeProfileFolder()).toBe('Profile 2');
+  });
+
+  it('returns undefined, never throws, when the file is missing', async () => {
+    setPlatform('darwin');
+    vi.mocked(readFile).mockRejectedValueOnce(Object.assign(new Error('nope'), { code: 'ENOENT' }));
+
+    expect(await getLastUsedChromeProfileFolder()).toBeUndefined();
+  });
+
+  it('returns undefined, never throws, for malformed JSON', async () => {
+    setPlatform('darwin');
+    vi.mocked(readFile).mockResolvedValueOnce('{ not json');
+
+    expect(await getLastUsedChromeProfileFolder()).toBeUndefined();
+  });
+
+  it('returns undefined when last_used is missing or empty', async () => {
+    setPlatform('darwin');
+    vi.mocked(readFile).mockResolvedValueOnce(JSON.stringify({ profile: {} }));
+    expect(await getLastUsedChromeProfileFolder()).toBeUndefined();
+
+    vi.mocked(readFile).mockResolvedValueOnce(JSON.stringify({ profile: { last_used: '' } }));
+    expect(await getLastUsedChromeProfileFolder()).toBeUndefined();
   });
 });

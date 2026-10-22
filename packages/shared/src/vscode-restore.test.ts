@@ -4,10 +4,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   CURRENT_VSCODE_RESTORE_VERSION,
+  CURRENT_WINDOW_STATE_HEARTBEAT_MS,
+  deleteCurrentWindowState,
   deletePendingVscodeRestore,
+  getCurrentWindowStateDir,
   getVscodeRestoreDir,
+  listOpenWindowFolders,
   PRODUCT_NAME,
+  readCurrentWindowState,
   readPendingVscodeRestore,
+  writeCurrentWindowState,
   writePendingVscodeRestore,
 } from './vscode-restore';
 
@@ -247,5 +253,142 @@ describe('writePendingVscodeRestore / readPendingVscodeRestore / deletePendingVs
     await expect(
       deletePendingVscodeRestore('/Users/me/projects/never-staged'),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe('writeCurrentWindowState / readCurrentWindowState / deleteCurrentWindowState', () => {
+  beforeEach(() => {
+    stubPlatform('darwin');
+  });
+
+  it('reports "none" when nothing was ever written for that folder', async () => {
+    const result = await readCurrentWindowState('/Users/me/projects/never-opened');
+    expect(result).toEqual({ status: 'none' });
+  });
+
+  it('reports "open" with a fresh heartbeat right after writing', async () => {
+    await writeCurrentWindowState('/Users/me/projects/client-a');
+
+    const result = await readCurrentWindowState('/Users/me/projects/client-a');
+
+    expect(result.status).toBe('open');
+    if (result.status === 'open') {
+      expect(typeof result.updatedAt).toBe('string');
+    }
+  });
+
+  it('matches the same folder regardless of a trailing slash, same as the pending-restore file', async () => {
+    await writeCurrentWindowState('/Users/me/projects/client-a/');
+    const result = await readCurrentWindowState('/Users/me/projects/client-a');
+    expect(result.status).toBe('open');
+  });
+
+  it('reports "stale" once the heartbeat is older than 3x its own interval', async () => {
+    await writeCurrentWindowState('/Users/me/projects/aging');
+    const dir = getCurrentWindowStateDir();
+    const files = await readdir(dir);
+    const filePath = join(dir, files[0]!);
+    const raw = JSON.parse(await readFile(filePath, 'utf-8'));
+    raw.updatedAt = new Date(Date.now() - CURRENT_WINDOW_STATE_HEARTBEAT_MS * 4).toISOString();
+    await writeFile(filePath, JSON.stringify(raw), 'utf-8');
+
+    const result = await readCurrentWindowState('/Users/me/projects/aging');
+    expect(result).toEqual({ status: 'stale' });
+  });
+
+  it('reports "none", never throws, for malformed JSON', async () => {
+    await writeCurrentWindowState('/Users/me/projects/to-corrupt');
+    const dir = getCurrentWindowStateDir();
+    const files = await readdir(dir);
+    await writeFile(join(dir, files[0]!), '{ not json', 'utf-8');
+
+    const result = await readCurrentWindowState('/Users/me/projects/to-corrupt');
+    expect(result).toEqual({ status: 'none' });
+  });
+
+  it('a later write refreshes the same file rather than creating a second one', async () => {
+    await writeCurrentWindowState('/Users/me/projects/refreshed');
+    await writeCurrentWindowState('/Users/me/projects/refreshed');
+
+    const dir = getCurrentWindowStateDir();
+    const files = await readdir(dir);
+    expect(files).toHaveLength(1);
+  });
+
+  it('deletes the heartbeat file, after which it reads back as "none"', async () => {
+    await writeCurrentWindowState('/Users/me/projects/to-delete');
+    await deleteCurrentWindowState('/Users/me/projects/to-delete');
+
+    const result = await readCurrentWindowState('/Users/me/projects/to-delete');
+    expect(result).toEqual({ status: 'none' });
+  });
+
+  it('does not throw when deleting a state that was never written', async () => {
+    await expect(
+      deleteCurrentWindowState('/Users/me/projects/never-written'),
+    ).resolves.toBeUndefined();
+  });
+
+  it('is independent of the pending-restore file for the same folder — writing one never affects the other', async () => {
+    await writePendingVscodeRestore('/Users/me/projects/both', { terminals: [{ commands: ['x'] }] });
+    await writeCurrentWindowState('/Users/me/projects/both');
+
+    const pending = await readPendingVscodeRestore('/Users/me/projects/both');
+    const current = await readCurrentWindowState('/Users/me/projects/both');
+
+    expect(pending.status).toBe('found');
+    expect(current.status).toBe('open');
+  });
+});
+
+describe('listOpenWindowFolders', () => {
+  beforeEach(() => {
+    stubPlatform('darwin');
+  });
+
+  it('returns an empty array when nothing has ever been written', async () => {
+    expect(await listOpenWindowFolders()).toEqual([]);
+  });
+
+  it('returns every distinct open folder, one entry per window', async () => {
+    await writeCurrentWindowState('/Users/me/projects/a');
+    await writeCurrentWindowState('/Users/me/projects/b');
+
+    const folders = await listOpenWindowFolders();
+
+    expect(folders.sort()).toEqual(['/Users/me/projects/a', '/Users/me/projects/b']);
+  });
+
+  it('excludes a stale entry (older than 3x the heartbeat interval)', async () => {
+    await writeCurrentWindowState('/Users/me/projects/fresh');
+    await writeCurrentWindowState('/Users/me/projects/aged');
+
+    const dir = getCurrentWindowStateDir();
+    const files = (await readdir(dir)).sort();
+    // Age whichever file corresponds to "aged" — both were just
+    // written, so disambiguate by content rather than assuming order.
+    for (const file of files) {
+      const filePath = join(dir, file);
+      const raw = JSON.parse(await readFile(filePath, 'utf-8'));
+      if (raw.folderPath === '/Users/me/projects/aged') {
+        raw.updatedAt = new Date(Date.now() - CURRENT_WINDOW_STATE_HEARTBEAT_MS * 4).toISOString();
+        await writeFile(filePath, JSON.stringify(raw), 'utf-8');
+      }
+    }
+
+    expect(await listOpenWindowFolders()).toEqual(['/Users/me/projects/fresh']);
+  });
+
+  it('skips a corrupt file rather than throwing', async () => {
+    await writeCurrentWindowState('/Users/me/projects/good');
+    const dir = getCurrentWindowStateDir();
+    await writeFile(join(dir, 'state-garbage.json'), '{ not json', 'utf-8');
+
+    expect(await listOpenWindowFolders()).toEqual(['/Users/me/projects/good']);
+  });
+
+  it('returns an empty array, not a throw, if the directory does not exist at all', async () => {
+    // No writeCurrentWindowState call at all in this test — mkdir never ran.
+    expect(await listOpenWindowFolders()).toEqual([]);
   });
 });

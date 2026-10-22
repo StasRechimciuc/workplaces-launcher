@@ -4,6 +4,7 @@ export * from './step-types';
 export * from './error-codes';
 export * from './tool-validation';
 export * from './restore-progress';
+export * from './save-current-workspace-channel';
 export * from './app-display-name';
 export * from './format-duration';
 export * from './app-detection';
@@ -33,9 +34,11 @@ export * from './chrome';
 //
 // A related, distinct trap: preload/index.ts (sandboxed — see
 // main/index.ts's webPreferences) must import restore-progress.ts's
-// RESTORE_PROGRESS_CHANNEL via its OWN subpath export
-// ('@workspace-launcher/shared/restore-progress'), never through this
-// barrel, even though restore-progress.ts itself has no Node
+// RESTORE_PROGRESS_CHANNEL and save-current-workspace-channel.ts's
+// SAVE_CURRENT_WORKSPACE_TRIGGERED_CHANNEL via their OWN subpath
+// exports ('@workspace-launcher/shared/restore-progress',
+// '@workspace-launcher/shared/save-current-workspace-channel'), never
+// through this barrel, even though neither file has any Node
 // dependencies. A real (non-type-only) import from this barrel pulls in
 // every module it re-exports — including config-schema.ts's `zod`
 // import — and Electron's sandboxed preload `require()` cannot resolve

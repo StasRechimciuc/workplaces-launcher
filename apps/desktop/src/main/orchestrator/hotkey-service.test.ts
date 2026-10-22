@@ -1,11 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { globalShortcut, Notification } from 'electron';
+import { BrowserWindow, globalShortcut, Notification } from 'electron';
 import { getAllHotkeyBindings } from './workspace-hotkeys-store';
+import { getSaveCurrentWorkspaceHotkey } from './app-hotkeys-store';
 import { getWorkspaceName, restoreWorkspaceWithFocus, switchWorkspace } from '../ipc/handlers';
-import { getFailedHotkeyBindings, syncHotkeys } from './hotkey-service';
+import {
+  getAppHotkeyFailed,
+  getFailedHotkeyBindings,
+  registerShowMainWindow,
+  syncHotkeys,
+} from './hotkey-service';
 
 vi.mock('./workspace-hotkeys-store', () => ({
   getAllHotkeyBindings: vi.fn(() => ({})),
+}));
+
+vi.mock('./app-hotkeys-store', () => ({
+  getSaveCurrentWorkspaceHotkey: vi.fn(() => undefined),
 }));
 
 vi.mock('../ipc/handlers', () => ({
@@ -74,6 +84,7 @@ beforeEach(() => {
   vi.mocked(globalShortcut.isRegistered).mockImplementation((accelerator) => registry.has(accelerator));
 
   vi.mocked(getAllHotkeyBindings).mockReset().mockReturnValue({});
+  vi.mocked(getSaveCurrentWorkspaceHotkey).mockReset().mockReturnValue(undefined);
   vi.mocked(restoreWorkspaceWithFocus).mockReset().mockResolvedValue([]);
   vi.mocked(switchWorkspace)
     .mockReset()
@@ -81,6 +92,7 @@ beforeEach(() => {
   vi.mocked(getWorkspaceName).mockReset().mockImplementation((id: string) => Promise.resolve(id));
   vi.mocked(Notification.isSupported).mockReset().mockReturnValue(true);
   vi.mocked(Notification).mockClear();
+  vi.mocked(BrowserWindow.getAllWindows).mockReset().mockReturnValue([]);
 });
 
 function fireAccelerator(accelerator: string): void {
@@ -91,7 +103,7 @@ function fireAccelerator(accelerator: string): void {
 
 describe('syncHotkeys', () => {
   it('registers nothing and reports no failures when there are no bindings', () => {
-    expect(syncHotkeys()).toEqual({ failed: [] });
+    expect(syncHotkeys()).toEqual({ failed: [], appHotkeyFailed: false });
     expect(globalShortcut.unregisterAll).toHaveBeenCalled();
   });
 
@@ -250,5 +262,84 @@ describe('hotkey trigger callbacks', () => {
     expect(Notification).toHaveBeenCalledWith(
       expect.objectContaining({ body: 'orchestrator exploded' }),
     );
+  });
+});
+
+describe('app-level "Save current workspace" hotkey', () => {
+  it('registers the app hotkey in the same pass as the per-workspace ones', () => {
+    vi.mocked(getSaveCurrentWorkspaceHotkey).mockReturnValue('CommandOrControl+Alt+S');
+
+    const { appHotkeyFailed } = syncHotkeys();
+
+    expect(appHotkeyFailed).toBe(false);
+    expect(registry.has('CommandOrControl+Alt+S')).toBe(true);
+  });
+
+  it('allows Shift in the app hotkey itself — there is no derived variant to reserve it for', () => {
+    vi.mocked(getSaveCurrentWorkspaceHotkey).mockReturnValue('CommandOrControl+Shift+S');
+
+    const { appHotkeyFailed } = syncHotkeys();
+
+    expect(appHotkeyFailed).toBe(false);
+    expect(registry.has('CommandOrControl+Shift+S')).toBe(true);
+  });
+
+  it('reports appHotkeyFailed, not the workspace-keyed failed[] array, when the app hotkey collides at the OS level', () => {
+    conflictedAccelerators.add('CommandOrControl+Alt+S');
+    vi.mocked(getSaveCurrentWorkspaceHotkey).mockReturnValue('CommandOrControl+Alt+S');
+    vi.mocked(getAllHotkeyBindings).mockReturnValue({ 'ws-1': 'CommandOrControl+Alt+1' });
+
+    const { failed, appHotkeyFailed } = syncHotkeys();
+
+    expect(appHotkeyFailed).toBe(true);
+    expect(failed).toEqual([]); // the unrelated workspace binding must be unaffected
+  });
+
+  it('skips a malformed stored app hotkey without calling register() for it', () => {
+    vi.mocked(getSaveCurrentWorkspaceHotkey).mockReturnValue('not a real accelerator');
+
+    const { appHotkeyFailed } = syncHotkeys();
+
+    expect(appHotkeyFailed).toBe(true);
+    expect(globalShortcut.register).not.toHaveBeenCalledWith(
+      'not a real accelerator',
+      expect.anything(),
+    );
+  });
+
+  it('getAppHotkeyFailed reflects the most recent sync, not a stale earlier one', () => {
+    vi.mocked(getSaveCurrentWorkspaceHotkey).mockReturnValue('CommandOrControl+Alt+S');
+    syncHotkeys();
+    expect(getAppHotkeyFailed()).toBe(false);
+
+    conflictedAccelerators.add('CommandOrControl+Alt+S');
+    syncHotkeys();
+    expect(getAppHotkeyFailed()).toBe(true);
+  });
+
+  it('firing the app hotkey shows/focuses the main window and notifies the renderer', () => {
+    const showMainWindow = vi.fn();
+    registerShowMainWindow(showMainWindow);
+    const fakeWindow = {
+      isDestroyed: () => false,
+      webContents: { isDestroyed: () => false, send: vi.fn() },
+    };
+    vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([fakeWindow as never]);
+    vi.mocked(getSaveCurrentWorkspaceHotkey).mockReturnValue('CommandOrControl+Alt+S');
+    syncHotkeys();
+
+    fireAccelerator('CommandOrControl+Alt+S');
+
+    expect(showMainWindow).toHaveBeenCalled();
+    expect(fakeWindow.webContents.send).toHaveBeenCalledWith('workspaces:save-current-triggered');
+  });
+
+  it('firing the app hotkey with no window open calls showMainWindow but never throws', () => {
+    registerShowMainWindow(vi.fn());
+    vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([]);
+    vi.mocked(getSaveCurrentWorkspaceHotkey).mockReturnValue('CommandOrControl+Alt+S');
+    syncHotkeys();
+
+    expect(() => fireAccelerator('CommandOrControl+Alt+S')).not.toThrow();
   });
 });

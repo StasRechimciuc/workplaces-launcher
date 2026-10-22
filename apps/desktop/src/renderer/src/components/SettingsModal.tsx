@@ -13,6 +13,7 @@ import {
   getStoredOverrides,
   resetAllShortcuts,
 } from '../lib/shortcuts';
+import { AppHotkeyControl } from './AppHotkeyControl';
 import { ShortcutRow } from './ShortcutRow';
 import { Dialog, DialogClose, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 
@@ -216,6 +217,10 @@ export function SettingsModal({ open, onClose }: SettingsModalProps): JSX.Elemen
                 }`}
               />
             </button>
+          </div>
+
+          <div className="border-t border-border pt-4">
+            <AppHotkeyControl isMac={isMac} />
           </div>
 
           <div className="border-t border-border pt-4">

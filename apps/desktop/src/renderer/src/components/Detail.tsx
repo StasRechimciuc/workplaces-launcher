@@ -101,6 +101,10 @@ export function Detail({
   const [draftParams, setDraftParams] = useState<Record<string, unknown> | null>(null);
   const [isSavingStep, setIsSavingStep] = useState(false);
   const [saveStepError, setSaveStepError] = useState<DisplayError | null>(null);
+  // Removing a single step — independent of the quick-edit state above
+  // (a step can be removed whether or not it's currently expanded).
+  const [removingIndex, setRemovingIndex] = useState<number | null>(null);
+  const [removeStepError, setRemoveStepError] = useState<DisplayError | null>(null);
   const recentFolders = useMemo(() => getRecentProjectPaths(allWorkspaces), [allWorkspaces]);
   const recentCommands = useMemo(() => getRecentCommands(allWorkspaces), [allWorkspaces]);
   // Independently instantiated from WorkspaceFormModal's own instance —
@@ -156,6 +160,53 @@ export function Detail({
   function handleCancelStep(): void {
     setDraftParams(null);
     setSaveStepError(null);
+  }
+
+  /**
+   * Removes one step entirely and persists immediately — a quick,
+   * direct action (no confirmation dialog), matching this app's
+   * existing precedent for removing a single item within an
+   * already-editing context (WorkspaceFormModal's removeTool,
+   * EditableStringList's own remove row) rather than the heavier,
+   * confirmed "Delete workspace" flow. If the step being removed is
+   * also the currently-expanded one, its quick-edit state is cleared
+   * too — nothing left to save/cancel for a step that no longer exists.
+   */
+  async function handleRemoveStep(i: number): Promise<void> {
+    setRemovingIndex(i);
+    setRemoveStepError(null);
+    const steps = workspace.tools
+      .map((t) => ({ type: t.type, params: t.params }))
+      .filter((_, index) => index !== i);
+    try {
+      const result = await window.api.updateWorkspace({
+        id: workspace.id,
+        name: workspace.name,
+        steps,
+      });
+      if (!isMountedRef.current) return;
+      if (!result.success) {
+        setRemoveStepError({ message: result.error, code: result.code });
+        return;
+      }
+      if (expandedIndex === i) {
+        setExpandedIndex(null);
+        setDraftParams(null);
+        setSaveStepError(null);
+      }
+      onQuickEditSaved(result.config);
+    } catch (err) {
+      if (isMountedRef.current) {
+        setRemoveStepError({
+          message: err instanceof Error ? err.message : String(err),
+          code: ERROR_CODES.SYSTEM_UNEXPECTED.code,
+        });
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setRemovingIndex(null);
+      }
+    }
   }
 
   // Restoring a workspace (Docker/Tilt in particular) can take seconds.
@@ -510,6 +561,17 @@ export function Detail({
         Runs in order on restore
       </p>
 
+      {removeStepError && (
+        <div className="mb-4.5 flex items-center gap-2 rounded-sm border border-border bg-bg-elevated px-2.5 py-2 text-[12.5px] text-text-muted">
+          <Icon name="x" size={13} className="text-danger" />
+          <ErrorCode
+            message={removeStepError.message}
+            code={removeStepError.code}
+            onLearnMore={onShowErrorCode}
+          />
+        </div>
+      )}
+
       <div className="flex flex-col">
         {workspace.tools.map((tool, i) => (
           <TimelineStep
@@ -536,6 +598,10 @@ export function Detail({
             isSaving={isSavingStep}
             saveError={expandedIndex === i ? saveStepError : null}
             onShowErrorCode={onShowErrorCode}
+            onRemove={() => {
+              void handleRemoveStep(i);
+            }}
+            isRemoving={removingIndex === i}
           />
         ))}
       </div>

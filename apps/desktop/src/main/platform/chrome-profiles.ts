@@ -81,3 +81,34 @@ export async function listChromeProfiles(): Promise<ChromeProfileInfo[]> {
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
+
+/**
+ * Best-effort "which profile is probably open right now," for "Save my
+ * current workspace" detection (WCs/WC__save-current-workspace.md) —
+ * reads the SAME `Local State` file as listChromeProfiles, just a
+ * different field (`profile.last_used`). This is a point-in-time
+ * snapshot Chrome writes on profile switch/exit, not a live query —
+ * it's wrong if multiple profile windows are open simultaneously, and
+ * callers must treat it as a guess to confirm, never a fact to trust
+ * silently. Returns undefined on ANY failure (missing file, malformed
+ * JSON, missing field) — detection's chrome step then just omits the
+ * profile rather than guessing one.
+ */
+export async function getLastUsedChromeProfileFolder(): Promise<string | undefined> {
+  let raw: string;
+  try {
+    raw = await readFile(getLocalStatePath(), 'utf-8');
+  } catch {
+    return undefined;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+
+  const lastUsed = (parsed as { profile?: { last_used?: unknown } }).profile?.last_used;
+  return typeof lastUsed === 'string' && lastUsed.length > 0 ? lastUsed : undefined;
+}

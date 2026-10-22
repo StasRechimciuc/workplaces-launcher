@@ -1,7 +1,10 @@
 import * as vscode from 'vscode';
 import {
+  CURRENT_WINDOW_STATE_HEARTBEAT_MS,
+  deleteCurrentWindowState,
   deletePendingVscodeRestore,
   readPendingVscodeRestore,
+  writeCurrentWindowState,
 } from '@workspace-launcher/shared/vscode-restore';
 
 /**
@@ -151,12 +154,50 @@ async function tryConsumePendingRestore(): Promise<void> {
   }
 }
 
+/**
+ * Reports this window's own open folder as "currently open" to the
+ * desktop app's "Save my current workspace" detection (reverse of the
+ * pending-restore handoff above — see vscode-restore.ts's
+ * writeCurrentWindowState doc comment). A silent no-op for a window
+ * with no folder open (e.g. an empty/single-file window) — nothing
+ * meaningful to report, same as tryConsumePendingRestore's own early
+ * return for that case.
+ */
+function reportCurrentWindowState(): void {
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  if (!folder) {
+    return;
+  }
+  void writeCurrentWindowState(folder.uri.fsPath).catch((err: unknown) => {
+    // Best-effort by design (see writeCurrentWindowState's own doc
+    // comment) — a failed heartbeat just means this window won't be
+    // recognized by detection this time; never worth interrupting the
+    // user with a warning for a background signal they didn't ask to
+    // watch.
+    console.error(
+      `Workspace Launcher: failed to report current window state (${
+        err instanceof Error ? err.message : String(err)
+      }).`,
+    );
+  });
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('workspaceLauncher.ping', () => {
       void vscode.window.showInformationMessage('Workspace Launcher extension is active.');
     }),
   );
+
+  // Written on activation, then refreshed on a timer for as long as
+  // this window stays open — NOT only on focus-change, because a window
+  // the user never defocuses (works in it for hours without alt-tabbing
+  // away) must not go stale just because no focus event fires again.
+  // The timer itself is cleared via context.subscriptions' Disposable
+  // wrapper, same lifecycle as every other subscription here.
+  reportCurrentWindowState();
+  const heartbeat = setInterval(reportCurrentWindowState, CURRENT_WINDOW_STATE_HEARTBEAT_MS);
+  context.subscriptions.push({ dispose: () => clearInterval(heartbeat) });
 
   // Manual escape hatch: covers a window already open AND already
   // focused at the exact moment the desktop app staged a restore — it
@@ -191,5 +232,16 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export function deactivate(): void {
-  // Nothing beyond what context.subscriptions already disposes.
+  // Best-effort only — NOT guaranteed to run on a crash or force-quit,
+  // same as any Node process's exit hooks. The heartbeat's own TTL
+  // (vscode-restore.ts's CURRENT_WINDOW_STATE_HEARTBEAT_MS-derived
+  // staleness check) is the real safety net for that case; this is only
+  // tidiness for the ordinary close/reload path, so detection doesn't
+  // have to wait out the TTL for a window that closed cleanly.
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  if (folder) {
+    void deleteCurrentWindowState(folder.uri.fsPath).catch(() => {
+      // Nothing left to report to by the time deactivate() runs.
+    });
+  }
 }

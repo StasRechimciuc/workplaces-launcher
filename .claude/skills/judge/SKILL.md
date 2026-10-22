@@ -51,3 +51,12 @@ If anything surfaces here that needs the user's attention or would change the St
 ## Stage 3 — Build (only after Stage 2 is approved)
 
 Implement following the approved plan. Verify fully — lint, typecheck, test, build — before considering it done, matching this project's standard gate. Flag any real deviation from the plan encountered along the way rather than quietly absorbing it. Do not commit without a separate, explicit go-ahead, matching this project's established practice.
+
+## Stage 4 — Post-build review (always run once, right after Stage 3's verification passes)
+
+Never skipped, never optional polish — the same "catch issues before they cause real harm" instinct Stage 2's adversarial review already applies to a *plan*, now applied once to the *real code* just written. One round, covering both of these together rather than as two separate passes:
+
+1. **Bugs** — real, concrete correctness issues in what was actually written. Not a restatement of concerns already raised and resolved during Stage 2's adversarial review.
+2. **Product improvement** — reuse/simplification/efficiency opportunities, and anything that would make the shipped feature meaningfully better for the user, caught now while the context is still fresh rather than left to surface later as a complaint.
+
+Use this project's `code-review` skill (or equivalent) against the diff, at an effort level matched to the size of what was actually built — a one-file tweak doesn't need the same depth as a multi-file feature. Fix anything clear-cut and low-risk inline; flag anything bigger, riskier, or genuinely a judgment call for the user rather than silently deciding it yourself. This is a floor, not a ceiling — if something about the specific feature calls for more (e.g. a security-sensitive surface), say so and go further, same as every other stage in this skill.

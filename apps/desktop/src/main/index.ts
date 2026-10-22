@@ -2,8 +2,9 @@ import { join } from 'node:path';
 import { app, BrowserWindow, dialog, Menu, Notification, Tray, shell } from 'electron';
 import { electronApp, is, optimizer } from '@electron-toolkit/utils';
 import { PRODUCT_NAME } from '@workspace-launcher/shared/vscode-restore';
+import { SAVE_CURRENT_WORKSPACE_TRIGGERED_CHANNEL } from '@workspace-launcher/shared/save-current-workspace-channel';
 import { registerIpcHandlers } from './ipc/handlers';
-import { syncHotkeys } from './orchestrator/hotkey-service';
+import { registerShowMainWindow, syncHotkeys } from './orchestrator/hotkey-service';
 import { settingsStore } from './settings/store';
 import { buildAppMenu } from './menu';
 import { registerBuiltInTools } from './tools';
@@ -185,6 +186,20 @@ if (gotSingleInstanceLock) {
   function buildTrayMenu(): Menu {
     return Menu.buildFromTemplate([
       { label: 'Open Workspace Launcher', click: () => showOrCreateMainWindow() },
+      {
+        label: 'Save current workspace',
+        // Same show/focus/create step the hotkey trigger uses — a
+        // non-hotkey companion entry point for the same action (see
+        // hotkey-service.ts's registerShowMainWindow for why this
+        // closure, not an import, is how that module reaches this one).
+        click: () => {
+          showOrCreateMainWindow();
+          const [win] = BrowserWindow.getAllWindows();
+          if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
+            win.webContents.send(SAVE_CURRENT_WORKSPACE_TRIGGERED_CHANNEL);
+          }
+        },
+      },
       { type: 'separator' },
       {
         label: 'Quit Workspace Launcher',
@@ -218,6 +233,12 @@ if (gotSingleInstanceLock) {
     if (process.platform !== 'darwin') {
       tray.on('click', () => showOrCreateMainWindow());
     }
+
+    // Lets hotkey-service.ts show/focus/create the main window when the
+    // "Save current workspace" hotkey fires with no window open —
+    // registered before syncHotkeys() below so it's available the
+    // moment that hotkey could first fire.
+    registerShowMainWindow(showOrCreateMainWindow);
 
     // Registers every stored workspace hotkey as a live global
     // shortcut — see hotkey-service.ts. Deliberately not awaited: a

@@ -6,6 +6,7 @@ import type {
   CreateWorkspaceResult,
   DeleteWorkspaceResult,
   DetectAppResult,
+  DetectWorkspaceDraftResult,
   GetLaunchOnLoginResult,
   SetHotkeyBindingResult,
   SetLaunchOnLoginResult,
@@ -23,6 +24,7 @@ import type {
 // zod into this sandboxed preload's require() and crash it silently.
 import { RESTORE_PROGRESS_CHANNEL } from '@workspace-launcher/shared/restore-progress';
 import type { RestoreProgressEvent } from '@workspace-launcher/shared/restore-progress';
+import { SAVE_CURRENT_WORKSPACE_TRIGGERED_CHANNEL } from '@workspace-launcher/shared/save-current-workspace-channel';
 
 /**
  * Pre-formatted launch-time display for one step or a whole workspace —
@@ -210,6 +212,35 @@ const api = {
     ipcRenderer.invoke('settings:getLaunchOnLogin'),
   setLaunchOnLogin: (value: boolean): Promise<SetLaunchOnLoginResult> =>
     ipcRenderer.invoke('settings:setLaunchOnLogin', value),
+  // The single, app-wide "Save current workspace" accelerator — no
+  // workspace id (there's only ever one), no Shift-derived variant
+  // (no Restore/Switch duality for this action) — see
+  // WCs/WC__save-current-workspace.md.
+  getAppHotkey: (): Promise<string | undefined> => ipcRenderer.invoke('hotkeys:getAppHotkey'),
+  setAppHotkey: (accelerator: string): Promise<SetHotkeyBindingResult> =>
+    ipcRenderer.invoke('hotkeys:setAppHotkey', accelerator),
+  clearAppHotkey: (): Promise<void> => ipcRenderer.invoke('hotkeys:clearAppHotkey'),
+  getAppHotkeyFailed: (): Promise<boolean> => ipcRenderer.invoke('hotkeys:getAppHotkeyFailed'),
+  // Runs a detection pass over everything currently open/running and
+  // returns a DRAFT only — nothing is saved until the renderer's review
+  // screen calls createWorkspace itself with what the user confirmed.
+  detectCurrentWorkspace: (): Promise<DetectWorkspaceDraftResult> =>
+    ipcRenderer.invoke('workspaces:detectCurrent'),
+  // Marks a freshly detected-and-saved workspace as currently active —
+  // see ipc/handlers.ts's markWorkspaceActive. Called by the review
+  // screen right after a successful createWorkspace, never by the
+  // ordinary manual "New workspace" flow.
+  markWorkspaceActive: (workspaceId: string): Promise<void> =>
+    ipcRenderer.invoke('workspaces:markActive', workspaceId),
+  // One-directional main -> renderer push: the "Save current workspace"
+  // hotkey (or its tray-menu companion) fired — open the review screen.
+  // No payload; the renderer calls detectCurrentWorkspace() itself in
+  // response. Same unsubscribe-function shape as onRestoreProgress above.
+  onSaveCurrentWorkspaceTriggered: (callback: () => void): (() => void) => {
+    const listener = (): void => callback();
+    ipcRenderer.on(SAVE_CURRENT_WORKSPACE_TRIGGERED_CHANNEL, listener);
+    return () => ipcRenderer.removeListener(SAVE_CURRENT_WORKSPACE_TRIGGERED_CHANNEL, listener);
+  },
 };
 
 export type WorkspaceLauncherApi = typeof api;

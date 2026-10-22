@@ -9,7 +9,8 @@
     ".": "./src/index.ts",
     "./write-file-atomic": "./src/write-file-atomic.ts",
     "./vscode-restore": "./src/vscode-restore.ts",
-    "./restore-progress": "./src/restore-progress.ts"
+    "./restore-progress": "./src/restore-progress.ts",
+    "./save-current-workspace-channel": "./src/save-current-workspace-channel.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

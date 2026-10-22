@@ -5,6 +5,7 @@ import { Icon } from './icons';
 import { Sidebar } from './components/Sidebar';
 import { Detail } from './components/Detail';
 import { WorkspaceFormModal } from './components/WorkspaceFormModal';
+import { SaveCurrentWorkspaceModal } from './components/SaveCurrentWorkspaceModal';
 import { DeleteWorkspaceConfirm } from './components/DeleteWorkspaceConfirm';
 import { SettingsModal } from './components/SettingsModal';
 import { ErrorsModal } from './components/ErrorsModal';
@@ -32,6 +33,7 @@ export function App(): JSX.Element {
   const [workspaces, setWorkspaces] = useState<WorkspaceDisplay[]>([]);
   const [activeId, setActiveId] = useState('');
   const [isCreateModalOpen, setCreateModalOpen] = useState(false);
+  const [isSaveCurrentModalOpen, setSaveCurrentModalOpen] = useState(false);
   const [editingWorkspace, setEditingWorkspace] = useState<WorkspaceDisplay | null>(null);
   const [deletingWorkspace, setDeletingWorkspace] = useState<WorkspaceDisplay | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -84,6 +86,16 @@ export function App(): JSX.Element {
   useEffect(() => {
     void refreshWorkspaces();
   }, [refreshWorkspaces]);
+
+  // The standalone "Save current workspace" hotkey (or its tray-menu
+  // companion) fired in the main process — open the review screen.
+  // No payload: SaveCurrentWorkspaceModal fetches the actual detection
+  // draft itself once it opens.
+  useEffect(() => {
+    return window.api.onSaveCurrentWorkspaceTriggered(() => {
+      setSaveCurrentModalOpen(true);
+    });
+  }, []);
 
   // A workspace's `active` badge (intent + liveness, see
   // WCs/WC__workspace-activity.md) can go stale the moment the user
@@ -193,6 +205,9 @@ export function App(): JSX.Element {
           onNewWorkspace={() => {
             setCreateModalOpen(true);
           }}
+          onSaveCurrentWorkspace={() => {
+            setSaveCurrentModalOpen(true);
+          }}
           onEditWorkspace={setEditingWorkspace}
           onDeleteWorkspace={setDeletingWorkspace}
           onOpenSettings={() => {
@@ -233,6 +248,19 @@ export function App(): JSX.Element {
           void refreshWorkspaces(config.id);
         }}
         onShowErrorCode={setErrorsModalCode}
+      />
+
+      <SaveCurrentWorkspaceModal
+        open={isSaveCurrentModalOpen}
+        onClose={() => {
+          setSaveCurrentModalOpen(false);
+        }}
+        onSaved={(config: WorkspaceConfig) => {
+          setSaveCurrentModalOpen(false);
+          void refreshWorkspaces(config.id);
+        }}
+        onShowErrorCode={setErrorsModalCode}
+        workspaces={workspaces}
       />
 
       <DeleteWorkspaceConfirm

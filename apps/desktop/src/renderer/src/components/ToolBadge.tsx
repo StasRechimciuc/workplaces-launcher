@@ -65,15 +65,31 @@ export function ToolBadge({ type, icon, color, size, chipClassName, params }: To
     );
   }
 
+  // A real logo image (above) sits inside a NEUTRAL outer frame
+  // (bg-bg-elevated) with its own built-in padding/transparency around
+  // the actual colored artwork — a small amount of real color on a
+  // mostly-empty chip. Scaling the Icon glyph down alone doesn't match
+  // that: a solid tinted background still fills the ENTIRE chip edge to
+  // edge regardless of the glyph's own size, so it reads as one big
+  // flat block of color next to the real logos' much airier chips
+  // (confirmed directly — still true after a smaller-glyph-only
+  // attempt). Fixed by mirroring the real structure instead: the SAME
+  // neutral outer frame, with the tinted color confined to a smaller
+  // inset shape behind the glyph — matching how much actual colored
+  // "stuff" a typical real logo occupies within the same chip size.
   return (
     <span
       className={cn(
-        'flex shrink-0 items-center justify-center rounded-sm',
-        toolBadgeClasses(color),
+        'flex shrink-0 items-center justify-center overflow-hidden rounded-sm bg-bg-elevated',
         chipClassName,
       )}
     >
-      <Icon name={icon} size={size} />
+      <span
+        className={cn('flex items-center justify-center rounded-[30%]', toolBadgeClasses(color))}
+        style={{ width: '68%', height: '68%' }}
+      >
+        <Icon name={icon} size={size * 0.62} />
+      </span>
     </span>
   );
 }

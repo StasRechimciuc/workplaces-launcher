@@ -5,15 +5,20 @@ import { join } from 'node:path';
 import { ERROR_CODES, RESTORE_PROGRESS_CHANNEL } from '@workspace-launcher/shared';
 import { app, dialog, ipcMain } from 'electron';
 import {
+  clearAppHotkey,
   clearWorkspaceHotkey,
   closeWorkspaceStep,
   createWorkspace,
   deleteWorkspace,
+  detectCurrentWorkspace,
+  getAppHotkey,
   getLaunchOnLogin,
   listWorkspaces,
+  markWorkspaceActive,
   registerIpcHandlers,
   restoreWorkspace,
   retryWorkspaceStep,
+  setAppHotkey,
   setLaunchOnLogin,
   setWorkspaceHotkey,
   switchWorkspace,
@@ -23,6 +28,7 @@ import * as processControl from '../platform/macos/process-control';
 import * as activityStore from '../orchestrator/workspace-activity-store';
 import * as hotkeyService from '../orchestrator/hotkey-service';
 import * as hotkeysStore from '../orchestrator/workspace-hotkeys-store';
+import * as appHotkeysStore from '../orchestrator/app-hotkeys-store';
 import { settingsStore } from '../settings/store';
 import { registerBuiltInTools } from '../tools';
 import { getPlatformLauncher } from '../platform';
@@ -72,8 +78,9 @@ vi.mock('../orchestrator/workspace-activity-store', () => ({
 // it (e.g. setWorkspaceHotkey rolling back on a reported failure)
 // without a real globalShortcut registration.
 vi.mock('../orchestrator/hotkey-service', () => ({
-  syncHotkeys: vi.fn(() => ({ failed: [] })),
+  syncHotkeys: vi.fn(() => ({ failed: [], appHotkeyFailed: false })),
   getFailedHotkeyBindings: vi.fn(() => []),
+  getAppHotkeyFailed: vi.fn(() => false),
 }));
 
 // workspace-hotkeys-store.ts's own get/set/clear logic is covered
@@ -84,6 +91,24 @@ vi.mock('../orchestrator/workspace-hotkeys-store', () => ({
   getAllHotkeyBindings: vi.fn(() => ({})),
   setHotkeyBinding: vi.fn(),
   clearHotkeyBinding: vi.fn(),
+}));
+
+// app-hotkeys-store.ts's own get/set/clear logic is covered directly
+// by app-hotkeys-store.test.ts — same electron-store hazard as
+// workspace-hotkeys-store.ts above.
+vi.mock('../orchestrator/app-hotkeys-store', () => ({
+  getSaveCurrentWorkspaceHotkey: vi.fn(() => undefined),
+  setSaveCurrentWorkspaceHotkey: vi.fn(),
+  clearSaveCurrentWorkspaceHotkey: vi.fn(),
+}));
+
+// workspace-detection.ts's own detection/matching logic is covered
+// directly by workspace-detection.test.ts; mocked wholesale here so
+// these tests can assert handlers.ts's thin detectCurrentWorkspace
+// wrapper without a real macOS detection pass (lsappinfo/osascript/ps/
+// lsof calls, none of which belong in an IPC-handler-shape test).
+vi.mock('../orchestrator/workspace-detection', () => ({
+  detectCurrentWorkspaceDraft: vi.fn(async () => ({ status: 'ready', steps: [], unmatched: [], issues: [] })),
 }));
 
 // settings/store.ts constructs an electron-store Store at module load
@@ -237,12 +262,16 @@ beforeEach(async () => {
   vi.mocked(app.getLoginItemSettings).mockReset().mockReturnValue({ openAtLogin: false } as never);
   vi.mocked(app.setLoginItemSettings).mockReset();
   setAppPackaged(true);
-  vi.mocked(hotkeyService.syncHotkeys).mockReset().mockReturnValue({ failed: [] });
+  vi.mocked(hotkeyService.syncHotkeys).mockReset().mockReturnValue({ failed: [], appHotkeyFailed: false });
   vi.mocked(hotkeyService.getFailedHotkeyBindings).mockReset().mockReturnValue([]);
+  vi.mocked(hotkeyService.getAppHotkeyFailed).mockReset().mockReturnValue(false);
   vi.mocked(hotkeysStore.getHotkeyBinding).mockReset().mockReturnValue(undefined);
   vi.mocked(hotkeysStore.getAllHotkeyBindings).mockReset().mockReturnValue({});
   vi.mocked(hotkeysStore.setHotkeyBinding).mockReset();
   vi.mocked(hotkeysStore.clearHotkeyBinding).mockReset();
+  vi.mocked(appHotkeysStore.getSaveCurrentWorkspaceHotkey).mockReset().mockReturnValue(undefined);
+  vi.mocked(appHotkeysStore.setSaveCurrentWorkspaceHotkey).mockReset();
+  vi.mocked(appHotkeysStore.clearSaveCurrentWorkspaceHotkey).mockReset();
   vi.mocked(settingsStore.get).mockReset();
   vi.mocked(settingsStore.set).mockReset();
 });
@@ -1064,7 +1093,7 @@ describe('setWorkspaceHotkey', () => {
     const created = await createWorkspace({ name: 'Hotkey target', steps: [] });
     if (!created.success) throw new Error('setup failed');
     vi.mocked(hotkeysStore.getHotkeyBinding).mockReturnValue('CommandOrControl+Alt+9');
-    vi.mocked(hotkeyService.syncHotkeys).mockReturnValueOnce({ failed: [created.config.id] });
+    vi.mocked(hotkeyService.syncHotkeys).mockReturnValueOnce({ failed: [created.config.id], appHotkeyFailed: false });
 
     const result = await setWorkspaceHotkey(created.config.id, 'CommandOrControl+Alt+1');
 
@@ -1083,12 +1112,31 @@ describe('setWorkspaceHotkey', () => {
     const created = await createWorkspace({ name: 'Hotkey target', steps: [] });
     if (!created.success) throw new Error('setup failed');
     vi.mocked(hotkeysStore.getHotkeyBinding).mockReturnValue(undefined);
-    vi.mocked(hotkeyService.syncHotkeys).mockReturnValueOnce({ failed: [created.config.id] });
+    vi.mocked(hotkeyService.syncHotkeys).mockReturnValueOnce({ failed: [created.config.id], appHotkeyFailed: false });
 
     const result = await setWorkspaceHotkey(created.config.id, 'CommandOrControl+Alt+1');
 
     expect(result).toMatchObject({ success: false, code: ERROR_CODES.HOTKEY_ALREADY_IN_USE.code });
     expect(hotkeysStore.clearHotkeyBinding).toHaveBeenCalledWith(created.config.id);
+  });
+
+  it('rejects a combo already bound to the app-level "Save current workspace" hotkey, without touching the store', async () => {
+    const created = await createWorkspace({ name: 'Hotkey target', steps: [] });
+    if (!created.success) throw new Error('setup failed');
+    vi.mocked(appHotkeysStore.getSaveCurrentWorkspaceHotkey).mockReturnValue('CommandOrControl+Alt+1');
+
+    const result = await setWorkspaceHotkey(created.config.id, 'CommandOrControl+Alt+1');
+
+    // Electron's globalShortcut.register() never reports a same-process
+    // double-registration as a failure — this cross-store collision can
+    // ONLY be caught by this explicit, named-up-front check, never by
+    // syncHotkeys()'s own OS-level failure detection.
+    expect(result).toEqual({
+      success: false,
+      error: 'Already bound to "Save current workspace".',
+      code: ERROR_CODES.HOTKEY_ALREADY_IN_USE.code,
+    });
+    expect(hotkeysStore.setHotkeyBinding).not.toHaveBeenCalled();
   });
 });
 
@@ -1101,6 +1149,99 @@ describe('clearWorkspaceHotkey', () => {
     clearWorkspaceHotkey('ws-1');
     expect(hotkeysStore.clearHotkeyBinding).toHaveBeenCalledWith('ws-1');
     expect(hotkeyService.syncHotkeys).toHaveBeenCalled();
+  });
+});
+
+describe('setAppHotkey', () => {
+  it('rejects a malformed accelerator without ever touching the store', async () => {
+    const result = await setAppHotkey('not a real accelerator');
+
+    expect(result).toMatchObject({ success: false, code: ERROR_CODES.HOTKEY_INVALID.code });
+    expect(appHotkeysStore.setSaveCurrentWorkspaceHotkey).not.toHaveBeenCalled();
+  });
+
+  it('allows a Shift-containing combo — there is no derived variant to reserve it for', async () => {
+    const result = await setAppHotkey('CommandOrControl+Shift+S');
+    expect(result).toEqual({ success: true });
+  });
+
+  it('persists and syncs a well-formed combo', async () => {
+    const result = await setAppHotkey('CommandOrControl+Alt+S');
+
+    expect(result).toEqual({ success: true });
+    expect(appHotkeysStore.setSaveCurrentWorkspaceHotkey).toHaveBeenCalledWith('CommandOrControl+Alt+S');
+    expect(hotkeyService.syncHotkeys).toHaveBeenCalled();
+  });
+
+  it('rejects a combo already bound to a workspace, naming it, without touching the store', async () => {
+    const existing = await createWorkspace({ name: 'Existing workspace', steps: [] });
+    if (!existing.success) throw new Error('setup failed');
+    vi.mocked(hotkeysStore.getAllHotkeyBindings).mockReturnValue({
+      [existing.config.id]: 'CommandOrControl+Alt+S',
+    });
+
+    const result = await setAppHotkey('CommandOrControl+Alt+S');
+
+    expect(result).toEqual({
+      success: false,
+      error: 'Already bound to "Existing workspace".',
+      code: ERROR_CODES.HOTKEY_ALREADY_IN_USE.code,
+    });
+    expect(appHotkeysStore.setSaveCurrentWorkspaceHotkey).not.toHaveBeenCalled();
+  });
+
+  it('rolls back to the PREVIOUS binding when the new one fails to register', async () => {
+    vi.mocked(appHotkeysStore.getSaveCurrentWorkspaceHotkey).mockReturnValue('CommandOrControl+Alt+9');
+    vi.mocked(hotkeyService.syncHotkeys).mockReturnValueOnce({ failed: [], appHotkeyFailed: true });
+
+    const result = await setAppHotkey('CommandOrControl+Alt+S');
+
+    expect(result).toMatchObject({ success: false, code: ERROR_CODES.HOTKEY_ALREADY_IN_USE.code });
+    expect(appHotkeysStore.setSaveCurrentWorkspaceHotkey).toHaveBeenLastCalledWith('CommandOrControl+Alt+9');
+    expect(appHotkeysStore.clearSaveCurrentWorkspaceHotkey).not.toHaveBeenCalled();
+    expect(hotkeyService.syncHotkeys).toHaveBeenCalledTimes(2);
+  });
+
+  it('rolls back to NO binding when there was none before and the new one fails', async () => {
+    vi.mocked(appHotkeysStore.getSaveCurrentWorkspaceHotkey).mockReturnValue(undefined);
+    vi.mocked(hotkeyService.syncHotkeys).mockReturnValueOnce({ failed: [], appHotkeyFailed: true });
+
+    const result = await setAppHotkey('CommandOrControl+Alt+S');
+
+    expect(result).toMatchObject({ success: false, code: ERROR_CODES.HOTKEY_ALREADY_IN_USE.code });
+    expect(appHotkeysStore.clearSaveCurrentWorkspaceHotkey).toHaveBeenCalled();
+  });
+});
+
+describe('clearAppHotkey / getAppHotkey', () => {
+  it('clears the binding and re-syncs', () => {
+    clearAppHotkey();
+    expect(appHotkeysStore.clearSaveCurrentWorkspaceHotkey).toHaveBeenCalled();
+    expect(hotkeyService.syncHotkeys).toHaveBeenCalled();
+  });
+
+  it('reads through to the store', () => {
+    vi.mocked(appHotkeysStore.getSaveCurrentWorkspaceHotkey).mockReturnValue('CommandOrControl+Alt+S');
+    expect(getAppHotkey()).toBe('CommandOrControl+Alt+S');
+  });
+});
+
+describe('detectCurrentWorkspace', () => {
+  it('delegates to workspace-detection.ts unchanged', async () => {
+    const result = await detectCurrentWorkspace();
+    expect(result).toEqual({ status: 'ready', steps: [], unmatched: [], issues: [] });
+  });
+});
+
+describe('markWorkspaceActive', () => {
+  it('throws for a non-string/empty workspace id', () => {
+    expect(() => markWorkspaceActive(123)).toThrow(/workspace id/);
+    expect(() => markWorkspaceActive('')).toThrow(/workspace id/);
+  });
+
+  it('sets intent active for the given id', () => {
+    markWorkspaceActive('ws-1');
+    expect(activityStore.setIntentActive).toHaveBeenCalledWith('ws-1', true);
   });
 });
 
@@ -1293,5 +1434,50 @@ describe('registerIpcHandlers — app:getIcon', () => {
     const handler = getRegisteredAppIconHandler();
 
     expect(await handler({}, '/Applications/Gone.app')).toBeNull();
+  });
+});
+
+describe('registerIpcHandlers — app-level hotkey + detectCurrent channels', () => {
+  function getRegisteredHandler(channel: string): (...args: unknown[]) => unknown {
+    registerIpcHandlers();
+    const call = vi.mocked(ipcMain.handle).mock.calls.find(([ch]) => ch === channel);
+    if (!call) throw new Error(`${channel} was never registered`);
+    return call[1] as never;
+  }
+
+  it('wires hotkeys:getAppHotkey to getAppHotkey', async () => {
+    vi.mocked(appHotkeysStore.getSaveCurrentWorkspaceHotkey).mockReturnValue('CommandOrControl+Alt+S');
+    const handler = getRegisteredHandler('hotkeys:getAppHotkey');
+    expect(await handler({})).toBe('CommandOrControl+Alt+S');
+  });
+
+  it('wires hotkeys:setAppHotkey to setAppHotkey', async () => {
+    const handler = getRegisteredHandler('hotkeys:setAppHotkey');
+    const result = await handler({}, 'CommandOrControl+Alt+S');
+    expect(result).toEqual({ success: true });
+    expect(appHotkeysStore.setSaveCurrentWorkspaceHotkey).toHaveBeenCalledWith('CommandOrControl+Alt+S');
+  });
+
+  it('wires hotkeys:clearAppHotkey to clearAppHotkey', async () => {
+    const handler = getRegisteredHandler('hotkeys:clearAppHotkey');
+    await handler({});
+    expect(appHotkeysStore.clearSaveCurrentWorkspaceHotkey).toHaveBeenCalled();
+  });
+
+  it('wires hotkeys:getAppHotkeyFailed to getAppHotkeyFailed', async () => {
+    vi.mocked(hotkeyService.getAppHotkeyFailed).mockReturnValue(true);
+    const handler = getRegisteredHandler('hotkeys:getAppHotkeyFailed');
+    expect(await handler({})).toBe(true);
+  });
+
+  it('wires workspaces:detectCurrent to detectCurrentWorkspaceDraft', async () => {
+    const handler = getRegisteredHandler('workspaces:detectCurrent');
+    expect(await handler({})).toEqual({ status: 'ready', steps: [], unmatched: [], issues: [] });
+  });
+
+  it('wires workspaces:markActive to markWorkspaceActive', async () => {
+    const handler = getRegisteredHandler('workspaces:markActive');
+    await handler({}, 'ws-1');
+    expect(activityStore.setIntentActive).toHaveBeenCalledWith('ws-1', true);
   });
 });

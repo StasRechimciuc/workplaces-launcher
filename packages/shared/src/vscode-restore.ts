@@ -197,6 +197,186 @@ export async function readPendingVscodeRestore(
   return { status: 'found', entry: result.data, filePath };
 }
 
+/**
+ * The reverse direction of the handoff above: the extension reports
+ * which folder a window has open, the desktop app reads it — for "Save
+ * my current workspace" detection (WCs/WC__save-current-workspace.md),
+ * which needs a live "this VS Code window is open on this real folder"
+ * signal, not just "VS Code is running somewhere." Mirrors the pending-
+ * restore file's own hash-keyed naming exactly: VS Code can't open the
+ * same folder in two windows simultaneously, so a folder-path-derived
+ * key is already a correct per-window key, with no extra id scheme
+ * needed and no risk of two open windows' files colliding.
+ */
+export const CURRENT_WINDOW_STATE_VERSION = 1 as const;
+
+/**
+ * How often the extension refreshes its "I'm still open" file while
+ * running (extension.ts) — not a performance tuning knob, but what
+ * bounds CURRENT_WINDOW_STATE_TTL_MS below. Refreshed on a timer, not
+ * only on focus-change: a window the user never defocuses (works in it
+ * for hours without alt-tabbing away) must not go stale just because no
+ * focus event ever fired again.
+ */
+export const CURRENT_WINDOW_STATE_HEARTBEAT_MS = 60 * 1000;
+
+/**
+ * A heartbeat older than this is treated as stale — the window it
+ * described may have closed, including via a crash or force-quit,
+ * neither of which is guaranteed to run deactivate()'s own best-effort
+ * cleanup below. 3x the heartbeat interval tolerates a slow or
+ * momentarily-busy extension host missing a beat or two without a false
+ * "closed" read.
+ */
+const CURRENT_WINDOW_STATE_TTL_MS = CURRENT_WINDOW_STATE_HEARTBEAT_MS * 3;
+
+export function getCurrentWindowStateDir(): string {
+  return join(getAppDataRootDir(), 'vscode-current-state');
+}
+
+function getCurrentWindowStateFilePath(absoluteFolderPath: string): string {
+  const hash = createHash('sha256')
+    .update(canonicalizeFolderPath(absoluteFolderPath))
+    .digest('hex')
+    .slice(0, 32);
+  return join(getCurrentWindowStateDir(), `state-${hash}.json`);
+}
+
+// folderPath is stored in the content, not just encoded (one-way) into
+// the filename hash — detection needs to ENUMERATE which folders are
+// currently open (listOpenWindowFolders below), not just confirm a
+// single candidate it already has a path for, and a hash can't be
+// reversed back into the path that produced it.
+const CurrentWindowStateSchema = z.object({
+  version: z.literal(CURRENT_WINDOW_STATE_VERSION),
+  folderPath: z.string(),
+  updatedAt: z.string(),
+});
+
+/**
+ * Called by the extension on activation and on its heartbeat timer.
+ * Never throws: a failed write just means this window won't be
+ * recognized by detection (it falls back to a generic 'app' step),
+ * never a broken extension.
+ */
+export async function writeCurrentWindowState(absoluteFolderPath: string): Promise<void> {
+  const dir = getCurrentWindowStateDir();
+  await mkdir(dir, { recursive: true });
+  const filePath = getCurrentWindowStateFilePath(absoluteFolderPath);
+  const entry = {
+    version: CURRENT_WINDOW_STATE_VERSION,
+    folderPath: absoluteFolderPath,
+    updatedAt: new Date().toISOString(),
+  };
+  await writeFileAtomic(filePath, JSON.stringify(entry));
+}
+
+export type CurrentWindowStateResult =
+  | { status: 'open'; updatedAt: string }
+  | { status: 'stale' }
+  | { status: 'none' };
+
+function parseCurrentWindowStateFile(
+  raw: string,
+): { folderPath: string; updatedAt: string } | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  const result = CurrentWindowStateSchema.safeParse(parsed);
+  return result.success ? result.data : undefined;
+}
+
+function isFreshHeartbeat(updatedAt: string): boolean {
+  const ageMs = Date.now() - new Date(updatedAt).getTime();
+  return Number.isFinite(ageMs) && ageMs <= CURRENT_WINDOW_STATE_TTL_MS;
+}
+
+/**
+ * Read by the desktop app for a single, already-known candidate folder.
+ * Degrades every failure (missing file, corrupt JSON, unrecognized
+ * version) to 'none' — the same fail-soft contract as every other
+ * best-effort detection read in this feature (e.g. chrome-profiles.ts's
+ * getLastUsedChromeProfileFolder) — a window this can't confidently
+ * confirm is open just falls back to the generic 'app' step, never a
+ * thrown error mid-detection.
+ */
+export async function readCurrentWindowState(
+  absoluteFolderPath: string,
+): Promise<CurrentWindowStateResult> {
+  const filePath = getCurrentWindowStateFilePath(absoluteFolderPath);
+
+  let raw: string;
+  try {
+    raw = await readFile(filePath, 'utf-8');
+  } catch {
+    return { status: 'none' };
+  }
+
+  const entry = parseCurrentWindowStateFile(raw);
+  if (!entry) {
+    return { status: 'none' };
+  }
+
+  return isFreshHeartbeat(entry.updatedAt)
+    ? { status: 'open', updatedAt: entry.updatedAt }
+    : { status: 'stale' };
+}
+
+/**
+ * Every folder currently reported open by a live (non-stale) VS Code
+ * window — what "Save my current workspace" detection actually needs:
+ * discovering which folders are open, not just confirming one it
+ * already has a path for. Sweeps every file in the directory; a
+ * corrupt or stale entry is silently skipped, never thrown — the same
+ * fail-soft contract as readCurrentWindowState. One entry per window by
+ * construction (VS Code can't open the same folder in two windows at
+ * once), so no further de-duplication is needed.
+ */
+export async function listOpenWindowFolders(): Promise<string[]> {
+  let files: string[];
+  try {
+    files = await readdir(getCurrentWindowStateDir());
+  } catch {
+    return [];
+  }
+
+  const folders: string[] = [];
+  for (const file of files) {
+    if (!file.endsWith('.json')) continue;
+    let raw: string;
+    try {
+      raw = await readFile(join(getCurrentWindowStateDir(), file), 'utf-8');
+    } catch {
+      continue;
+    }
+    const entry = parseCurrentWindowStateFile(raw);
+    if (entry && isFreshHeartbeat(entry.updatedAt)) {
+      folders.push(entry.folderPath);
+    }
+  }
+  return folders;
+}
+
+/**
+ * Best-effort cleanup, called by the extension's deactivate() — NOT
+ * guaranteed to run on a crash/force-quit (the TTL above is the real
+ * safety net; this is only tidiness for the ordinary close/reload path).
+ * Idempotent — deleting an already-gone file is not an error.
+ */
+export async function deleteCurrentWindowState(absoluteFolderPath: string): Promise<void> {
+  const filePath = getCurrentWindowStateFilePath(absoluteFolderPath);
+  try {
+    await unlink(filePath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw err;
+    }
+  }
+}
+
 /** Idempotent — deleting an already-gone file is not an error. */
 export async function deletePendingVscodeRestore(absoluteFolderPath: string): Promise<void> {
   const filePath = getPendingRestoreFilePath(absoluteFolderPath);

@@ -32,6 +32,14 @@ interface TimelineStepProps {
   isSaving: boolean;
   saveError: { message: string; code?: string } | null;
   onShowErrorCode: (code: string) => void;
+  /** Removes this step from the workspace entirely — a quick, direct
+   * action (no confirmation dialog), matching this app's existing
+   * precedent for removing a single item within an already-editing
+   * context (WorkspaceFormModal's removeTool, EditableStringList's own
+   * remove row) rather than the heavier, confirmed "Delete workspace"
+   * flow, which discards the whole workspace with no way back. */
+  onRemove: () => void;
+  isRemoving: boolean;
 }
 
 export function TimelineStep({
@@ -51,6 +59,8 @@ export function TimelineStep({
   isSaving,
   saveError,
   onShowErrorCode,
+  onRemove,
+  isRemoving,
 }: TimelineStepProps): JSX.Element {
   // Inline quick-edit reuses the exact same per-tool field component
   // the "Edit workspace" modal uses (real pickers — Chrome's profile
@@ -110,30 +120,55 @@ export function TimelineStep({
             <Icon name="clock" size={10} />
             {stepLaunchTimeLabel(tool.launchTime)}
           </span>
-          {hasExpand && Fields && (
-            // Editable rows (vscode/chrome/spotify) get a pencil, shown
-            // only on hover — a chevron reads as "expand to view," but
-            // this row expands into a real edit form, and the
-            // always-visible chevron it replaced cluttered every row
-            // with an affordance that's only relevant while hovering.
-            <span className="ml-auto flex shrink-0 items-center text-text-faint opacity-0 transition-opacity duration-140 group-hover:opacity-100">
-              <Icon name="pencil" size={13} />
-            </span>
-          )}
-          {hasExpand && !Fields && (
-            // Static read-only detail rows (a type with nothing
-            // editable) are a plain "view details" expand — the
-            // chevron's meaning still holds here, so it stays as it
-            // was: always visible, rotating open.
-            <span
-              className={cn(
-                'ml-auto flex shrink-0 items-center text-text-faint transition-transform duration-140',
-                isOpen && 'rotate-90',
-              )}
+          <span className="ml-auto flex shrink-0 items-center gap-0.5">
+            {/* Always available, any step type — shown only on hover,
+                same reveal convention as the pencil below, so an
+                ordinary row doesn't read as cluttered/deletable by
+                default. */}
+            <button
+              type="button"
+              aria-label={`Remove ${tool.name}`}
+              disabled={isRemoving}
+              className="flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-[5px] text-text-faint opacity-0 transition-opacity duration-140 hover:bg-bg-hover hover:text-danger group-hover:opacity-100 disabled:pointer-events-none disabled:opacity-50"
+              onClick={(e) => {
+                // Must never also trigger the row's own onToggle
+                // (expand/collapse) — the two are independent actions
+                // sharing one clickable header.
+                e.stopPropagation();
+                onRemove();
+              }}
             >
-              <Icon name="chevronRight" size={13} />
-            </span>
-          )}
+              <Icon
+                name={isRemoving ? 'refresh' : 'trash'}
+                size={13}
+                {...(isRemoving ? { className: 'animate-spin' } : {})}
+              />
+            </button>
+            {hasExpand && Fields && (
+              // Editable rows (vscode/chrome/spotify) get a pencil, shown
+              // only on hover — a chevron reads as "expand to view," but
+              // this row expands into a real edit form, and the
+              // always-visible chevron it replaced cluttered every row
+              // with an affordance that's only relevant while hovering.
+              <span className="flex shrink-0 items-center text-text-faint opacity-0 transition-opacity duration-140 group-hover:opacity-100">
+                <Icon name="pencil" size={13} />
+              </span>
+            )}
+            {hasExpand && !Fields && (
+              // Static read-only detail rows (a type with nothing
+              // editable) are a plain "view details" expand — the
+              // chevron's meaning still holds here, so it stays as it
+              // was: always visible, rotating open.
+              <span
+                className={cn(
+                  'flex shrink-0 items-center text-text-faint transition-transform duration-140',
+                  isOpen && 'rotate-90',
+                )}
+              >
+                <Icon name="chevronRight" size={13} />
+              </span>
+            )}
+          </span>
         </div>
         <p className="mt-1.25 ml-9.5 text-[12.5px] leading-[1.4] text-text-muted">{tool.detail}</p>
 

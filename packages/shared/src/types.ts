@@ -130,3 +130,55 @@ export type GetLaunchOnLoginResult = { success: true; enabled: boolean };
 export type SetLaunchOnLoginResult =
   | { success: true }
   | { success: false; error: string; code: string };
+
+/**
+ * One detected step proposed for "Save my current workspace" (see
+ * WCs/WC__save-current-workspace.md) — `type`/`params` are already the
+ * exact WorkspaceStep shape this would save as if accepted unedited.
+ * `label` is a short, human-readable summary for the review screen,
+ * computed once at detection time rather than re-derived in the
+ * renderer a second time. `caveat`, when present, must be shown on the
+ * review screen, never silently dropped — it's how a best-effort or
+ * partial detection (an idle terminal with no command, an unresolved
+ * Chrome profile, a VS Code window whose folder couldn't be confirmed)
+ * stays honest about what it actually found.
+ */
+export interface DetectedStepDraft {
+  type: string;
+  params: Record<string, unknown>;
+  label: string;
+  caveat?: string;
+}
+
+/**
+ * A running, foreground app that matched no known step type and had no
+ * usable path to fall back to a generic 'app' step with either (the
+ * overwhelmingly rare case — virtually every real foreground app has a
+ * resolvable bundle path). Shown on the review screen, never silently
+ * dropped, so it's visible signal of real detection gaps rather than
+ * vanishing.
+ */
+export interface UnmatchedRunningApp {
+  name: string;
+  bundlePath?: string;
+}
+
+/**
+ * Result of a "Save my current workspace" detection pass.
+ * `'blocked'` means a Restore/Switch/Close was already in progress when
+ * detection was requested — scanning mid-transition would capture a
+ * half-settled environment, so nothing was scanned at all, not a
+ * partial/wrong result.
+ */
+export type DetectWorkspaceDraftResult =
+  | { status: 'blocked' }
+  | {
+      status: 'ready';
+      steps: DetectedStepDraft[];
+      unmatched: UnmatchedRunningApp[];
+      /** Detection-wide problems worth naming on the review screen —
+       * e.g. "Terminal is open, but its windows couldn't be read" (a
+       * systemic failure, like a missing Automation permission) — as
+       * distinct from a single step's own `caveat` above. */
+      issues: string[];
+    };

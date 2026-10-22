@@ -16,6 +16,7 @@ interface SidebarProps {
   activeId: string;
   onSelect: (id: string) => void;
   onNewWorkspace: () => void;
+  onSaveCurrentWorkspace: () => void;
   onEditWorkspace: (workspace: WorkspaceDisplay) => void;
   onDeleteWorkspace: (workspace: WorkspaceDisplay) => void;
   onOpenSettings: () => void;
@@ -29,6 +30,7 @@ export function Sidebar({
   activeId,
   onSelect,
   onNewWorkspace,
+  onSaveCurrentWorkspace,
   onEditWorkspace,
   onDeleteWorkspace,
   onOpenSettings,
@@ -63,6 +65,15 @@ export function Sidebar({
       >
         <Icon name="plus" size={14} />
         New workspace
+      </button>
+
+      <button
+        className="mt-1.5 flex h-7 w-full items-center justify-center gap-1.5 text-[11.5px] text-text-faint hover:text-text-muted"
+        type="button"
+        onClick={onSaveCurrentWorkspace}
+      >
+        <Icon name="refresh" size={12} />
+        Save current workspace
       </button>
 
       <div className="my-3 h-px shrink-0 bg-border" />

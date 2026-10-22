@@ -70,6 +70,19 @@ export function EditableStringList({
               onChange={(e) => {
                 updateAt(index, e.target.value);
               }}
+              onKeyDown={(e) => {
+                // Enter has no defined meaning for a single row in a
+                // list like this (unlike a dialog's one primary field) —
+                // left unstopped, it would bubble up and trigger the
+                // whole dialog's Save while the user is still mid-way
+                // through editing a command/URL list, which reads as the
+                // form randomly submitting itself. Dialog.tsx's own
+                // Enter-to-confirm handling is for the dialog's single
+                // primary field, not every nested input inside it.
+                if (e.key === 'Enter') {
+                  e.stopPropagation();
+                }
+              }}
             />
             <button
               type="button"

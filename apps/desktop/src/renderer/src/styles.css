@@ -163,7 +163,19 @@
   --color-bg-page: #f9f6ef;
   --color-bg: #f3efe7;
   --color-bg-sidebar: #ebe6da;
-  --color-bg-elevated: #fbf9f4;
+  /* Previously #fbf9f4 — brighter than even --color-bg-page, the
+     lightest background anywhere in this theme. That made every
+     bg-elevated surface read as a hard, stark-white slab against the
+     Sidebar's own warm beige (New workspace button, the selected
+     workspace row), confirmed directly from a screenshot — a real
+     visual bug, not a stylistic nitpick. The dark theme's own
+     equivalent pair (--color-bg-sidebar #101014 -> --color-bg-elevated
+     #17171d) is a SUBTLE lift, not a jump to the brightest tone in the
+     theme; this now mirrors that same proportional relationship
+     instead of inventing a separate, much harsher one just for light
+     mode. Dialogs are unaffected (DialogContent's own surface is
+     --color-bg, not this token).  */
+  --color-bg-elevated: #f1ece0;
   --color-bg-hover: rgba(128, 120, 100, 0.1);
   --color-bg-active: rgba(128, 120, 100, 0.16);
   --color-border: rgba(0, 0, 0, 0.08);

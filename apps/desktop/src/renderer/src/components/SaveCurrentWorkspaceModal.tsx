@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ERROR_CODES, getStepTypeDefinition, isToolAppKey } from '@workspace-launcher/shared';
 import type {
   CreateWorkspaceResult,
   DetectedStepDraft,
   DetectWorkspaceDraftResult,
+  UpdateWorkspaceResult,
   WorkspaceConfig,
   WorkspaceStep,
 } from '@workspace-launcher/shared';
@@ -15,7 +16,9 @@ import { useAppPathDetections } from '../lib/useAppPathDetections';
 import { useSpotifyConnection } from '../lib/useSpotifyConnection';
 import { getRecentProjectPaths } from '../lib/recent-project-paths';
 import { getRecentCommands } from '../lib/recent-commands';
+import { findDuplicateWorkspace } from '../lib/workspace-duplicate';
 import { getStepFieldsComponent, stepFieldsIsCollapsible } from './step-fields/registry';
+import { AppHotkeyControl } from './AppHotkeyControl';
 import { ErrorCode } from './ErrorCode';
 import { ToolBadge } from './ToolBadge';
 import { Dialog, DialogClose, DialogContent, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
@@ -92,6 +95,7 @@ export function SaveCurrentWorkspaceModal({
   // per row.
   const appPathDetections = useAppPathDetections();
   const spotify = useSpotifyConnection();
+  const isMac = window.api.platform === 'darwin';
 
   useEffect(() => {
     if (!open) return;
@@ -158,14 +162,32 @@ export function SaveCurrentWorkspaceModal({
     );
   }
 
+  const steps: WorkspaceStep[] = useMemo(() => {
+    if (!draft || draft.status !== 'ready') return [];
+    return draft.steps
+      .map((s, i) => ({ type: s.type, params: stepParams[i] ?? s.params }))
+      .filter((_, i) => checked.has(i));
+  }, [draft, stepParams, checked]);
+
+  // Re-detected every render from `name`/`steps` directly (not stored as
+  // its own state) — this is exactly what makes it self-correct the
+  // instant the user renames the workspace or unchecks a step, with no
+  // separate "now stale" tracking needed. Comfortable duplicate
+  // prevention, not a scary blocking error: surfaced as information with
+  // an easy alternative below, never a forced extra click to do what the
+  // user actually came here to do (see findDuplicateWorkspace's own
+  // "name AND steps, both" doc comment for why this only fires on a
+  // real, exact duplicate, never a loose name-only match).
+  const duplicateOf = useMemo(
+    () => (name.trim() ? findDuplicateWorkspace({ name, steps }, workspaces) : undefined),
+    [name, steps, workspaces],
+  );
+
   async function handleSave(): Promise<void> {
     if (!draft || draft.status !== 'ready') return;
     setPhase('saving');
     setSaveError(null);
     try {
-      const steps: WorkspaceStep[] = draft.steps
-        .map((s, i) => ({ type: s.type, params: stepParams[i] ?? s.params }))
-        .filter((_, i) => checked.has(i));
       const result: CreateWorkspaceResult = await window.api.createWorkspace({ name, steps });
       if (!isMountedRef.current) return;
       if (!result.success) {
@@ -193,6 +215,41 @@ export function SaveCurrentWorkspaceModal({
     }
   }
 
+  /** The duplicate banner's offered alternative: replace the existing
+   * identical workspace's steps instead of creating a second, literally
+   * identical copy of it — the actual fix for "I saved twice in a row,"
+   * not just a warning about it. */
+  async function handleUpdateExisting(): Promise<void> {
+    if (!duplicateOf) return;
+    setPhase('saving');
+    setSaveError(null);
+    try {
+      const result: UpdateWorkspaceResult = await window.api.updateWorkspace({
+        id: duplicateOf.id,
+        name,
+        steps,
+      });
+      if (!isMountedRef.current) return;
+      if (!result.success) {
+        setSaveError({ message: result.error, code: result.code });
+        setPhase('ready');
+        return;
+      }
+      await window.api.markWorkspaceActive(result.config.id).catch(() => {});
+      if (!isMountedRef.current) return;
+      onSaved(result.config);
+      onClose();
+    } catch (err) {
+      if (isMountedRef.current) {
+        setSaveError({
+          message: err instanceof Error ? err.message : String(err),
+          code: ERROR_CODES.SYSTEM_UNEXPECTED.code,
+        });
+        setPhase('ready');
+      }
+    }
+  }
+
   const isSaving = phase === 'saving';
 
   return (
@@ -202,7 +259,17 @@ export function SaveCurrentWorkspaceModal({
         if (!next && !isSaving) onClose();
       }}
     >
-      <DialogContent showCloseButton={false} className="w-150">
+      <DialogContent
+        showCloseButton={false}
+        className="w-150"
+        {...(draft && draft.status === 'ready' && !isSaving && draft.steps.length > 0
+          ? {
+              onEnterKey: () => {
+                void handleSave();
+              },
+            }
+          : {})}
+      >
         <DialogHeader>
           <DialogTitle>Save current workspace</DialogTitle>
           <DialogClose
@@ -214,6 +281,24 @@ export function SaveCurrentWorkspaceModal({
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto p-5">
+          {
+            // Right at the top, not buried in Settings (where this
+            // exact kind of control went unnoticed once already — see
+            // WorkspaceHotkeyControl's own history) — this is the
+            // trigger for the screen you're already looking at, so the
+            // control for it belongs right here. The SAME
+            // AppHotkeyControl instance Settings also renders (it
+            // already has its own label + description, built for a
+            // Settings row — reused as-is here, not re-wrapped in a
+            // second label) — both just read/write the one real
+            // persisted binding via window.api, so there's no separate
+            // state to keep "in sync": whichever one you look at next
+            // always reflects whatever the other last set.
+          }
+          <div className="mb-4.5 rounded-sm border border-border bg-bg-elevated px-2.75 py-2">
+            <AppHotkeyControl isMac={isMac} />
+          </div>
+
           {phase === 'loading' && (
             <div className="flex items-center gap-2 py-6 text-[12.5px] text-text-muted">
               <Icon name="refresh" size={14} className="animate-spin" />
@@ -231,14 +316,41 @@ export function SaveCurrentWorkspaceModal({
           {draft && draft.status === 'ready' && (
             <>
               <p className="mb-1.5 text-xs font-medium text-text-muted">Workspace name</p>
-              <input
-                className="mb-4.5 h-8.5 w-full rounded-sm border border-border-strong bg-bg-elevated px-2.75 text-[13px] text-text placeholder:text-text-faint focus:border-accent-border focus:outline-none"
-                type="text"
-                value={name}
-                onChange={(e) => {
-                  setName(e.target.value);
-                }}
-              />
+              <div className="mb-4.5">
+                <input
+                  className="h-8.5 w-full rounded-sm border border-border-strong bg-bg-elevated px-2.75 text-[13px] text-text placeholder:text-text-faint focus:border-accent-border focus:outline-none"
+                  type="text"
+                  value={name}
+                  onChange={(e) => {
+                    setName(e.target.value);
+                  }}
+                />
+                {duplicateOf && (
+                  // Informational, never blocking — the main Save button
+                  // below still saves a new workspace with one click
+                  // regardless, same as if this weren't shown at all.
+                  // Only fires on a real, exact duplicate (same name AND
+                  // same steps — see findDuplicateWorkspace's own doc
+                  // comment), never a loose name-only match, so this
+                  // can't nag over an intentional near-duplicate.
+                  <div className="mt-2.5 flex items-center gap-2 rounded-sm border border-border bg-bg-elevated px-2.5 py-2 text-[12px] text-text-muted">
+                    <Icon name="info" size={13} className="shrink-0 text-text-faint" />
+                    <span className="flex-1">
+                      Identical to the existing &ldquo;{duplicateOf.name}&rdquo; workspace.
+                    </span>
+                    <button
+                      type="button"
+                      disabled={isSaving}
+                      className="shrink-0 text-[11.5px] font-medium text-accent hover:underline disabled:pointer-events-none disabled:opacity-50"
+                      onClick={() => {
+                        void handleUpdateExisting();
+                      }}
+                    >
+                      Update it instead
+                    </button>
+                  </div>
+                )}
+              </div>
 
               {draft.issues.length > 0 && (
                 <div className="mb-3 flex flex-col gap-1.5">
@@ -405,7 +517,7 @@ export function SaveCurrentWorkspaceModal({
                 void handleSave();
               }}
             >
-              {isSaving ? 'Saving…' : 'Save workspace'}
+              {isSaving ? 'Saving…' : duplicateOf ? 'Save as new anyway' : 'Save workspace'}
             </button>
           )}
         </DialogFooter>

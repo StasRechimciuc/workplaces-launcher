@@ -129,7 +129,17 @@ export function TimelineStep({
               type="button"
               aria-label={`Remove ${tool.name}`}
               disabled={isRemoving}
-              className="flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-[5px] text-text-faint opacity-0 transition-opacity duration-140 hover:bg-bg-hover hover:text-danger group-hover:opacity-100 disabled:pointer-events-none disabled:opacity-50"
+              className={cn(
+                'flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-[5px] text-text-faint transition-opacity duration-140 hover:bg-bg-hover hover:text-danger disabled:pointer-events-none',
+                // Forced fully visible while removing, not left to
+                // group-hover — the mouse very plausibly isn't still
+                // over this row for the whole (async, IPC-round-trip)
+                // duration of a remove, and opacity-0 with no hover
+                // would make the spinner invisible the moment it moves
+                // away: no loading state at all, just a row that
+                // silently stops responding for a moment.
+                isRemoving ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
+              )}
               onClick={(e) => {
                 // Must never also trigger the row's own onToggle
                 // (expand/collapse) — the two are independent actions

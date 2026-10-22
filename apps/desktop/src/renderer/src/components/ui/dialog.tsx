@@ -41,12 +41,71 @@ function DialogOverlay({
   );
 }
 
+/**
+ * True when Enter pressed with this as the event target should trigger
+ * a dialog's primary "confirm" action (onEnterKey below) — i.e. nothing
+ * ELSE already has a well-defined native Enter behavior that would
+ * otherwise conflict with it. A focused `<button>` already activates
+ * itself on Enter (whichever one that is — Cancel, Close, or the
+ * confirm button itself all do the right thing natively, with no help
+ * needed here); a checkbox/radio's Enter is a no-op, not "submit"; a
+ * `<textarea>` needs Enter to insert a newline, not submit. Everything
+ * else (a plain text input, or no specific element focused at all —
+ * Radix's own default content focus) falls through to "yes, confirm."
+ *
+ * This is an opt-OUT model, not opt-in: ANY plain text input anywhere
+ * inside a dialog that wires onEnterKey submits on Enter by default,
+ * including one nested several levels down inside a repeating row
+ * (EditableStringList's own rows, terminal-fields.tsx's per-card
+ * working-directory field) or a search box inside an open dropdown
+ * (WorkspaceFormModal's Add-tool search) — both real, found-and-fixed
+ * cases, not hypothetical. A new nested text input anywhere inside a
+ * dialog that uses onEnterKey MUST explicitly stop Enter from
+ * bubbling (`if (e.key === 'Enter') e.stopPropagation();` on that
+ * input's own onKeyDown — see EditableStringList.tsx or
+ * terminal-fields.tsx for the exact pattern) unless "Enter here
+ * submits the whole dialog" is genuinely the intended behavior for
+ * that specific field. An opt-IN model (e.g. a dedicated marker
+ * attribute on just the one intended field) was considered instead and
+ * rejected: Radix's Dialog auto-focuses the first tabbable element on
+ * open (confirmed by reading @radix-ui/react-focus-scope's own
+ * source), never the content wrapper itself whenever any button exists
+ * inside — which every dialog using this prop has — so a
+ * container-focused fallback could never actually fire for a dialog
+ * like DeleteWorkspaceConfirm that has no text fields to mark at all.
+ */
+function isEnterConfirmTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return true;
+  if (target.tagName === 'BUTTON' || target.tagName === 'TEXTAREA') return false;
+  if (target instanceof HTMLInputElement && (target.type === 'checkbox' || target.type === 'radio')) {
+    return false;
+  }
+  return true;
+}
+
 function DialogContent({
   className,
   children,
   showCloseButton = true,
+  onEnterKey,
   ...props
-}: ComponentProps<typeof DialogPrimitive.Content> & { showCloseButton?: boolean }): JSX.Element {
+}: ComponentProps<typeof DialogPrimitive.Content> & {
+  showCloseButton?: boolean;
+  /**
+   * Fires on a plain Enter press (no Shift) inside this dialog, for a
+   * target with no conflicting native Enter behavior of its own (see
+   * isEnterConfirmTarget) — the dialog's single "primary action" (Save/
+   * Delete/Add/etc.), the Enter half of standard Esc-to-cancel/Enter-to-
+   * confirm dialog behavior. Escape-to-close needs no equivalent prop:
+   * Radix's Dialog already does that by default (this component's own
+   * original doc comment above). Deliberately NOT wired into
+   * lib/shortcuts.ts — this is baseline dialog behavior every dialog
+   * gets for free, not a user-configurable/overridable shortcut.
+   * Omitted entirely for a dialog with no single primary action
+   * (Settings, a pure viewer).
+   */
+  onEnterKey?: () => void;
+}): JSX.Element {
   return (
     <DialogPortal>
       <DialogOverlay />
@@ -61,6 +120,28 @@ function DialogContent({
           className,
         )}
         {...props}
+        onKeyDown={(e) => {
+          // {...props} is spread BEFORE this, deliberately — a plain
+          // prop placed after a spread always wins in JSX, so this is
+          // what actually runs regardless of whether a future caller
+          // ever passes its own onKeyDown too (chained below, not
+          // silently dropped).
+          props.onKeyDown?.(e);
+          if (
+            onEnterKey &&
+            !e.defaultPrevented &&
+            e.key === 'Enter' &&
+            !e.shiftKey &&
+            isEnterConfirmTarget(e.target)
+          ) {
+            // Prevented even though nothing here would otherwise act on
+            // a bare Enter — keeps this consistent with every other
+            // "Enter submits" control in the app rather than leaving it
+            // to chance for whatever's actually focused.
+            e.preventDefault();
+            onEnterKey();
+          }
+        }}
       >
         {children}
         {showCloseButton && (

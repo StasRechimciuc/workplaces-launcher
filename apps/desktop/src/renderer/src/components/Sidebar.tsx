@@ -58,23 +58,49 @@ export function Sidebar({
         </span>
       </div>
 
-      <button
-        className="flex h-10 w-full items-center justify-center gap-1.75 rounded-md border border-border-strong bg-bg-elevated text-[13px] font-semibold text-text transition-[transform,background-color,border-color] duration-150 hover:-translate-y-px hover:bg-bg-hover active:translate-y-0"
-        type="button"
-        onClick={onNewWorkspace}
-      >
-        <Icon name="plus" size={14} />
-        New workspace
-      </button>
-
-      <button
-        className="mt-1.5 flex h-7 w-full items-center justify-center gap-1.5 text-[11.5px] text-text-faint hover:text-text-muted"
-        type="button"
-        onClick={onSaveCurrentWorkspace}
-      >
-        <Icon name="refresh" size={12} />
-        Save current workspace
-      </button>
+      {
+        // "New workspace" and "Save current workspace" used to be two
+        // separate, always-visible buttons — both really just two
+        // different starting points for the same action ("make me a
+        // new workspace"), not two unrelated things. Now one split
+        // button: blank is the one-click default (what most people
+        // reach for most often), detect-from-current-state moves into
+        // its dropdown — still one click away, no longer competing for
+        // its own permanent slot. Same consolidation as the Restore
+        // split button in Detail.tsx, same direct founder feedback.
+      }
+      <div className="flex w-full items-stretch">
+        <button
+          className="flex h-10 flex-1 items-center justify-center gap-1.75 rounded-l-md border border-border-strong bg-bg-elevated text-[13px] font-semibold text-text transition-[background-color,border-color] duration-150 hover:bg-bg-hover"
+          type="button"
+          onClick={onNewWorkspace}
+        >
+          <Icon name="plus" size={14} />
+          New workspace
+        </button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              aria-label="More ways to create a workspace"
+              className="flex h-10 w-9 shrink-0 items-center justify-center rounded-r-md border border-l-0 border-border-strong bg-bg-elevated text-text-muted transition-[background-color,border-color] duration-150 hover:bg-bg-hover hover:text-text data-[state=open]:bg-bg-hover data-[state=open]:text-text"
+            >
+              <Icon name="chevronRight" size={13} className="rotate-90" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-76">
+            <DropdownMenuItem className="flex-col items-start gap-0.5 py-2" onSelect={onSaveCurrentWorkspace}>
+              <span className="flex items-center gap-2">
+                <Icon name="refresh" size={13} />
+                Save current workspace
+              </span>
+              <span className="pl-5 text-[11px] leading-[1.4] text-text-faint">
+                Detects what&rsquo;s currently open and builds a new workspace from it.
+              </span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
 
       <div className="my-3 h-px shrink-0 bg-border" />
 
@@ -104,13 +130,23 @@ export function Sidebar({
             aria-current={ws.id === activeId ? 'true' : undefined}
             className={cn(
               'group flex cursor-pointer items-start gap-2.25 rounded-sm border border-transparent px-2.5 py-2.25 outline-none focus-visible:ring-2 focus-visible:ring-accent-border',
-              ws.id === activeId ? 'border-accent-border bg-bg-elevated' : 'hover:bg-bg-hover',
-              // A running workspace reads as subtly distinct even when
-              // it isn't also the one currently being viewed — the
-              // pulsing dot below is the primary "this is live" signal,
-              // this is just a faint assist so the row doesn't look
-              // identical to every other one at a glance.
-              ws.active && ws.id !== activeId && 'bg-bg-hover',
+              ws.id === activeId
+                ? 'border-accent-border bg-bg-elevated'
+                : [
+                    'hover:bg-bg-hover',
+                    // A running-but-not-selected row gets a faint green
+                    // tint (the SAME color the pulsing dot already uses,
+                    // not an unrelated neutral gray) — a real but subtle
+                    // highlight, tied to what it actually means, not the
+                    // flat brownish bg-bg-hover wash this used to reuse
+                    // here (confirmed unattractive from a screenshot,
+                    // then removed outright — only to leave active rows
+                    // looking identical to any other, per direct
+                    // follow-up feedback). Tailwind v4's `/opacity`
+                    // modifier on a @theme-registered color needs no new
+                    // CSS variable of its own.
+                    ws.active && 'bg-success/8 hover:bg-success/14',
+                  ],
             )}
             onClick={() => {
               onSelect(ws.id);

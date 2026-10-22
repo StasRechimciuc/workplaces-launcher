@@ -12,6 +12,7 @@ import { CREATE_TOOL_PRESETS, type CreateToolPreset } from '../constants';
 import { useIsMounted } from '../lib/useIsMounted';
 import { getRecentProjectPaths } from '../lib/recent-project-paths';
 import { getRecentCommands } from '../lib/recent-commands';
+import { findDuplicateWorkspace } from '../lib/workspace-duplicate';
 import { matchesCombo } from '../lib/useGlobalShortcuts';
 import { SHORTCUTS, getEffectiveShortcuts, getStoredOverrides } from '../lib/shortcuts';
 import { useSpotifyConnection } from '../lib/useSpotifyConnection';
@@ -445,20 +446,65 @@ export function WorkspaceFormModal({
     );
   }
 
+  const steps: WorkspaceStep[] = useMemo(
+    () => createSteps.map((draft) => ({ type: draft.preset.type, params: draft.params })),
+    [createSteps],
+  );
+
+  // Create mode only — editing a workspace into matching another
+  // existing one is a real but much rarer case, and excludeId would
+  // just hide it from matching ITSELF anyway; not worth the extra
+  // complexity here for a scenario this form's edit path doesn't
+  // actually produce (see SaveCurrentWorkspaceModal's own identical
+  // check for the primary motivating case — repeat-saving the detected
+  // current state with no changes in between).
+  const duplicateOf = useMemo(
+    () =>
+      !editingWorkspace && name.trim() ? findDuplicateWorkspace({ name, steps }, workspaces) : undefined,
+    [editingWorkspace, name, steps, workspaces],
+  );
+
   async function handleSave(): Promise<void> {
     setIsSaving(true);
     setSaveError(null);
     try {
-      const steps: WorkspaceStep[] = createSteps.map((draft) => ({
-        type: draft.preset.type,
-        params: draft.params,
-      }));
       const result: CreateWorkspaceResult | UpdateWorkspaceResult = editingWorkspace
         ? await window.api.updateWorkspace({ id: editingWorkspace.id, name, steps })
         : await window.api.createWorkspace({ name, steps });
       if (!isMountedRef.current) {
         return;
       }
+      if (!result.success) {
+        setSaveError({ message: result.error, code: result.code });
+        return;
+      }
+      onSaved(result.config);
+      closeAndReset();
+    } catch (err) {
+      if (isMountedRef.current) {
+        setSaveError({
+          message: err instanceof Error ? err.message : String(err),
+          code: ERROR_CODES.SYSTEM_UNEXPECTED.code,
+        });
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setIsSaving(false);
+      }
+    }
+  }
+
+  /** The duplicate banner's offered alternative — see
+   * SaveCurrentWorkspaceModal's identical handleUpdateExisting for the
+   * full reasoning. Only reachable in create mode (duplicateOf is
+   * always undefined in edit mode). */
+  async function handleUpdateExisting(): Promise<void> {
+    if (!duplicateOf) return;
+    setIsSaving(true);
+    setSaveError(null);
+    try {
+      const result = await window.api.updateWorkspace({ id: duplicateOf.id, name, steps });
+      if (!isMountedRef.current) return;
       if (!result.success) {
         setSaveError({ message: result.error, code: result.code });
         return;
@@ -496,7 +542,17 @@ export function WorkspaceFormModal({
         }
       }}
     >
-      <DialogContent showCloseButton={false} className="w-190">
+      <DialogContent
+        showCloseButton={false}
+        className="w-190"
+        {...(isSaving
+          ? {}
+          : {
+              onEnterKey: () => {
+                void handleSave();
+              },
+            })}
+      >
         <DialogHeader>
           <DialogTitle>{editingWorkspace ? 'Edit workspace' : 'New workspace'}</DialogTitle>
           <DialogClose
@@ -509,15 +565,39 @@ export function WorkspaceFormModal({
 
         <div className="flex-1 overflow-y-auto p-5">
           <p className="mb-1.5 text-xs font-medium text-text-muted">Workspace name</p>
-          <input
-            className="mb-4.5 h-8.5 w-full rounded-sm border border-border-strong bg-bg-elevated px-2.75 text-[13px] text-text placeholder:text-text-faint focus:border-accent-border focus:outline-none"
-            type="text"
-            placeholder="e.g. Client C — Backend"
-            value={name}
-            onChange={(e) => {
-              setName(e.target.value);
-            }}
-          />
+          <div className="mb-4.5">
+            <input
+              className="h-8.5 w-full rounded-sm border border-border-strong bg-bg-elevated px-2.75 text-[13px] text-text placeholder:text-text-faint focus:border-accent-border focus:outline-none"
+              type="text"
+              placeholder="e.g. Client C — Backend"
+              value={name}
+              onChange={(e) => {
+                setName(e.target.value);
+              }}
+            />
+            {duplicateOf && (
+              // Same informational, never-blocking pattern as
+              // SaveCurrentWorkspaceModal's identical banner — only
+              // fires on a real, exact duplicate (same name AND same
+              // steps), never a loose name-only match.
+              <div className="mt-2.5 flex items-center gap-2 rounded-sm border border-border bg-bg-elevated px-2.5 py-2 text-[12px] text-text-muted">
+                <Icon name="info" size={13} className="shrink-0 text-text-faint" />
+                <span className="flex-1">
+                  Identical to the existing &ldquo;{duplicateOf.name}&rdquo; workspace.
+                </span>
+                <button
+                  type="button"
+                  disabled={isSaving}
+                  className="shrink-0 text-[11.5px] font-medium text-accent hover:underline disabled:pointer-events-none disabled:opacity-50"
+                  onClick={() => {
+                    void handleUpdateExisting();
+                  }}
+                >
+                  Update it instead
+                </button>
+              </div>
+            )}
+          </div>
 
           <p className="mb-1.5 text-xs font-medium text-text-muted">Tools</p>
           <div className="mb-3.5 flex flex-col">
@@ -722,13 +802,23 @@ export function WorkspaceFormModal({
                     setToolSearchQuery(e.target.value);
                   }}
                   onKeyDown={(e) => {
-                    // Let navigation/selection keys bubble to Radix's
-                    // own roving-focus/typeahead handling so Down/Enter
-                    // move from "typing" into "picking an item" — stop
+                    // Let navigation keys bubble to Radix's own
+                    // roving-focus handling so ArrowDown/ArrowUp move
+                    // from "typing" into "picking an item" — stop
                     // everything else (ordinary letters) from reaching
                     // it, so typing a tool's name doesn't also trigger
                     // Radix's built-in single-character typeahead jump.
-                    if (!['ArrowDown', 'ArrowUp', 'Enter', 'Escape', 'Tab'].includes(e.key)) {
+                    //
+                    // Enter is deliberately NOT let through (unlike the
+                    // original version of this list): confirmed by
+                    // reading Radix's own Menu source that it only ever
+                    // preventDefaults Enter once an actual MenuItem has
+                    // focus, never while this plain search input does —
+                    // so letting it bubble here did nothing useful for
+                    // Radix, while it DOES reach Dialog.tsx's new
+                    // Enter-to-confirm handling and prematurely saves
+                    // the whole workspace form mid-search.
+                    if (!['ArrowDown', 'ArrowUp', 'Escape', 'Tab'].includes(e.key)) {
                       e.stopPropagation();
                     }
                   }}
@@ -784,7 +874,13 @@ export function WorkspaceFormModal({
               void handleSave();
             }}
           >
-            {isSaving ? 'Saving…' : editingWorkspace ? 'Save changes' : 'Save workspace'}
+            {isSaving
+              ? 'Saving…'
+              : editingWorkspace
+                ? 'Save changes'
+                : duplicateOf
+                  ? 'Save as new anyway'
+                  : 'Save workspace'}
           </button>
         </DialogFooter>
       </DialogContent>

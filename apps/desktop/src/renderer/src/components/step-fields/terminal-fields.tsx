@@ -94,6 +94,18 @@ export function TerminalFields({ params, onChange, recentCommands }: StepFieldsP
                 onChange={(e) => {
                   onChange({ terminals: updateTerminalEntry(params, index, { cwd: e.target.value }) });
                 }}
+                onKeyDown={(e) => {
+                  // Same reasoning as EditableStringList's identical
+                  // fix: this is one of possibly several terminal cards,
+                  // not the dialog's own single primary field — Enter
+                  // here has no defined meaning of its own, and left
+                  // unstopped it bubbles to Dialog.tsx's Enter-to-confirm
+                  // handling and prematurely saves the whole workspace
+                  // form mid-edit.
+                  if (e.key === 'Enter') {
+                    e.stopPropagation();
+                  }
+                }}
               />
               <button
                 type="button"

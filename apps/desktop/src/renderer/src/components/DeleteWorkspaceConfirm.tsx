@@ -87,7 +87,17 @@ export function DeleteWorkspaceConfirm({
         }
       }}
     >
-      <DialogContent showCloseButton={false} className="w-105">
+      <DialogContent
+        showCloseButton={false}
+        className="w-105"
+        {...(isDeleting
+          ? {}
+          : {
+              onEnterKey: () => {
+                void handleConfirm();
+              },
+            })}
+      >
         <DialogHeader>
           <DialogTitle>Delete workspace?</DialogTitle>
           <DialogClose

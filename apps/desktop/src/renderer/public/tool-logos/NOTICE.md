@@ -8,17 +8,19 @@ monochrome mark) and are not used as this app's own branding.
   project (CC0-1.0 — see their `LICENSE.md`). Official brand color `#007ACC`
   applied. "Visual Studio Code" is a trademark of Microsoft Corporation; CC0
   covers the icon artwork's copyright only, not that trademark.
+- `docker.svg` — Docker whale mark, from simple-icons (CC0-1.0). Official
+  brand color `#2496ED` applied. "Docker" is a trademark of Docker, Inc.
 - `spotify.svg` — Spotify mark, from simple-icons (CC0-1.0). Official brand
   color `#1ED760` applied. "Spotify" is a trademark of Spotify AB.
 - `clockify.svg` — Clockify mark, from simple-icons (CC0-1.0). Official brand
   color `#03A9F4` applied. "Clockify" is a trademark of CAKE.com.
 - `chrome.svg` — the genuine, unmodified official Google Chrome logo, from
-  [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Google_Chrome_icon_(February_2022).svg).
+  [Wikimedia Commons](<https://commons.wikimedia.org/wiki/File:Google_Chrome_icon_(February_2022).svg>).
   "Chrome" is a registered trademark of Google LLC. Google's brand guidelines
   ask that the logo not be altered and that Google's brand colors not be used
   as your own; this asset is used unmodified, solely to indicate that a step
   launches Chrome, not to imply endorsement or affiliation. Revisit before any
   public marketing/landing-page reuse beyond this in-app usage.
 
-None of the above implies endorsement by Microsoft, Spotify, CAKE.com, or
-Google.
+None of the above implies endorsement by Microsoft, Docker Inc., Spotify,
+CAKE.com, or Google.

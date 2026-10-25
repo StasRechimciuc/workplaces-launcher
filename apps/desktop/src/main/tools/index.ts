@@ -1,5 +1,6 @@
 import { registerTool } from './registry';
 import { vscodeTool } from './vscode-tool';
+import { dockerTool } from './docker-tool';
 import { chromeTool } from './chrome-tool';
 import { spotifyTool } from './spotify-tool';
 import { clockifyTool } from './clockify-tool';
@@ -15,6 +16,7 @@ import { linkTool } from './link-tool';
  */
 export function registerBuiltInTools(): void {
   registerTool(vscodeTool);
+  registerTool(dockerTool);
   registerTool(chromeTool);
   registerTool(spotifyTool);
   registerTool(clockifyTool);

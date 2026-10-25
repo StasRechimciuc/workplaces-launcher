@@ -14,6 +14,7 @@ import {
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu';
 import { FIELD_GROUP_LABEL_CLASS } from './ResolvedAppPath';
+import { errorBorderClass } from './field-error';
 import type { StepFieldsProps } from './types';
 
 /**
@@ -31,8 +32,21 @@ import type { StepFieldsProps } from './types';
  * No registerPrimaryInputRef usage — starts with zero cards, same
  * "click Add to see the first row" precedent EditableStringList itself
  * already establishes for commands/URLs, not a special case here.
+ *
+ * `fieldErrors` only ever resolves one key, `terminals` — a save-time
+ * error's field path (packages/shared's zodValidate) collapses a nested
+ * path like `terminals[0].cwd` to its top-level name, never pinpointing
+ * a specific row. So unlike every other field component, this one can't
+ * red-border the exact offending card — it shows one message below the
+ * whole list instead, still far better than the bottom banner alone
+ * (the right STEP is at least auto-expanded/scrolled to already).
  */
-export function TerminalFields({ params, onChange, recentCommands }: StepFieldsProps): JSX.Element {
+export function TerminalFields({
+  params,
+  onChange,
+  recentCommands,
+  fieldErrors,
+}: StepFieldsProps): JSX.Element {
   const entries = getTerminalEntries(params);
   const nextEntryIdRef = useRef(0);
   const [entryIds, setEntryIds] = useState<number[]>(() =>
@@ -92,7 +106,9 @@ export function TerminalFields({ params, onChange, recentCommands }: StepFieldsP
                 placeholder="e.g. ~/projects/client-c"
                 value={entry.cwd}
                 onChange={(e) => {
-                  onChange({ terminals: updateTerminalEntry(params, index, { cwd: e.target.value }) });
+                  onChange({
+                    terminals: updateTerminalEntry(params, index, { cwd: e.target.value }),
+                  });
                 }}
                 onKeyDown={(e) => {
                   // Same reasoning as EditableStringList's identical
@@ -186,12 +202,18 @@ export function TerminalFields({ params, onChange, recentCommands }: StepFieldsP
       })}
       <button
         type="button"
-        className="flex h-7 items-center justify-center gap-1.5 rounded-sm border border-dashed border-border-strong text-[11.5px] text-text-faint hover:border-text-faint hover:text-text-muted"
+        className={errorBorderClass(
+          'flex h-7 items-center justify-center gap-1.5 rounded-sm border border-dashed border-border-strong text-[11.5px] text-text-faint hover:border-text-faint hover:text-text-muted',
+          fieldErrors?.['terminals'],
+        )}
         onClick={handleAdd}
       >
         <Icon name="plus" size={11} />
         Add terminal
       </button>
+      {fieldErrors?.['terminals'] && (
+        <p className="text-[11px] text-danger">{fieldErrors['terminals']}</p>
+      )}
     </div>
   );
 }

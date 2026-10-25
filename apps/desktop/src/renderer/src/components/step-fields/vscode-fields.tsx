@@ -13,6 +13,7 @@ import {
 } from '../ui/dropdown-menu';
 import type { StepFieldsProps } from './types';
 import { FIELD_GROUP_LABEL_CLASS, ResolvedAppPath } from './ResolvedAppPath';
+import { errorBorderClass } from './field-error';
 
 /**
  * Terminal commands render via EditableStringList (individual removable
@@ -30,6 +31,7 @@ export function VscodeFields({
   registerPrimaryInputRef,
   recentFolders,
   appPathDetection,
+  fieldErrors,
 }: StepFieldsProps): JSX.Element {
   const commands = getFirstTerminalCommands(params);
   const appPath = typeof params['appPath'] === 'string' ? params['appPath'] : '';
@@ -65,7 +67,10 @@ export function VscodeFields({
       <div className="flex items-center gap-1.5">
         <input
           ref={registerPrimaryInputRef}
-          className="h-8 min-w-0 flex-1 rounded-sm border border-border-strong bg-bg px-2.5 text-[12.5px] text-text placeholder:text-text-faint focus:border-accent-border focus:outline-none"
+          className={errorBorderClass(
+            'h-8 min-w-0 flex-1 rounded-sm border border-border-strong bg-bg px-2.5 text-[12.5px] text-text placeholder:text-text-faint focus:border-accent-border focus:outline-none',
+            fieldErrors?.['path'],
+          )}
           type="text"
           placeholder="e.g. ~/projects/client-c"
           value={typeof params['path'] === 'string' ? params['path'] : ''}
@@ -85,6 +90,7 @@ export function VscodeFields({
           Browse…
         </button>
       </div>
+      {fieldErrors?.['path'] && <p className="text-[11px] text-danger">{fieldErrors['path']}</p>}
 
       {recentFolders && recentFolders.length > 0 && (
         <DropdownMenu>

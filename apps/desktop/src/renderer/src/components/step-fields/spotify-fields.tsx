@@ -7,6 +7,7 @@ import {
 } from '../ui/dropdown-menu';
 import type { StepFieldsProps } from './types';
 import { FIELD_GROUP_LABEL_CLASS, ResolvedAppPath } from './ResolvedAppPath';
+import { errorBorderClass } from './field-error';
 
 const BUTTON_CLASS =
   'flex h-7 shrink-0 items-center gap-1.5 rounded-sm border border-border-strong px-2.25 text-[12px] text-text-muted hover:bg-bg-hover disabled:pointer-events-none disabled:opacity-50';
@@ -29,6 +30,7 @@ export function SpotifyFields({
   registerPrimaryInputRef: _registerPrimaryInputRef, // unused — no <input> here; see step-fields/registry.ts's hasPrimaryInput: false for spotify
   spotify,
   appPathDetection,
+  fieldErrors,
 }: StepFieldsProps): JSX.Element {
   const state = spotify?.state ?? { status: 'disconnected' as const };
   const playlistName = typeof params['playlistName'] === 'string' ? params['playlistName'] : '';
@@ -76,7 +78,10 @@ export function SpotifyFields({
               }}
             >
               <DropdownMenuTrigger asChild>
-                <button type="button" className={BUTTON_CLASS}>
+                <button
+                  type="button"
+                  className={errorBorderClass(BUTTON_CLASS, fieldErrors?.['playlist'])}
+                >
                   <Icon name="music" size={12} />
                   {playlistName ? 'Change playlist' : 'Choose playlist'}
                 </button>
@@ -133,6 +138,9 @@ export function SpotifyFields({
       </div>
 
       {state.status === 'error' && <p className="text-[11px] text-danger">{state.message}</p>}
+      {fieldErrors?.['playlist'] && (
+        <p className="text-[11px] text-danger">{fieldErrors['playlist']}</p>
+      )}
     </div>
   );
 }

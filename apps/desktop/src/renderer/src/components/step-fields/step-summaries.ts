@@ -62,6 +62,13 @@ export function terminalStepSummary(params: Record<string, unknown>): string {
   return `${count} terminal${count === 1 ? '' : 's'}`;
 }
 
+export function dockerStepSummary(params: Record<string, unknown>): string {
+  const directory = typeof params['directory'] === 'string' ? params['directory'].trim() : '';
+  if (!directory) return 'No directory set';
+  const engineLabel = params['engine'] === 'tilt' ? 'Tilt' : 'Docker Compose';
+  return `${engineLabel}, ${directory}`;
+}
+
 export function linkStepSummary(params: Record<string, unknown>): string {
   const target = typeof params['target'] === 'string' ? params['target'].trim() : '';
   if (!target) return 'No file or link set';

@@ -87,9 +87,22 @@ export interface CreateWorkspaceInput {
  * because "the user left a required field empty" is routine input
  * during normal use of the Save button, not an exceptional condition.
  */
+/**
+ * `stepIndex`/`fieldErrors` are only ever present for a step-validation
+ * failure (validate-steps.ts's StepValidationFailure) — a structural
+ * failure (parseWorkspaceConfig) or an unrelated one (e.g.
+ * WORKSPACE_NOT_FOUND) carries neither, since there's no specific step/
+ * field to point at.
+ */
 export type CreateWorkspaceResult =
   | { success: true; config: WorkspaceConfig }
-  | { success: false; error: string; code: string };
+  | {
+      success: false;
+      error: string;
+      code: string;
+      stepIndex?: number;
+      fieldErrors?: Record<string, string>;
+    };
 
 /**
  * What the renderer sends to update an existing workspace. Unlike
@@ -105,10 +118,17 @@ export interface UpdateWorkspaceInput {
   steps: WorkspaceStep[];
 }
 
-/** Mirrors CreateWorkspaceResult's exact shape/spirit. */
+/** Mirrors CreateWorkspaceResult's exact shape/spirit, `stepIndex`/
+ * `fieldErrors` included. */
 export type UpdateWorkspaceResult =
   | { success: true; config: WorkspaceConfig }
-  | { success: false; error: string; code: string };
+  | {
+      success: false;
+      error: string;
+      code: string;
+      stepIndex?: number;
+      fieldErrors?: Record<string, string>;
+    };
 
 /**
  * Mirrors CreateWorkspaceResult/UpdateWorkspaceResult's shape, minus a
@@ -116,5 +136,4 @@ export type UpdateWorkspaceResult =
  * beyond "it's gone."
  */
 export type DeleteWorkspaceResult =
-  | { success: true }
-  | { success: false; error: string; code: string };
+  { success: true } | { success: false; error: string; code: string };

@@ -26,5 +26,22 @@ export function zodValidate<Schema extends ZodTypeAny>(
   if (result.success) {
     return { valid: true, data: result.data };
   }
-  return { valid: false, errors: result.error.issues.map((issue) => issue.message) };
+  const errors = result.error.issues.map((issue) => issue.message);
+  // First issue per top-level field only (issue.path[0]) — a later
+  // issue on the same field is still in `errors` above, just not
+  // separately addressable here. An issue with no path at all (a
+  // whole-object check, e.g. docker-tool.ts's superRefine without an
+  // explicit `path`) can't be attributed to one field, so it's left out
+  // of this map rather than attached to a wrong one.
+  const fieldErrors: Record<string, string> = {};
+  for (const issue of result.error.issues) {
+    if (issue.path.length === 0) continue;
+    const key = String(issue.path[0]);
+    if (!(key in fieldErrors)) {
+      fieldErrors[key] = issue.message;
+    }
+  }
+  return Object.keys(fieldErrors).length > 0
+    ? { valid: false, errors, fieldErrors }
+    : { valid: false, errors };
 }

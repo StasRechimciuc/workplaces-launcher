@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   chromeStepSummary,
   clockifyStepSummary,
+  dockerStepSummary,
   linkStepSummary,
   spotifyStepSummary,
   terminalStepSummary,
@@ -99,6 +100,19 @@ describe('terminalStepSummary', () => {
   });
 });
 
+describe('dockerStepSummary', () => {
+  it('reports no directory set when empty', () => {
+    expect(dockerStepSummary({})).toBe('No directory set');
+    expect(dockerStepSummary({ directory: '   ' })).toBe('No directory set');
+  });
+
+  it('names the engine and directory, defaulting to Docker Compose', () => {
+    expect(dockerStepSummary({ directory: '/x' })).toBe('Docker Compose, /x');
+    expect(dockerStepSummary({ directory: '/x', engine: 'compose' })).toBe('Docker Compose, /x');
+    expect(dockerStepSummary({ directory: '/x', engine: 'tilt' })).toBe('Tilt, /x');
+  });
+});
+
 describe('linkStepSummary', () => {
   it('reports no file or link set when empty', () => {
     expect(linkStepSummary({})).toBe('No file or link set');
@@ -111,7 +125,10 @@ describe('linkStepSummary', () => {
 
   it('appends the resolved app name when appPath is set', () => {
     expect(
-      linkStepSummary({ target: 'https://www.figma.com/file/abc', appPath: '/Applications/Figma.app' }),
+      linkStepSummary({
+        target: 'https://www.figma.com/file/abc',
+        appPath: '/Applications/Figma.app',
+      }),
     ).toBe('https://www.figma.com/file/abc, opens with Figma');
   });
 });

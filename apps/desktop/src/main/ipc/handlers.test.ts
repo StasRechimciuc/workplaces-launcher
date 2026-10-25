@@ -108,7 +108,12 @@ vi.mock('../orchestrator/app-hotkeys-store', () => ({
 // wrapper without a real macOS detection pass (lsappinfo/osascript/ps/
 // lsof calls, none of which belong in an IPC-handler-shape test).
 vi.mock('../orchestrator/workspace-detection', () => ({
-  detectCurrentWorkspaceDraft: vi.fn(async () => ({ status: 'ready', steps: [], unmatched: [], issues: [] })),
+  detectCurrentWorkspaceDraft: vi.fn(async () => ({
+    status: 'ready',
+    steps: [],
+    unmatched: [],
+    issues: [],
+  })),
 }));
 
 // settings/store.ts constructs an electron-store Store at module load
@@ -259,10 +264,14 @@ beforeEach(async () => {
   vi.mocked(listSpotifyPlaylists).mockReset();
   vi.mocked(listChromeProfiles).mockReset();
   vi.mocked(rescanAndCache).mockReset();
-  vi.mocked(app.getLoginItemSettings).mockReset().mockReturnValue({ openAtLogin: false } as never);
+  vi.mocked(app.getLoginItemSettings)
+    .mockReset()
+    .mockReturnValue({ openAtLogin: false } as never);
   vi.mocked(app.setLoginItemSettings).mockReset();
   setAppPackaged(true);
-  vi.mocked(hotkeyService.syncHotkeys).mockReset().mockReturnValue({ failed: [], appHotkeyFailed: false });
+  vi.mocked(hotkeyService.syncHotkeys)
+    .mockReset()
+    .mockReturnValue({ failed: [], appHotkeyFailed: false });
   vi.mocked(hotkeyService.getFailedHotkeyBindings).mockReset().mockReturnValue([]);
   vi.mocked(hotkeyService.getAppHotkeyFailed).mockReset().mockReturnValue(false);
   vi.mocked(hotkeysStore.getHotkeyBinding).mockReset().mockReturnValue(undefined);
@@ -282,22 +291,25 @@ afterEach(async () => {
 
 /**
  * A real, saved workspace mixing registered tool types (vscode, chrome,
- * spotify, terminal — run for real) with unregistered ones (docker,
- * slack — no plugin built yet, so they report a graceful per-step
- * failure). Mirrors the shape the old bundled demo workspace used to
- * cover in these tests, now built fresh per test via the real
- * createWorkspace path instead of hardcoded fixture data.
+ * spotify, terminal — run for real) with an unregistered one (slack —
+ * no plugin built yet, so it reports a graceful per-step failure).
+ * Docker is now a registered, real tool too (docker-tool.ts) — its own
+ * execution is covered directly by docker-tool.test.ts, not retrofitted
+ * into this shared fixture, since its compose path genuinely shells out
+ * and its tilt path goes through the mocked PlatformLauncher differently
+ * than the other steps here. Mirrors the shape the old bundled demo
+ * workspace used to cover in these tests, now built fresh per test via
+ * the real createWorkspace path instead of hardcoded fixture data.
  */
 async function createMixedWorkspace(): Promise<string> {
   const result = await createWorkspace({
     name: 'Mixed test workspace',
     steps: [
       { type: 'vscode', params: { path: '~/real' } },
-      { type: 'docker', params: {} },
+      { type: 'slack', params: {} },
       { type: 'terminal', params: { terminals: [{ cwd: '~/real', commands: ['npm run dev'] }] } },
       { type: 'chrome', params: { profile: 'Default', urls: ['https://example.com'] } },
       { type: 'spotify', params: { playlist: 'spotify:playlist:abc' } },
-      { type: 'slack', params: {} },
     ],
   });
   if (!result.success) throw new Error('setup failed: ' + result.error);
@@ -317,7 +329,7 @@ describe('restoreWorkspace', () => {
     const id = await createMixedWorkspace();
     const results = await restoreWorkspace(id);
 
-    expect(results).toHaveLength(6);
+    expect(results).toHaveLength(5);
     // vscode's path + spotify's playlist both go through openInApp.
     expect(openInApp).toHaveBeenCalledTimes(2);
     // chrome's one configured url.
@@ -333,9 +345,9 @@ describe('restoreWorkspace', () => {
   it('reports a not-yet-built tool type as a failed step, not a crash', async () => {
     const id = await createMixedWorkspace();
     const results = await restoreWorkspace(id);
-    const dockerResult = results[1];
-    expect(dockerResult?.success).toBe(false);
-    expect(dockerResult?.message).toContain('docker');
+    const slackResult = results[1];
+    expect(slackResult?.success).toBe(false);
+    expect(slackResult?.message).toContain('slack');
   });
 
   it('runs the registered terminal step through the real platform launcher, not just a mocked unit test', async () => {
@@ -363,7 +375,7 @@ describe('restoreWorkspace', () => {
     const onProgress = vi.fn();
     await restoreWorkspace(id, onProgress);
 
-    expect(onProgress).toHaveBeenCalledTimes(12);
+    expect(onProgress).toHaveBeenCalledTimes(10);
     expect(onProgress).toHaveBeenCalledWith(
       expect.objectContaining({ workspaceId: id, stepIndex: 0, status: 'running' }),
     );
@@ -401,10 +413,10 @@ describe('retryWorkspaceStep', () => {
 
   it('reports a not-yet-built tool type as a failed step, not a crash', async () => {
     const id = await createMixedWorkspace();
-    // step 1 is docker — no plugin registered for it.
+    // step 1 is slack — no plugin registered for it.
     const result = await retryWorkspaceStep(id, 1);
     expect(result.success).toBe(false);
-    expect(result.message).toContain('docker');
+    expect(result.message).toContain('slack');
   });
 
   it('retries a step on a real saved workspace loaded from disk', async () => {
@@ -508,8 +520,8 @@ describe('registerIpcHandlers — workspaces:restore progress + focus wiring', (
 
     const results = await handler(fakeEvent, mixedWorkspaceId);
 
-    expect(results).toHaveLength(6);
-    expect(mockWin.webContents.send).toHaveBeenCalledTimes(12);
+    expect(results).toHaveLength(5);
+    expect(mockWin.webContents.send).toHaveBeenCalledTimes(10);
     expect(mockWin.webContents.send.mock.calls[0]).toEqual([
       RESTORE_PROGRESS_CHANNEL,
       expect.objectContaining({ workspaceId: mixedWorkspaceId, stepIndex: 0, status: 'running' }),
@@ -532,7 +544,7 @@ describe('registerIpcHandlers — workspaces:restore progress + focus wiring', (
     // The exact failure mode the adversarial review caught: a throwing
     // send() must never abort the run or discard already-collected
     // results.
-    expect(results).toHaveLength(6);
+    expect(results).toHaveLength(5);
   });
 
   it('skips sending when the webContents is already destroyed, without throwing', async () => {
@@ -541,7 +553,7 @@ describe('registerIpcHandlers — workspaces:restore progress + focus wiring', (
 
     const results = await handler(fakeEvent, mixedWorkspaceId);
 
-    expect(results).toHaveLength(6);
+    expect(results).toHaveLength(5);
     expect(mockWin.webContents.send).not.toHaveBeenCalled();
   });
 
@@ -550,23 +562,23 @@ describe('registerIpcHandlers — workspaces:restore progress + focus wiring', (
     // begin() — let that succeed, and only fail the calls reassert()
     // makes per step, isolating the specific try/catch this test is
     // for from the (separately unguarded) begin() call.
-    mockWin.moveTop.mockImplementationOnce(() => {}).mockImplementation(() => {
-      throw new Error('native window error');
-    });
+    mockWin.moveTop
+      .mockImplementationOnce(() => {})
+      .mockImplementation(() => {
+        throw new Error('native window error');
+      });
     const handler = getRegisteredRestoreHandler();
 
     const results = await handler(fakeEvent, mixedWorkspaceId);
 
     // Same failure class as the destroyed-webContents case above, but
     // for restore-focus.ts's moveTop()/focus() calls instead of send().
-    expect(results).toHaveLength(6);
+    expect(results).toHaveLength(5);
   });
 });
 
 describe('registerIpcHandlers — dialog:selectProjectFolder', () => {
-  function getRegisteredDialogHandler(): (event: {
-    sender: unknown;
-  }) => Promise<string | null> {
+  function getRegisteredDialogHandler(): (event: { sender: unknown }) => Promise<string | null> {
     registerIpcHandlers();
     const call = vi
       .mocked(ipcMain.handle)
@@ -618,9 +630,7 @@ describe('registerIpcHandlers — dialog:selectProjectFolder', () => {
 });
 
 describe('registerIpcHandlers — dialog:selectApp', () => {
-  function getRegisteredSelectAppHandler(): (event: {
-    sender: unknown;
-  }) => Promise<string | null> {
+  function getRegisteredSelectAppHandler(): (event: { sender: unknown }) => Promise<string | null> {
     registerIpcHandlers();
     const call = vi
       .mocked(ipcMain.handle)
@@ -719,7 +729,9 @@ describe('registerIpcHandlers — spotify:*', () => {
   });
 
   it('spotify:listPlaylists returns {success:true, playlists} on success', async () => {
-    const playlists = [{ id: '1', name: 'Deep Focus', uri: 'spotify:playlist:1', ownedByCurrentUser: true }];
+    const playlists = [
+      { id: '1', name: 'Deep Focus', uri: 'spotify:playlist:1', ownedByCurrentUser: true },
+    ];
     vi.mocked(listSpotifyPlaylists).mockResolvedValueOnce(playlists);
     const handler = getRegisteredSpotifyHandler('spotify:listPlaylists');
 
@@ -782,10 +794,7 @@ describe('registerIpcHandlers — chrome:listProfiles', () => {
 });
 
 describe('registerIpcHandlers — app:detectInstalls', () => {
-  function getRegisteredDetectHandler(): (
-    event: unknown,
-    toolKey: unknown,
-  ) => Promise<unknown> {
+  function getRegisteredDetectHandler(): (event: unknown, toolKey: unknown) => Promise<unknown> {
     registerIpcHandlers();
     const call = vi
       .mocked(ipcMain.handle)
@@ -795,7 +804,9 @@ describe('registerIpcHandlers — app:detectInstalls', () => {
   }
 
   it('returns {success:true, candidates} for a known tool key', async () => {
-    const candidates = [{ path: '/Applications/Visual Studio Code.app', displayName: 'Visual Studio Code' }];
+    const candidates = [
+      { path: '/Applications/Visual Studio Code.app', displayName: 'Visual Studio Code' },
+    ];
     vi.mocked(rescanAndCache).mockResolvedValueOnce({
       vscode: candidates,
       chrome: [],
@@ -856,10 +867,25 @@ describe('createWorkspace', () => {
     }
   });
 
-  it('allows a step type with no registered tool yet (e.g. docker), unvalidated', async () => {
+  it('names the real failing stepIndex and its fieldErrors, not just a flat message', async () => {
     const result = await createWorkspace({
       name: 'My workspace',
-      steps: [{ type: 'docker', params: {} }],
+      steps: [
+        { type: 'vscode', params: { path: '~/real' } },
+        { type: 'vscode', params: { path: '' } },
+      ],
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.stepIndex).toBe(1);
+      expect(result.fieldErrors).toEqual({ path: expect.stringContaining('path') });
+    }
+  });
+
+  it('allows a step type with no registered tool yet (e.g. slack), unvalidated', async () => {
+    const result = await createWorkspace({
+      name: 'My workspace',
+      steps: [{ type: 'slack', params: {} }],
     });
     expect(result.success).toBe(true);
   });
@@ -925,6 +951,8 @@ describe('updateWorkspace', () => {
     if (!result.success) {
       expect(result.error).toContain('path');
       expect(result.code).toBe(ERROR_CODES.WORKSPACE_INVALID.code);
+      expect(result.stepIndex).toBe(0);
+      expect(result.fieldErrors).toEqual({ path: expect.stringContaining('path') });
     }
   });
 
@@ -1049,7 +1077,10 @@ describe('setWorkspaceHotkey', () => {
     const result = await setWorkspaceHotkey(created.config.id, 'CommandOrControl+Alt+1');
 
     expect(result).toEqual({ success: true });
-    expect(hotkeysStore.setHotkeyBinding).toHaveBeenCalledWith(created.config.id, 'CommandOrControl+Alt+1');
+    expect(hotkeysStore.setHotkeyBinding).toHaveBeenCalledWith(
+      created.config.id,
+      'CommandOrControl+Alt+1',
+    );
     expect(hotkeyService.syncHotkeys).toHaveBeenCalled();
   });
 
@@ -1093,7 +1124,10 @@ describe('setWorkspaceHotkey', () => {
     const created = await createWorkspace({ name: 'Hotkey target', steps: [] });
     if (!created.success) throw new Error('setup failed');
     vi.mocked(hotkeysStore.getHotkeyBinding).mockReturnValue('CommandOrControl+Alt+9');
-    vi.mocked(hotkeyService.syncHotkeys).mockReturnValueOnce({ failed: [created.config.id], appHotkeyFailed: false });
+    vi.mocked(hotkeyService.syncHotkeys).mockReturnValueOnce({
+      failed: [created.config.id],
+      appHotkeyFailed: false,
+    });
 
     const result = await setWorkspaceHotkey(created.config.id, 'CommandOrControl+Alt+1');
 
@@ -1112,7 +1146,10 @@ describe('setWorkspaceHotkey', () => {
     const created = await createWorkspace({ name: 'Hotkey target', steps: [] });
     if (!created.success) throw new Error('setup failed');
     vi.mocked(hotkeysStore.getHotkeyBinding).mockReturnValue(undefined);
-    vi.mocked(hotkeyService.syncHotkeys).mockReturnValueOnce({ failed: [created.config.id], appHotkeyFailed: false });
+    vi.mocked(hotkeyService.syncHotkeys).mockReturnValueOnce({
+      failed: [created.config.id],
+      appHotkeyFailed: false,
+    });
 
     const result = await setWorkspaceHotkey(created.config.id, 'CommandOrControl+Alt+1');
 
@@ -1123,7 +1160,9 @@ describe('setWorkspaceHotkey', () => {
   it('rejects a combo already bound to the app-level "Save current workspace" hotkey, without touching the store', async () => {
     const created = await createWorkspace({ name: 'Hotkey target', steps: [] });
     if (!created.success) throw new Error('setup failed');
-    vi.mocked(appHotkeysStore.getSaveCurrentWorkspaceHotkey).mockReturnValue('CommandOrControl+Alt+1');
+    vi.mocked(appHotkeysStore.getSaveCurrentWorkspaceHotkey).mockReturnValue(
+      'CommandOrControl+Alt+1',
+    );
 
     const result = await setWorkspaceHotkey(created.config.id, 'CommandOrControl+Alt+1');
 
@@ -1169,7 +1208,9 @@ describe('setAppHotkey', () => {
     const result = await setAppHotkey('CommandOrControl+Alt+S');
 
     expect(result).toEqual({ success: true });
-    expect(appHotkeysStore.setSaveCurrentWorkspaceHotkey).toHaveBeenCalledWith('CommandOrControl+Alt+S');
+    expect(appHotkeysStore.setSaveCurrentWorkspaceHotkey).toHaveBeenCalledWith(
+      'CommandOrControl+Alt+S',
+    );
     expect(hotkeyService.syncHotkeys).toHaveBeenCalled();
   });
 
@@ -1191,13 +1232,17 @@ describe('setAppHotkey', () => {
   });
 
   it('rolls back to the PREVIOUS binding when the new one fails to register', async () => {
-    vi.mocked(appHotkeysStore.getSaveCurrentWorkspaceHotkey).mockReturnValue('CommandOrControl+Alt+9');
+    vi.mocked(appHotkeysStore.getSaveCurrentWorkspaceHotkey).mockReturnValue(
+      'CommandOrControl+Alt+9',
+    );
     vi.mocked(hotkeyService.syncHotkeys).mockReturnValueOnce({ failed: [], appHotkeyFailed: true });
 
     const result = await setAppHotkey('CommandOrControl+Alt+S');
 
     expect(result).toMatchObject({ success: false, code: ERROR_CODES.HOTKEY_ALREADY_IN_USE.code });
-    expect(appHotkeysStore.setSaveCurrentWorkspaceHotkey).toHaveBeenLastCalledWith('CommandOrControl+Alt+9');
+    expect(appHotkeysStore.setSaveCurrentWorkspaceHotkey).toHaveBeenLastCalledWith(
+      'CommandOrControl+Alt+9',
+    );
     expect(appHotkeysStore.clearSaveCurrentWorkspaceHotkey).not.toHaveBeenCalled();
     expect(hotkeyService.syncHotkeys).toHaveBeenCalledTimes(2);
   });
@@ -1221,7 +1266,9 @@ describe('clearAppHotkey / getAppHotkey', () => {
   });
 
   it('reads through to the store', () => {
-    vi.mocked(appHotkeysStore.getSaveCurrentWorkspaceHotkey).mockReturnValue('CommandOrControl+Alt+S');
+    vi.mocked(appHotkeysStore.getSaveCurrentWorkspaceHotkey).mockReturnValue(
+      'CommandOrControl+Alt+S',
+    );
     expect(getAppHotkey()).toBe('CommandOrControl+Alt+S');
   });
 });
@@ -1400,12 +1447,14 @@ describe('registerIpcHandlers — app:getIcon', () => {
     appPath: unknown,
   ) => Promise<string | null> {
     registerIpcHandlers();
-    const call = vi.mocked(ipcMain.handle).mock.calls.find(([channel]) => channel === 'app:getIcon');
+    const call = vi
+      .mocked(ipcMain.handle)
+      .mock.calls.find(([channel]) => channel === 'app:getIcon');
     if (!call) throw new Error('app:getIcon was never registered');
     return call[1] as never;
   }
 
-  it('returns getAppIconDataUrl\'s result unchanged on success', async () => {
+  it("returns getAppIconDataUrl's result unchanged on success", async () => {
     vi.mocked(getAppIconDataUrl).mockResolvedValueOnce('data:image/png;base64,abc123');
     const handler = getRegisteredAppIconHandler();
 
@@ -1446,7 +1495,9 @@ describe('registerIpcHandlers — app-level hotkey + detectCurrent channels', ()
   }
 
   it('wires hotkeys:getAppHotkey to getAppHotkey', async () => {
-    vi.mocked(appHotkeysStore.getSaveCurrentWorkspaceHotkey).mockReturnValue('CommandOrControl+Alt+S');
+    vi.mocked(appHotkeysStore.getSaveCurrentWorkspaceHotkey).mockReturnValue(
+      'CommandOrControl+Alt+S',
+    );
     const handler = getRegisteredHandler('hotkeys:getAppHotkey');
     expect(await handler({})).toBe('CommandOrControl+Alt+S');
   });
@@ -1455,7 +1506,9 @@ describe('registerIpcHandlers — app-level hotkey + detectCurrent channels', ()
     const handler = getRegisteredHandler('hotkeys:setAppHotkey');
     const result = await handler({}, 'CommandOrControl+Alt+S');
     expect(result).toEqual({ success: true });
-    expect(appHotkeysStore.setSaveCurrentWorkspaceHotkey).toHaveBeenCalledWith('CommandOrControl+Alt+S');
+    expect(appHotkeysStore.setSaveCurrentWorkspaceHotkey).toHaveBeenCalledWith(
+      'CommandOrControl+Alt+S',
+    );
   });
 
   it('wires hotkeys:clearAppHotkey to clearAppHotkey', async () => {

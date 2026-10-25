@@ -11,8 +11,12 @@ describe('stepFieldsHasPrimaryInput', () => {
     expect(stepFieldsHasPrimaryInput('vscode')).toBe(true);
   });
 
-  it('is true for link (its target field, same as vscode\'s project path)', () => {
+  it("is true for link (its target field, same as vscode's project path)", () => {
     expect(stepFieldsHasPrimaryInput('link')).toBe(true);
+  });
+
+  it('is true for docker (its directory field)', () => {
+    expect(stepFieldsHasPrimaryInput('docker')).toBe(true);
   });
 
   it.each(['spotify', 'chrome', 'app', 'clockify', 'terminal'])(
@@ -22,20 +26,20 @@ describe('stepFieldsHasPrimaryInput', () => {
     },
   );
 
-  it.each(['docker', 'slack', 'unknown-type'])('is false for %s (no registry entry)', (type) => {
+  it.each(['slack', 'unknown-type'])('is false for %s (no registry entry)', (type) => {
     expect(stepFieldsHasPrimaryInput(type)).toBe(false);
   });
 });
 
 describe('stepFieldsIsCollapsible', () => {
-  it.each(['vscode', 'chrome', 'spotify', 'app', 'clockify', 'terminal', 'link'])(
+  it.each(['vscode', 'docker', 'chrome', 'spotify', 'app', 'clockify', 'terminal', 'link'])(
     'is true for %s',
     (type) => {
       expect(stepFieldsIsCollapsible(type)).toBe(true);
     },
   );
 
-  it.each(['docker', 'slack', 'unknown-type'])('is false for %s (no registry entry)', (type) => {
+  it.each(['slack', 'unknown-type'])('is false for %s (no registry entry)', (type) => {
     expect(stepFieldsIsCollapsible(type)).toBe(false);
   });
 });
@@ -53,11 +57,12 @@ describe('stepRowSummary', () => {
       '1 terminal',
     );
     expect(stepRowSummary('link', { target: 'https://example.com' })).toBe('https://example.com');
+    expect(stepRowSummary('docker', { directory: '/x', engine: 'tilt' })).toBe('Tilt, /x');
   });
 
   it('returns an empty string for a type with no summary entry (app) or no registry entry at all', () => {
     expect(stepRowSummary('app', { path: '/Applications/Figma.app' })).toBe('');
-    expect(stepRowSummary('docker', {})).toBe('');
+    expect(stepRowSummary('slack', {})).toBe('');
   });
 });
 
@@ -78,7 +83,11 @@ describe('getStepFieldsComponent', () => {
     expect(getStepFieldsComponent('link')).toBeDefined();
   });
 
+  it('returns a component for docker', () => {
+    expect(getStepFieldsComponent('docker')).toBeDefined();
+  });
+
   it('returns undefined for an unregistered type', () => {
-    expect(getStepFieldsComponent('docker')).toBeUndefined();
+    expect(getStepFieldsComponent('slack')).toBeUndefined();
   });
 });

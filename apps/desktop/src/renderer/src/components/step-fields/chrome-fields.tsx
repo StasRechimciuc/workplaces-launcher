@@ -11,6 +11,7 @@ import {
 } from '../ui/dropdown-menu';
 import type { StepFieldsProps } from './types';
 import { FIELD_GROUP_LABEL_CLASS, ResolvedAppPath } from './ResolvedAppPath';
+import { errorBorderClass } from './field-error';
 
 const BUTTON_CLASS =
   'flex h-7 shrink-0 items-center gap-1.5 rounded-sm border border-border-strong px-2.25 text-[12px] text-text-muted hover:bg-bg-hover disabled:pointer-events-none disabled:opacity-50';
@@ -34,6 +35,7 @@ export function ChromeFields({
   onChange,
   registerPrimaryInputRef: _registerPrimaryInputRef, // unused — no <input> here; see step-fields/registry.ts's hasPrimaryInput: false for chrome, same precedent as SpotifyFields
   appPathDetection,
+  fieldErrors,
 }: StepFieldsProps): JSX.Element {
   const [profiles, setProfiles] = useState<ChromeProfileInfo[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -85,7 +87,10 @@ export function ChromeFields({
       <div className="flex items-center gap-1.5">
         <DropdownMenu onOpenChange={handleOpenChange}>
           <DropdownMenuTrigger asChild>
-            <button type="button" className={BUTTON_CLASS}>
+            <button
+              type="button"
+              className={errorBorderClass(BUTTON_CLASS, fieldErrors?.['profile'])}
+            >
               <Icon name="globe" size={12} />
               {profile ? 'Change profile' : 'Choose profile'}
             </button>
@@ -93,7 +98,9 @@ export function ChromeFields({
           <DropdownMenuContent align="start" className="max-h-72 overflow-y-auto">
             {loading && <DropdownMenuItem disabled>Loading…</DropdownMenuItem>}
             {error && <DropdownMenuItem disabled>{error}</DropdownMenuItem>}
-            {profiles?.length === 0 && <DropdownMenuItem disabled>No Chrome profiles found</DropdownMenuItem>}
+            {profiles?.length === 0 && (
+              <DropdownMenuItem disabled>No Chrome profiles found</DropdownMenuItem>
+            )}
             {profiles?.map((p) => (
               <DropdownMenuItem
                 key={p.folder}
@@ -109,9 +116,14 @@ export function ChromeFields({
           </DropdownMenuContent>
         </DropdownMenu>
         {profile && (
-          <span className="min-w-0 truncate text-[11px] text-text-faint">{profileName || profile}</span>
+          <span className="min-w-0 truncate text-[11px] text-text-faint">
+            {profileName || profile}
+          </span>
         )}
       </div>
+      {fieldErrors?.['profile'] && (
+        <p className="text-[11px] text-danger">{fieldErrors['profile']}</p>
+      )}
 
       <EditableStringList
         values={urls}

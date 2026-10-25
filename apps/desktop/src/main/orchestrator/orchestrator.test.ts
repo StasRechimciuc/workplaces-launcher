@@ -4,6 +4,7 @@ import { ERROR_CODES } from '@workspace-launcher/shared';
 import { closeWorkspace, runWorkspace, switchToWorkspace } from './orchestrator';
 import * as processControl from '../platform/macos/process-control';
 import * as activityStore from './workspace-activity-store';
+import { registerTool } from '../tools/registry';
 
 // step-timing-history.ts is backed by electron-store, which needs a
 // real Electron `app` to resolve its storage path — unavailable under
@@ -361,7 +362,9 @@ describe('runWorkspace', () => {
 
     it('still reports the step as successful, and still records the plain duration, if the poll itself rejects', async () => {
       setPlatform('darwin');
-      vi.mocked(processControl.waitForAppRunning).mockRejectedValue(new Error('osascript exploded'));
+      vi.mocked(processControl.waitForAppRunning).mockRejectedValue(
+        new Error('osascript exploded'),
+      );
       const { registerTool: register } = await import('../tools/registry');
       const { runWorkspace: run } = await import('./orchestrator');
       const vscodeTool: ToolPlugin = {
@@ -502,7 +505,9 @@ describe('switchToWorkspace', () => {
     // between two unrelated real workspaces (neither using VS Code at
     // all) must never touch it.
     const demo = workspace('demo-unused', [{ type: 'vscode', params: { path: '/demo' } }]);
-    const figma = workspace('figma', [{ type: 'app', params: { path: '/Applications/Figma.app' } }]);
+    const figma = workspace('figma', [
+      { type: 'app', params: { path: '/Applications/Figma.app' } },
+    ]);
     const proton = workspace('proton', [
       { type: 'app', params: { path: '/Applications/ProtonVPN.app' } },
     ]);
@@ -582,15 +587,15 @@ describe('switchToWorkspace', () => {
     // Mirrors a real usage pattern: Restore is additive, so a user can
     // stack up several active workspaces (figma, proton) before a
     // single Switch reconciles all of them down to just the target.
-    const figma = workspace('figma', [{ type: 'app', params: { path: '/Applications/Figma.app' } }]);
+    const figma = workspace('figma', [
+      { type: 'app', params: { path: '/Applications/Figma.app' } },
+    ]);
     const proton = workspace('proton', [
       { type: 'app', params: { path: '/Applications/ProtonVPN.app' } },
     ]);
     const primary = workspace('primary', [{ type: 'vscode', params: { path: '/primary' } }]);
     isIntentActiveMock.mockImplementation((id: string) => id === 'figma' || id === 'proton');
-    isAppRunningMock.mockImplementation(
-      async (name) => name === 'Figma' || name === 'ProtonVPN',
-    );
+    isAppRunningMock.mockImplementation(async (name) => name === 'Figma' || name === 'ProtonVPN');
 
     const result = await switchToWorkspace(primary, [figma, proton, primary]);
 
@@ -684,5 +689,129 @@ describe('closeWorkspace', () => {
 
     expect(result.leftOpen).toEqual([]);
     expect(setIntentActiveMock).toHaveBeenCalledWith('a', false);
+  });
+});
+
+describe('Docker step teardown (Close/Switch)', () => {
+  const isAppRunningMock = vi.mocked(processControl.isAppRunning);
+  const quitAppMock = vi.mocked(processControl.quitApp);
+  const isIntentActiveMock = vi.mocked(activityStore.isIntentActive);
+  const setIntentActiveMock = vi.mocked(activityStore.setIntentActive);
+  const dockerTeardown = vi.fn();
+
+  // Registered once for this whole describe block — registry.ts's
+  // module-level state is shared for the lifetime of this test file
+  // (no vi.resetModules() in this block, unlike runWorkspace's own
+  // tests above, which register many distinct throwaway types and so
+  // need that isolation; this block only ever needs one real 'docker'
+  // entry).
+  registerTool({
+    type: 'docker',
+    validate: (params) => ({ valid: true, data: params as Record<string, unknown> }),
+    run: vi.fn(),
+    teardown: dockerTeardown,
+  });
+
+  beforeEach(() => {
+    isAppRunningMock.mockReset().mockResolvedValue(false);
+    quitAppMock.mockReset().mockResolvedValue({ success: true, message: '' });
+    isIntentActiveMock.mockReset().mockReturnValue(false);
+    setIntentActiveMock.mockReset();
+    dockerTeardown.mockReset();
+  });
+
+  function workspace(id: string, steps: WorkspaceConfig['steps']): WorkspaceConfig {
+    return { version: 1, id, name: id, steps };
+  }
+
+  describe('closeWorkspace', () => {
+    it('leaves containers running by default — stopOnClose unset', async () => {
+      const a = workspace('a', [
+        { type: 'docker', params: { directory: '/x', stopOnClose: false } },
+      ]);
+
+      const result = await closeWorkspace(a, [a]);
+
+      expect(dockerTeardown).not.toHaveBeenCalled();
+      expect(result.closed).toEqual([]);
+      expect(result.leftOpen).toEqual([]);
+      expect(setIntentActiveMock).toHaveBeenCalledWith('a', false);
+    });
+
+    it('stops containers when stopOnClose is explicitly true', async () => {
+      dockerTeardown.mockResolvedValue({ success: true, message: 'down', durationMs: 5 });
+      const a = workspace('a', [
+        { type: 'docker', params: { directory: '/x', stopOnClose: true } },
+      ]);
+
+      const result = await closeWorkspace(a, [a]);
+
+      expect(dockerTeardown).toHaveBeenCalledWith({ directory: '/x', stopOnClose: true });
+      expect(result.closed).toEqual(['Docker (x)']);
+      expect(setIntentActiveMock).toHaveBeenCalledWith('a', false);
+    });
+
+    it('reports a failed teardown instead of swallowing it, and never claims intent cleared', async () => {
+      dockerTeardown.mockResolvedValue({ success: false, message: 'daemon down', durationMs: 5 });
+      const a = workspace('a', [
+        { type: 'docker', params: { directory: '/x', stopOnClose: true } },
+      ]);
+
+      const result = await closeWorkspace(a, [a]);
+
+      expect(result.closed).toEqual([]);
+      expect(result.leftOpen).toEqual([
+        { appName: 'Docker (x)', reason: 'failed', detail: 'daemon down' },
+      ]);
+      expect(setIntentActiveMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('switchToWorkspace', () => {
+    it("stops an active other workspace's opted-in containers when switching away from it", async () => {
+      dockerTeardown.mockResolvedValue({ success: true, message: 'down', durationMs: 5 });
+      const a = workspace('a', [
+        { type: 'docker', params: { directory: '/x', stopOnClose: true } },
+      ]);
+      const b = workspace('b', [{ type: 'clockify', params: {} }]);
+      isIntentActiveMock.mockImplementation((id: string) => id === 'a');
+
+      const result = await switchToWorkspace(b, [a, b]);
+
+      expect(dockerTeardown).toHaveBeenCalledWith({ directory: '/x', stopOnClose: true });
+      expect(result.closed).toContain('Docker (x)');
+      expect(setIntentActiveMock).toHaveBeenCalledWith('a', false);
+    });
+
+    it('never tears down containers belonging to a workspace that was never active', async () => {
+      const a = workspace('a', [
+        { type: 'docker', params: { directory: '/x', stopOnClose: true } },
+      ]);
+      const b = workspace('b', [{ type: 'clockify', params: {} }]);
+      // isIntentActiveMock's default (false for everything) already
+      // models "a" as never active.
+
+      await switchToWorkspace(b, [a, b]);
+
+      expect(dockerTeardown).not.toHaveBeenCalled();
+    });
+
+    it('withholds clearing intent when Docker teardown fails, same as a failed app quit', async () => {
+      dockerTeardown.mockResolvedValue({ success: false, message: 'daemon down', durationMs: 5 });
+      const a = workspace('a', [
+        { type: 'docker', params: { directory: '/x', stopOnClose: true } },
+      ]);
+      const b = workspace('b', [{ type: 'clockify', params: {} }]);
+      isIntentActiveMock.mockImplementation((id: string) => id === 'a');
+
+      const result = await switchToWorkspace(b, [a, b]);
+
+      expect(result.leftOpen).toContainEqual({
+        appName: 'Docker (x)',
+        reason: 'failed',
+        detail: 'daemon down',
+      });
+      expect(setIntentActiveMock).not.toHaveBeenCalledWith('a', false);
+    });
   });
 });

@@ -37,7 +37,7 @@ export const STEP_TYPES: readonly StepTypeDefinition[] = [
     icon: 'box',
     color: 'sky',
     configHint: 'Containers / compose file',
-    implemented: false,
+    implemented: true,
   },
   {
     type: 'terminal',

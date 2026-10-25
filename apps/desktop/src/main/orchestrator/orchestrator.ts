@@ -1,3 +1,4 @@
+import { basename } from 'node:path';
 import type {
   CloseResult,
   LeftOpenEntry,
@@ -113,7 +114,9 @@ function getConfigAppNames(config: WorkspaceConfig): string[] {
  * config in one batch (deduped, parallelized) — avoids re-checking the
  * same app name once per config/step when several workspaces share it.
  */
-export async function buildRunningAppNameMap(configs: WorkspaceConfig[]): Promise<Map<string, boolean>> {
+export async function buildRunningAppNameMap(
+  configs: WorkspaceConfig[],
+): Promise<Map<string, boolean>> {
   const distinctNames = new Set<string>();
   for (const config of configs) {
     for (const name of getConfigAppNames(config)) {
@@ -147,9 +150,45 @@ function getExcludedAppNames(configs: WorkspaceConfig[]): Set<string> {
  * for why (a shared no-target tool like Spotify would otherwise show
  * every workspace that merely references it as falsely active).
  */
-export function isConfigActive(config: WorkspaceConfig, runningAppNames: Map<string, boolean>): boolean {
+export function isConfigActive(
+  config: WorkspaceConfig,
+  runningAppNames: Map<string, boolean>,
+): boolean {
   if (!isIntentActive(config.id)) return false;
   return getConfigAppNames(config).some((name) => runningAppNames.get(name) === true);
+}
+
+/**
+ * Attempts to stop one Docker step's containers, but ONLY when its own
+ * `stopOnClose` opt-in is set (default off — docker-tool.ts: containers
+ * can hold real, expensive-to-rebuild state, so this is never automatic).
+ * Mutates `closed`/`leftOpen` directly, reusing their existing shape —
+ * Docker steps have no macOS app name, so a descriptive label stands in
+ * for one. Returns false only on a real attempted-and-failed teardown,
+ * so callers can withhold `setIntentActive(..., false)` the same way an
+ * unresolved app-quit failure already does.
+ */
+async function teardownDockerStepIfEnabled(
+  step: WorkspaceConfig['steps'][number],
+  closed: string[],
+  leftOpen: LeftOpenEntry[],
+): Promise<boolean> {
+  if (step.type !== 'docker') return true;
+  const tool = getTool('docker');
+  if (!tool) return true; // not registered — nothing to do, not a failure
+  const validation = tool.validate(step.params);
+  if (!validation.valid) return true; // invalid config — nothing meaningful to tear down
+  const data = validation.data as { stopOnClose?: boolean; directory?: string };
+  if (data.stopOnClose !== true) return true; // opt-in off — leave running, by design
+  const label = `Docker (${typeof data.directory === 'string' ? basename(data.directory) : 'stack'})`;
+  const result = await tool.teardown(validation.data);
+  if (result.success) {
+    closed.push(label);
+    return true;
+  }
+  console.error(`Failed to stop Docker containers for "${label}": ${result.message}`);
+  leftOpen.push({ appName: label, reason: 'failed', detail: result.message });
+  return false;
 }
 
 /**
@@ -206,12 +245,27 @@ export async function switchToWorkspace(
   }
 
   // Full context change — but never claim another workspace went
-  // inactive if something it needed failed to actually quit; leave its
-  // intent untouched so liveness keeps reflecting reality for it.
+  // inactive if something it needed failed to actually quit (app or
+  // Docker); leave its intent untouched so liveness keeps reflecting
+  // reality for it.
   for (const other of allConfigs) {
     if (other.id === target.id) continue;
     const hasUnresolvedFailure = getConfigAppNames(other).some((name) => failedAppNames.has(name));
-    if (!hasUnresolvedFailure) {
+    let dockerOk = true;
+    // Intent alone, NOT isConfigActive — a Docker step has no macOS app
+    // name (getMacAppName returns undefined for it), so a workspace
+    // made up only of Docker steps can never satisfy isConfigActive's
+    // liveness half regardless of whether its containers are actually
+    // running. Intent (was this config explicitly Restored/Switched-to
+    // and not yet Closed) is the correct, and only available, signal
+    // for "does this config's own Docker teardown need to run."
+    if (!hasUnresolvedFailure && isIntentActive(other.id)) {
+      for (const step of other.steps) {
+        const ok = await teardownDockerStepIfEnabled(step, closed, leftOpen);
+        if (!ok) dockerOk = false;
+      }
+    }
+    if (!hasUnresolvedFailure && dockerOk) {
       setIntentActive(other.id, false);
     }
   }
@@ -248,6 +302,11 @@ export async function closeWorkspace(
   let hadFailure = false;
 
   for (const step of target.steps) {
+    if (step.type === 'docker') {
+      const ok = await teardownDockerStepIfEnabled(step, closed, leftOpen);
+      if (!ok) hadFailure = true;
+      continue;
+    }
     const appName = getMacAppName(step.type, step.params);
     if (!appName) continue;
     // Liveness first: an app that was never running shouldn't produce
@@ -265,7 +324,9 @@ export async function closeWorkspace(
     if (result.success) {
       closed.push(appName);
     } else {
-      console.error(`Failed to quit "${appName}" while closing workspace "${target.id}": ${result.message}`);
+      console.error(
+        `Failed to quit "${appName}" while closing workspace "${target.id}": ${result.message}`,
+      );
       hadFailure = true;
       leftOpen.push({ appName, reason: 'failed', detail: result.message });
     }
@@ -345,7 +406,8 @@ async function runStep(
       // once, either here or in the else branch below, never both) if
       // the app never shows up within waitForAppRunning's own generous
       // cap — a measurement miss is not a step failure.
-      const appName = process.platform === 'darwin' ? getMacAppName(step.type, step.params) : undefined;
+      const appName =
+        process.platform === 'darwin' ? getMacAppName(step.type, step.params) : undefined;
       if (appName) {
         void waitForAppRunning(appName)
           .then(({ detected, elapsedMs }) => {

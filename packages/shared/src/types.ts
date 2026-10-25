@@ -21,9 +21,19 @@ export interface StepResult {
  * which passes this `data` straight into `run()` instead of the raw,
  * un-defaulted params. No `errors` on the success variant: nothing
  * reads it outside the `!valid` branch.
+ *
+ * `fieldErrors` is an optional, additive projection of the same
+ * failures onto a plain `{ fieldName: message }` map (first zod issue
+ * per top-level field — a nested path like `terminals[0].cwd` collapses
+ * to the `terminals` key, not torn down to row granularity) — enough
+ * for a renderer to highlight which field actually failed, without
+ * every tool's own validate() needing to build it by hand. Absent, not
+ * an empty object, when no issue has a path at all (e.g. a whole-object
+ * `.superRefine` with no `path`) — see zodValidate's own doc comment.
  */
 export type ValidationResult<TParams = unknown> =
-  { valid: true; data: TParams } | { valid: false; errors: string[] };
+  | { valid: true; data: TParams }
+  | { valid: false; errors: string[]; fieldErrors?: Record<string, string> };
 
 /**
  * Something this app knows how to launch/close that was left running
@@ -114,8 +124,7 @@ export interface ToolPlugin<TParams = unknown> {
  * input while recording, not an exceptional condition.
  */
 export type SetHotkeyBindingResult =
-  | { success: true }
-  | { success: false; error: string; code: string };
+  { success: true } | { success: false; error: string; code: string };
 
 /**
  * Result of reading the "launch at login" preference - always a live
@@ -128,8 +137,7 @@ export type GetLaunchOnLoginResult = { success: true; enabled: boolean };
 
 /** Result of setting the "launch at login" preference. */
 export type SetLaunchOnLoginResult =
-  | { success: true }
-  | { success: false; error: string; code: string };
+  { success: true } | { success: false; error: string; code: string };
 
 /**
  * One detected step proposed for "Save my current workspace" (see

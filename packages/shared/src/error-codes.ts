@@ -70,8 +70,7 @@ export const ERROR_CODES = {
   CHROME_TABS_FAILED: {
     code: 'ER-CHROME-01',
     title: "Couldn't open one or more Chrome tabs",
-    explanation:
-      'Chrome opened, but one or more of the saved URLs for this step failed to load.',
+    explanation: 'Chrome opened, but one or more of the saved URLs for this step failed to load.',
   },
   CHROME_PROFILES_UNAVAILABLE: {
     code: 'ER-CHROME-02',
@@ -119,6 +118,18 @@ export const ERROR_CODES = {
     title: "Couldn't open the file or link",
     explanation:
       'The file or link could not be opened — there may be no app installed that can handle it, or the chosen app (if one was set) could not be launched.',
+  },
+  DOCKER_DAEMON_DOWN: {
+    code: 'ER-DOCKER-01',
+    title: "Docker isn't running",
+    explanation:
+      'This step needs Docker\'s daemon running — Workspace Launcher checked via "docker info" and it didn\'t respond. Start Docker Desktop (or your daemon) and try again.',
+  },
+  DOCKER_STEP_FAILED: {
+    code: 'ER-DOCKER-02',
+    title: 'Docker step failed',
+    explanation:
+      "This step's configured command (Compose or Tilt) didn't finish successfully — the message shown alongside this code has the specific detail.",
   },
   TERMINAL_STEP_FAILED: {
     code: 'ER-TERM-01',

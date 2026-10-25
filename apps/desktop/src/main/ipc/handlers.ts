@@ -36,7 +36,11 @@ import {
   switchToWorkspace,
 } from '../orchestrator/orchestrator';
 import { withOrchestratorBusy } from '../orchestrator/orchestrator-busy';
-import { getAppHotkeyFailed, syncHotkeys, getFailedHotkeyBindings } from '../orchestrator/hotkey-service';
+import {
+  getAppHotkeyFailed,
+  syncHotkeys,
+  getFailedHotkeyBindings,
+} from '../orchestrator/hotkey-service';
 import {
   clearHotkeyBinding,
   getAllHotkeyBindings,
@@ -301,12 +305,14 @@ export async function createWorkspace(input: unknown): Promise<CreateWorkspaceRe
     return { success: false, error: parsed.error, code: ERROR_CODES.WORKSPACE_INVALID.code };
   }
 
-  const validationError = validateStepsWithRegisteredTools(parsed.config.steps);
-  if (validationError) {
+  const validationFailure = validateStepsWithRegisteredTools(parsed.config.steps);
+  if (validationFailure) {
     return {
       success: false,
-      error: validationError,
+      error: validationFailure.error,
       code: ERROR_CODES.WORKSPACE_INVALID.code,
+      stepIndex: validationFailure.stepIndex,
+      ...(validationFailure.fieldErrors ? { fieldErrors: validationFailure.fieldErrors } : {}),
     };
   }
 
@@ -348,12 +354,14 @@ export async function updateWorkspace(input: unknown): Promise<UpdateWorkspaceRe
     return { success: false, error: parsed.error, code: ERROR_CODES.WORKSPACE_INVALID.code };
   }
 
-  const validationError = validateStepsWithRegisteredTools(parsed.config.steps);
-  if (validationError) {
+  const validationFailure = validateStepsWithRegisteredTools(parsed.config.steps);
+  if (validationFailure) {
     return {
       success: false,
-      error: validationError,
+      error: validationFailure.error,
       code: ERROR_CODES.WORKSPACE_INVALID.code,
+      stepIndex: validationFailure.stepIndex,
+      ...(validationFailure.fieldErrors ? { fieldErrors: validationFailure.fieldErrors } : {}),
     };
   }
 
@@ -412,8 +420,15 @@ export async function setWorkspaceHotkey(
   if (typeof workspaceId !== 'string' || workspaceId.length === 0) {
     throw new Error('hotkeys:setBinding expects a non-empty workspace id (string).');
   }
-  if (typeof accelerator !== 'string' || !isWellFormedAccelerator(accelerator, { allowShift: false })) {
-    return { success: false, error: 'Not a valid shortcut.', code: ERROR_CODES.HOTKEY_INVALID.code };
+  if (
+    typeof accelerator !== 'string' ||
+    !isWellFormedAccelerator(accelerator, { allowShift: false })
+  ) {
+    return {
+      success: false,
+      error: 'Not a valid shortcut.',
+      code: ERROR_CODES.HOTKEY_INVALID.code,
+    };
   }
 
   const { configs } = await loadAllWorkspaceConfigs();
@@ -527,8 +542,15 @@ export function getFailedWorkspaceHotkeys(): string[] {
  * WCs/WC__save-current-workspace.md).
  */
 export async function setAppHotkey(accelerator: unknown): Promise<SetHotkeyBindingResult> {
-  if (typeof accelerator !== 'string' || !isWellFormedAccelerator(accelerator, { allowShift: true })) {
-    return { success: false, error: 'Not a valid shortcut.', code: ERROR_CODES.HOTKEY_INVALID.code };
+  if (
+    typeof accelerator !== 'string' ||
+    !isWellFormedAccelerator(accelerator, { allowShift: true })
+  ) {
+    return {
+      success: false,
+      error: 'Not a valid shortcut.',
+      code: ERROR_CODES.HOTKEY_INVALID.code,
+    };
   }
 
   // Symmetric to setWorkspaceHotkey's own identical check above —
@@ -876,9 +898,12 @@ export function registerIpcHandlers(): void {
     return getAllWorkspaceHotkeys();
   });
 
-  ipcMain.handle('hotkeys:setBinding', async (_event, workspaceId: unknown, accelerator: unknown) => {
-    return setWorkspaceHotkey(workspaceId, accelerator);
-  });
+  ipcMain.handle(
+    'hotkeys:setBinding',
+    async (_event, workspaceId: unknown, accelerator: unknown) => {
+      return setWorkspaceHotkey(workspaceId, accelerator);
+    },
+  );
 
   ipcMain.handle('hotkeys:clearBinding', async (_event, workspaceId: unknown) => {
     clearWorkspaceHotkey(workspaceId);

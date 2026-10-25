@@ -49,6 +49,20 @@ export interface StepFieldsProps {
    * state would re-fetch on every single re-expand.
    */
   appPathDetection?: AppPathDetection;
+  /**
+   * This row's per-field save-time validation errors, keyed by the
+   * tool's own top-level param field name (e.g. `{ directory: '...' }`
+   * for docker-fields.tsx) — see packages/shared's ValidationResult/
+   * zodValidate for where this is computed, and WorkspaceFormModal.tsx
+   * for how it's threaded down to only the one row that actually
+   * failed. Absent on every row until a save attempt fails, and on
+   * every row except the one step that failed even then — a field
+   * component reads its own key(s) and applies the shared
+   * border-danger/text-danger error styling (see AppHotkeyControl.tsx /
+   * spotify-fields.tsx's connection-error state for the established
+   * visual convention this follows).
+   */
+  fieldErrors?: Record<string, string>;
 }
 
 export type StepFieldsComponent = (props: StepFieldsProps) => JSX.Element | null;

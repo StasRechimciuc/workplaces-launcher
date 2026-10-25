@@ -189,6 +189,9 @@ interface StepParamsFieldsProps {
   /** See step-fields/types.ts's StepFieldsProps — forwarded verbatim,
    * only vscode/chrome/spotify/clockify-fields.tsx read it. */
   appPathDetection?: StepFieldsProps['appPathDetection'];
+  /** See step-fields/types.ts's StepFieldsProps — forwarded verbatim,
+   * only for the one row a save attempt actually failed on. */
+  fieldErrors?: StepFieldsProps['fieldErrors'];
 }
 
 /**
@@ -207,6 +210,7 @@ function StepParamsFields({
   recentCommands,
   spotify,
   appPathDetection,
+  fieldErrors,
 }: StepParamsFieldsProps): JSX.Element | null {
   const Fields = getStepFieldsComponent(preset.type);
   if (!Fields) {
@@ -221,6 +225,7 @@ function StepParamsFields({
       {...(recentCommands !== undefined ? { recentCommands } : {})}
       {...(spotify !== undefined ? { spotify } : {})}
       {...(appPathDetection !== undefined ? { appPathDetection } : {})}
+      {...(fieldErrors !== undefined ? { fieldErrors } : {})}
     />
   );
 }
@@ -239,7 +244,15 @@ export function WorkspaceFormModal({
     initialDrafts(nextKeyRef),
   );
   const [isSaving, setIsSaving] = useState(false);
-  const [saveError, setSaveError] = useState<{ message: string; code?: string } | null>(null);
+  const [saveError, setSaveError] = useState<{
+    message: string;
+    code?: string;
+    /** The failing row's stable CreateStepDraft key — not the backend's
+     * own `stepIndex`, which only means something against `createSteps`'
+     * current order at the moment of that specific save attempt. */
+    stepKey?: number;
+    fieldErrors?: Record<string, string>;
+  } | null>(null);
   // Which rows show their fields expanded, keyed by CreateStepDraft.key
   // (stable across reorders/removals, unlike an array index). Collapsed
   // by default — both fresh defaults and an existing workspace's saved
@@ -256,10 +269,13 @@ export function WorkspaceFormModal({
   const [isAddToolOpen, setIsAddToolOpen] = useState(false);
   const [toolSearchQuery, setToolSearchQuery] = useState('');
   const toolSearchInputRef = useRef<HTMLInputElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const isMac = window.api.platform === 'darwin';
   const filteredToolPresets = useMemo(() => {
     const q = toolSearchQuery.toLowerCase();
-    return q ? CREATE_TOOL_PRESETS.filter((p) => p.name.toLowerCase().includes(q)) : CREATE_TOOL_PRESETS;
+    return q
+      ? CREATE_TOOL_PRESETS.filter((p) => p.name.toLowerCase().includes(q))
+      : CREATE_TOOL_PRESETS;
   }, [toolSearchQuery]);
 
   // Plain `autoFocus` loses the race against Radix's own internal
@@ -312,6 +328,12 @@ export function WorkspaceFormModal({
   // chrome's profile, spotify's playlist. A removed row's ref callback
   // deletes its own entry, so this never leaks stale state.
   const inputRefs = useRef(new Map<number, HTMLInputElement>());
+
+  // One row DIV per CreateStepDraft key — exists purely so a failed
+  // save can scroll the actually-failing row into view, the same way
+  // inputRefs above lets a freshly-added row's input get focused.
+  // Populated/cleaned up identically (ref callback add/delete by key).
+  const rowRefs = useRef(new Map<number, HTMLDivElement>());
 
   // Set right before adding a row via the picker; consumed (and reset
   // to null) by the effect below on the very next createSteps commit.
@@ -460,9 +482,46 @@ export function WorkspaceFormModal({
   // current state with no changes in between).
   const duplicateOf = useMemo(
     () =>
-      !editingWorkspace && name.trim() ? findDuplicateWorkspace({ name, steps }, workspaces) : undefined,
+      !editingWorkspace && name.trim()
+        ? findDuplicateWorkspace({ name, steps }, workspaces)
+        : undefined,
     [editingWorkspace, name, steps, workspaces],
   );
+
+  /**
+   * Shared by handleSave/handleUpdateExisting's failure path: stores the
+   * banner text, and — when the backend named which step failed —
+   * expands that row (it may currently be collapsed) and scrolls it
+   * into view, so "which of my N steps is broken" never relies on the
+   * user reading a flat type name out of the bottom banner and hunting
+   * for it. `stepIndex` is translated to the step's stable
+   * CreateStepDraft key immediately, against `createSteps` as it stands
+   * for *this* save attempt — see saveError's own doc comment for why
+   * the index itself is never stored.
+   */
+  function applySaveFailure(result: {
+    error: string;
+    code: string;
+    stepIndex?: number;
+    fieldErrors?: Record<string, string>;
+  }): void {
+    const stepKey =
+      typeof result.stepIndex === 'number' ? createSteps[result.stepIndex]?.key : undefined;
+    setSaveError({
+      message: result.error,
+      code: result.code,
+      ...(stepKey !== undefined ? { stepKey } : {}),
+      ...(result.fieldErrors ? { fieldErrors: result.fieldErrors } : {}),
+    });
+    if (stepKey !== undefined) {
+      setOpenKeys((current) => new Set(current).add(stepKey));
+      // Deferred a frame so the row has actually expanded (and the
+      // fields block mounted) before scrolling to it.
+      requestAnimationFrame(() => {
+        rowRefs.current.get(stepKey)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+    }
+  }
 
   async function handleSave(): Promise<void> {
     setIsSaving(true);
@@ -475,7 +534,7 @@ export function WorkspaceFormModal({
         return;
       }
       if (!result.success) {
-        setSaveError({ message: result.error, code: result.code });
+        applySaveFailure(result);
         return;
       }
       onSaved(result.config);
@@ -506,7 +565,7 @@ export function WorkspaceFormModal({
       const result = await window.api.updateWorkspace({ id: duplicateOf.id, name, steps });
       if (!isMountedRef.current) return;
       if (!result.success) {
-        setSaveError({ message: result.error, code: result.code });
+        applySaveFailure(result);
         return;
       }
       onSaved(result.config);
@@ -545,6 +604,19 @@ export function WorkspaceFormModal({
       <DialogContent
         showCloseButton={false}
         className="w-190"
+        onOpenAutoFocus={(e) => {
+          // Radix's Dialog.Content auto-focuses the first focusable
+          // element on mount by default — here that's the close (X)
+          // button, not the name field, which meant a keystroke typed
+          // immediately after opening (before an explicit click into
+          // the name field) could hit the close button instead of the
+          // input. Unlike the Add-tool DropdownMenuContent below,
+          // Dialog.Content's public type DOES expose onOpenAutoFocus,
+          // so the real Radix API is used directly here rather than the
+          // rAF-deferred-focus workaround that dropdown needed.
+          e.preventDefault();
+          nameInputRef.current?.focus();
+        }}
         {...(isSaving
           ? {}
           : {
@@ -567,6 +639,7 @@ export function WorkspaceFormModal({
           <p className="mb-1.5 text-xs font-medium text-text-muted">Workspace name</p>
           <div className="mb-4.5">
             <input
+              ref={nameInputRef}
               className="h-8.5 w-full rounded-sm border border-border-strong bg-bg-elevated px-2.75 text-[13px] text-text placeholder:text-text-faint focus:border-accent-border focus:outline-none"
               type="text"
               placeholder="e.g. Client C — Backend"
@@ -623,7 +696,17 @@ export function WorkspaceFormModal({
                   ? appDisplayName(params['path'])
                   : preset.name;
               return (
-                <div className="flex gap-2.5" key={key}>
+                <div
+                  className="flex gap-2.5"
+                  key={key}
+                  ref={(el) => {
+                    if (el) {
+                      rowRefs.current.set(key, el);
+                    } else {
+                      rowRefs.current.delete(key);
+                    }
+                  }}
+                >
                   <div className="flex shrink-0 flex-col items-center pt-0.5">
                     <div className="group/index relative flex h-5.5 w-5.5 shrink-0 cursor-grab items-center justify-center rounded-full border border-border-strong bg-bg-elevated">
                       <span className="text-[10.5px] font-semibold text-text-faint transition-opacity group-hover/index:opacity-0">
@@ -713,6 +796,9 @@ export function WorkspaceFormModal({
                           spotify={spotify}
                           {...(isToolAppKey(preset.type)
                             ? { appPathDetection: appPathDetections.forTool(preset.type) }
+                            : {})}
+                          {...(saveError?.stepKey === key && saveError.fieldErrors
+                            ? { fieldErrors: saveError.fieldErrors }
                             : {})}
                         />
                       </div>

@@ -497,7 +497,7 @@ Live bug report right after the app-location-detection feature
 shipped: clicking a VS Code (or chrome/spotify/clockify) step in the
 workspace Detail view's inline "quick-edit" timeline hard-crashed to a
 black screen ("Cannot read properties of undefined (reading 'state')").
-Root cause found: `TimelineStep.tsx` is a *second*, separate render
+Root cause found: `TimelineStep.tsx` is a _second_, separate render
 site for the per-tool fields components — the inline quick-edit
 feature from an earlier round, distinct from `WorkspaceFormModal.tsx`'s
 "Edit workspace" dialog — and it was missed when the app-location
@@ -627,9 +627,9 @@ with the command's real side effect (a marker file) actually present
 afterward — cleaned up again immediately after.
 
 **Second review round** (2026-10-21, same day): the above covered the
-*plan*, reviewed before any code existed. A separate, later round — 4
+_plan_, reviewed before any code existed. A separate, later round — 4
 agents (correctness/async, security, renderer/UX, test coverage)
-against the actual *built* code — caught 4 more real issues the plan
+against the actual _built_ code — caught 4 more real issues the plan
 review couldn't have, since they only existed once the code was
 written:
 
@@ -695,7 +695,7 @@ work above, same day:
   picker, the app-detection candidate list) already had this, this one
   just never got it. In a short window the top of the list rendered
   off-screen with no way to reach it. Fixed with the same `max-h-72
-  overflow-y-auto` convention; verified live by shrinking the window to
+overflow-y-auto` convention; verified live by shrinking the window to
   reproduce the original clipping and confirming a real scrollbar
   appears with every item reachable.
 - **New terminal cards default to `~` (home), not a blank field** —
@@ -706,12 +706,12 @@ work above, same day:
   no-separate-storage pattern VS Code's existing "Recent" folder picker
   already uses — commands already saved across the user's own
   workspaces' terminal steps are the only source (new `lib/recent-
-  commands.ts`, mirrors `recent-project-paths.ts` directly, +7 tests).
+commands.ts`, mirrors `recent-project-paths.ts` directly, +7 tests).
   Appears per terminal card, excluding whatever's already in that
   specific card's own list.
 - **A live search box inside the Add-tool dropdown itself**, pinned at
   top above a scrollable filtered list, auto-focused the instant the
-  dropdown opens, and wired to the app's own *currently configured*
+  dropdown opens, and wired to the app's own _currently configured_
   "focus search" shortcut (read fresh via `getEffectiveShortcuts` —
   never hardcoded to a default combo, since the founder has this
   rebound to ⌘F rather than the shipped default ⌘K). While the
@@ -727,7 +727,7 @@ work above, same day:
     prop surface (`MenuRootContentTypeProps` explicitly `Omit`s every
     key of `MenuContentImplPrivateProps`, which `onOpenAutoFocus`
     belongs to). Reached for an `<input autoFocus>` instead — which
-    then *also* failed, losing the focus race against Radix's own
+    then _also_ failed, losing the focus race against Radix's own
     internal `FocusScope` (confirmed via its real source: it
     synchronously focuses the first tabbable candidate in its own
     mount effect, which — being a descendant — commits before this
@@ -742,14 +742,14 @@ work above, same day:
     isn't Arrow/Enter/Escape/Tab — those are deliberately let through
     so typing to filter, then pressing Down, moves naturally from
     "search" into "pick an item."
-  All three live-verified via Playwright against this session's own
-  isolated test profile (confirmed earlier in this round to be
-  entirely separate from the founder's real app data) — autofocus
-  winning the race, live filtering, and the shortcut correctly staying
-  local while the dropdown is open. 626/626 tests, lint/typecheck/build
-  all clean (no new tests for the dropdown UI itself — no React
-  component/hook testing infra in this project, same established
-  precedent; `recent-commands.ts`'s own pure logic is fully tested).
+    All three live-verified via Playwright against this session's own
+    isolated test profile (confirmed earlier in this round to be
+    entirely separate from the founder's real app data) — autofocus
+    winning the race, live filtering, and the shortcut correctly staying
+    local while the dropdown is open. 626/626 tests, lint/typecheck/build
+    all clean (no new tests for the dropdown UI itself — no React
+    component/hook testing infra in this project, same established
+    precedent; `recent-commands.ts`'s own pure logic is fully tested).
 
 ## Terminal: clear the Terminal.app preamble (2026-10-21)
 
@@ -775,7 +775,7 @@ accordingly. 626/626 tests, lint/typecheck/build clean.
 
 Founder pushback, same day as the `clear` fix above: a plain shell
 script never echoes its own commands by default, so a restored
-terminal showed each command's *output* with nothing indicating what
+terminal showed each command's _output_ with nothing indicating what
 produced it — looked like nothing was happening at all for a silent
 command (confirmed earlier that day with `caffeinate`, which genuinely
 runs but prints nothing). Also surfaced a real "why not just open a
@@ -827,7 +827,7 @@ exactly the three places the source mockup uses it (sidebar wordmark,
 a workspace's page `<h1>`, the restore-timeline step-number circles),
 not spread further.
 
-**Colors/radius**: every existing token *name* kept (so no component
+**Colors/radius**: every existing token _name_ kept (so no component
 files needed touching for colors), values replaced with the mockup's —
 including four tool-badge tones (`blue`/`sky`/`violet`/`amber`) that
 turned out to be genuinely theme-specific in the source, now redefined
@@ -907,6 +907,142 @@ section above) was live-verified via Playwright driving the real built
 app rather than a full multi-agent review round — a lighter-weight
 verification bar than rounds 1-3, appropriate for founder-reviewed
 incremental features rather than a pre-ship audit.
+
+## Orchestration testbed: first real friction found (2026-10-24)
+
+Started exercising `_orchestration-testbeds/` (see that folder's own README)
+against the real product, per its own process. First target: the Tilt
+official example (`tilt-example-python`, `3-recommended` stage) —
+deliberately the lightest of the four locked-in testbeds, picked first to
+avoid resource contention with other work happening in parallel on this
+machine.
+
+Real friction found **before Workspace Launcher was even involved**: this
+machine had no Tilt CLI and no Kubernetes cluster of any kind (not even a
+`kubectl` context) — Tilt was only ever set up on a different, now-retired
+machine. `tilt up` against a `k8s_yaml`-based Tiltfile hard-depends on a
+live cluster; there's zero guidance anywhere today (product, pitch, docs)
+for what a user needs installed/running before a Tilt-based workspace can
+succeed. Resolved manually this session (installed `tilt`, installed
+`kind`, created a disposable `kind` cluster) — not something Workspace
+Launcher did or could have done today.
+
+**Product implication, not yet acted on**: the Docker tool-plugin work
+(see "Natural next steps" below) should account for this failure class —
+today a Terminal step just reports a dumb docker/tilt-command-not-found or
+connection-refused error, with nothing distinguishing "Docker isn't
+installed" from "you have no cluster" from "the daemon isn't running."
+Real users pointing this app at a Tilt/k8s-based dev environment will hit
+exactly this. Worth folding into whatever plan backs the orchestration/
+readiness feature (`docs/build-shell.md`'s Tier 2 item).
+
+Standalone run itself succeeded cleanly once prerequisites were in place:
+image built, deployed to the `kind` cluster, Flask app served a real
+`HTTP 200` on its Tiltfile-declared port-forward (`8000`). Confirms the
+example itself is a valid, working testbed — the friction was 100%
+"missing local prerequisites," not the project or Tilt itself.
+
+Next: restore it through Workspace Launcher's existing Terminal step type
+(today's only lever for Docker/Tilt-shaped workspaces) and see what
+further friction that surfaces — per the testbed README's own process,
+step 3.
+
+## Orchestration testbed: Terminal step's "success" is disconnected from real readiness (2026-10-24)
+
+Direct continuation of the finding above — drove the actual Workspace
+Launcher app (not just the standalone project) against the Tilt testbed,
+to see what the product itself does, not just what's missing on the host
+machine.
+
+**What was done**: built the app (`electron-vite build`), launched it via
+a throwaway Playwright `_electron` driver (scratchpad-only, not committed
+anywhere), created a real new workspace ("Testbed - Tilt example" — now a
+real saved entry in the actual on-disk workspace store, left in place,
+harmless) with one Terminal step: cwd = the Tilt example's `3-recommended`
+folder, command = `tilt up`. Clicked "Restore workspace" for real.
+
+**What happened**: the UI reported "RESTORED — 1 OF 1 STEPS SUCCEEDED" /
+"✓ Opened 1 terminal." within ~1-2 seconds of clicking Restore. The real
+`tilt up` process was still running in the background at that point —
+confirmed via `ps` showing the process alive well past that point, and
+via the fact that a real `tilt up` from cold cache (measured earlier this
+same session, standalone) takes ~25+ seconds just for the Docker build
+step, before Tilt has even applied anything to the cluster or the pod has
+become ready. This run happened to actually succeed quickly only because
+Docker's build cache and the `kind`-loaded image were still warm from the
+earlier manual run — pure luck of timing, not something the app checked
+for.
+
+**The real bug/gap, stated precisely**: `terminal-tool.ts`'s success
+signal is "the OS terminal process launched," full stop — there is no
+connection whatsoever between the reported step outcome and whatever the
+command(s) inside that terminal actually do. A `tilt up` that's still
+mid-build, a `docker compose up` that's about to crash-loop, a command
+that silently fails after the terminal opens — all of these would show
+the exact same green "✓ Opened 1 terminal" the instant the window opens.
+This is not a edge case; it's the normal case for any non-trivial
+Docker/Tilt/dev-server command, which is the entire point of the
+product's own pitch ("Docker's up, Tilt's running").
+
+**Why this matters for the roadmap**: this is the single clearest, most
+concrete instance yet of exactly what the Tier 2 orchestration/readiness
+feature (`docs/build-shell.md`) is supposed to solve — port awareness,
+crashed/healthy/stuck/running states. Until then, "success" on a
+Docker/Tilt-shaped Terminal step means nothing more than "a window
+opened," which is worth being explicit about (in the UI copy itself,
+not just internally) so it doesn't read as a false promise.
+
+**Also reconfirmed from the real product itself**: Docker still shows its
+"SOON" badge in the live Add-tool dropdown (not just in docs) — consistent
+with `WC__project-status.md`'s existing roadmap, not a new finding.
+
+**Separate, smaller UX finding from the same session**: the "New
+workspace" dialog auto-focuses its close (X) button on open (Radix
+Dialog's default `FocusScope` behavior), not the name field. Driving the
+dialog by simulating keystrokes immediately after opening it (before an
+explicit click into the name field) sent a Space keystroke to the
+focused close button, which native-activates it and closes the dialog.
+A real user typing fast right after triggering "New workspace" (e.g. via
+its own hotkey) could plausibly hit the same thing if their first
+keystroke happens to be a space and they haven't yet clicked the name
+field. Low severity (requires that exact timing), but a real, previously
+undocumented instance of the same Radix-autofocus-race class already
+documented once in this file (the Add-tool dropdown search box, 2026-10-21).
+
+**Fixed (2026-10-24)**: `WorkspaceFormModal.tsx`'s `DialogContent` now sets
+`onOpenAutoFocus` (Radix's real API for this — unlike the Add-tool
+`DropdownMenuContent`, Dialog's own `Content` exposes this prop publicly,
+so no rAF workaround was needed here) to `preventDefault()` Radix's
+default first-focusable-element behavior and focus a new `nameInputRef`
+on the Workspace-name input instead. Typecheck and lint clean. Verified
+live by the founder against their own running `npm run dev` session
+(hot-reloaded) — confirmed working.
+
+## Fixed: git hooks were fully disconnected, not just missing (2026-10-24)
+
+Earlier research-audit finding ("dead pre-commit hook — `.husky/pre-commit`
+doesn't exist, only `.husky/_/`") turned out to have a more serious root
+cause once actually investigated: `.git/config`'s `core.hooksPath` was
+corrupted to the literal garbage value `--version/_` (almost certainly a
+stray `npx husky --version`-style invocation at some point in this
+project's history) — not the correct `.husky/_`. That means **no git
+hook of any kind has been firing on this machine's clone**, not just
+`pre-commit` — `.husky/_/`'s own internal wiring (all 13 hook stubs,
+generated correctly by a prior `npx husky` run) was completely
+disconnected from git itself.
+
+Fixed both pieces: `git config core.hooksPath .husky/_` (corrected,
+local-only — not a tracked file; any fresh clone already gets this right
+automatically via the `prepare` npm script running `husky` on
+`npm install`, so this was a one-off local corruption, not a repo-wide
+issue) and created the actual missing `.husky/pre-commit` (`npx
+lint-staged`, executable). Verified for real, not just "file exists":
+staged a deliberately messy throwaway `.ts` file (double quotes, bad
+spacing) and ran the real hook entry point (`.husky/_/pre-commit`)
+directly — `eslint --fix` + `prettier --write` both ran and genuinely
+reformatted the file correctly. Test file removed, nothing committed yet
+— `.husky/pre-commit` is a new untracked file ready to be committed when
+asked.
 
 ## Natural next steps, in order of what unlocks the most
 

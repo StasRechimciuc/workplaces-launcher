@@ -13,6 +13,7 @@
  */
 const TOOL_LOGO_FILES: Record<string, string> = {
   vscode: 'vscode.svg',
+  docker: 'docker.svg',
   spotify: 'spotify.svg',
   chrome: 'chrome.svg',
   clockify: 'clockify.svg',

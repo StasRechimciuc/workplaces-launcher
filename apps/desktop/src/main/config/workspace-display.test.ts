@@ -153,7 +153,7 @@ describe('toWorkspaceDisplay', () => {
   });
 
   it('does not pretend a not-yet-built tool type does something', () => {
-    const display = toWorkspaceDisplay(baseConfig([{ type: 'docker', params: {} }]));
+    const display = toWorkspaceDisplay(baseConfig([{ type: 'slack', params: {} }]));
     expect(display.tools[0]?.detail.toLowerCase()).toContain("isn't built yet");
   });
 

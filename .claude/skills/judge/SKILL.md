@@ -23,14 +23,13 @@ Read `CLAUDE.md` fresh at the start of every invocation for this project's curre
 10. **A stop is for an actual decision, not a formality.** Stage 1 (committing to build a feature at all, in a given shape) always gets an explicit go — that's always a real decision. Stage 2 (the technical plan) only needs one when it surfaces a genuine tradeoff, open question, or something that changes the Stage-1-approved direction; a plan with nothing left to decide proceeds straight into Stage 3, stated plainly as you do it, not silently. Build-time commit authorization (Stage 3's own separate git gate) never gets skipped regardless.
 11. **Don't ask what's already answered.** Before turning a design fork into a question for the user, check whether `CLAUDE.md`'s scope/principles or an existing doc in `WCs/` (`WC__project-status.md` — single source of truth for current build status; `WC__design-system.md`; `WC__vscode-terminal-restore.md`; any later addition to that folder) already resolves it. If one does, decide it yourself and say what you decided and why — don't make the user re-answer something the project has already settled. Only surface a question when it's genuinely open: not addressed by those docs, or a real product/taste call with more than one defensible answer (e.g. the "recent" scoping question in the folder-picker judgment was real and correctly surfaced; whether a Tier-1 backlog item's own parenthetical already includes a sub-feature, as it did there too, is not — that one should have been stated as a finding, not asked about).
 
-## Stage 1 — Judge the idea (parallel agents, no code, no plan file yet)
+## Stage 1 — Judge the idea (a few high-effort agents, no code, no plan file yet)
 
-Launch several agents in parallel (one message, multiple Agent calls) from distinct angles. Scale the exact set to the feature, but default to:
+**Hard cap: 2-3 agents, in parallel (one message, multiple Agent calls), each set to high effort.** More agents did not reliably catch more real issues in practice — the budget goes into depth per agent, not agent count. Combine angles within each agent rather than spawning one agent per angle:
 
-- **User-comfort angle** — adopt the actual target user's perspective. Is this comfortable, intuitive, low-friction? When unsure how similar tools handle this, use WebSearch for real prior art instead of guessing a convention.
-- **Best-practice/engineering angle** — research how this is correctly and cleanly built (APIs, platform behavior, security implications — WebSearch/WebFetch as needed). Identify every viable approach, then converge on the *one* cleanest, with explicit reasoning for why it beats the alternatives.
-- **Codebase-fit angle** (Explore) — find the existing pattern/abstraction this should reuse or match, so the recommendation doesn't invent a one-off shape.
-- **Edge-case angle** — enumerate realistic failure/edge scenarios and how each should be handled.
+- **Agent 1 — user-comfort + prior art.** Adopt the actual target user's perspective: is this comfortable, intuitive, low-friction? When unsure how similar tools handle this, use WebSearch for real prior art instead of guessing a convention.
+- **Agent 2 — codebase-fit + edge cases.** Find the existing pattern/abstraction this should reuse or match (Explore), AND enumerate realistic failure/edge scenarios and how each should be handled — one agent, both angles, since both come from reading the same real code.
+- **Agent 3 (only if it genuinely doesn't fit into 1 or 2) — best-practice/engineering.** How this is correctly and cleanly built (APIs, platform behavior, security implications — WebSearch/WebFetch as needed); identify every viable approach and converge on the one cleanest. Default to 2 agents; add this third only when the feature has a real, separate technical-correctness question neither of the other two would naturally cover.
 
 Synthesize their findings yourself into **one** recommended idea and approach — not a menu — covering: the chosen direction, why it beat the alternatives, the main edge cases and their handling, and the UX-comfort findings. Before presenting, run every open fork through principle 11 — resolve what `CLAUDE.md`/`WCs/` already answers yourself and present it as a finding, not a question. Present the recommendation to the user, with only the genuinely open questions (if any) called out.
 
@@ -38,9 +37,11 @@ Synthesize their findings yourself into **one** recommended idea and approach �
 
 ## Stage 2 — Technical plan (only after Stage 1 is approved)
 
-No mode switch — run this stage the normal way, same as Stage 1: launch agents directly in the current mode, never `EnterPlanMode`. Parallel Explore agents for codebase specifics → Plan agent(s) for the concrete implementation → an adversarial review pass that stress-tests the plan for real bugs/gaps before it's presented (this project's established practice — catch issues before code exists, not after). Research/Explore/Plan/review agents always run this way — launched directly, never gated behind a mode switch — for both Stage 1 and Stage 2.
+No mode switch — run this stage the normal way, same as Stage 1: launch agents directly in the current mode, never `EnterPlanMode`.
 
-Don't stop at an arbitrary cap on agent count when more angles would genuinely sharpen the result — launch additional Explore/Plan agents in parallel per distinct sub-question (e.g. data-flow, testing conventions, existing UI patterns to reuse are three separate angles for one feature, not one), then combine their findings yourself into the single plan. More agents in parallel cost no extra turnaround, so default to splitting a plan with several genuinely separable angles across several agents rather than one broad agent doing all of it serially.
+**Same hard cap as Stage 1: 2-3 agents, in parallel, each set to high effort.** Combine sub-questions (data-flow, testing conventions, existing UI patterns to reuse, etc.) across that budget rather than launching one agent per sub-question — e.g. one Explore agent covering every codebase-fact-finding angle the plan needs, a second doing the adversarial stress-test of the draft plan once synthesized. Write the plan yourself from the agents' findings; don't delegate the synthesis.
+
+An adversarial pass that stress-tests the plan for real bugs/gaps before it's presented is still required (this project's established practice — catch issues before code exists, not after) — it counts against the 2-3 cap, it doesn't come on top of it.
 
 Present the final, synthesized plan directly in the conversation (Context → concrete design → tests → verification) — no separate plan file to write, no mode to exit.
 

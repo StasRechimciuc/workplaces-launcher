@@ -20,6 +20,12 @@ export interface ProjectPathSuggestion {
   path: string;
 }
 
+/** The only three step types with a "project directory"-shaped field —
+ * shared by every caller that needs to decide whether a step is even
+ * eligible for a suggestion, not just by `getProjectPathSuggestion`
+ * itself (see `pathFromStep` below, which this set mirrors). */
+export const PROJECT_PATH_STEP_TYPES = new Set(['vscode', 'docker', 'terminal']);
+
 const SOURCE_LABELS: Record<string, string> = {
   vscode: 'VS Code',
   docker: 'Docker',

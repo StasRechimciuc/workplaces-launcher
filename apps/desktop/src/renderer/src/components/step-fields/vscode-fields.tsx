@@ -13,7 +13,8 @@ import {
 } from '../ui/dropdown-menu';
 import type { StepFieldsProps } from './types';
 import { FIELD_GROUP_LABEL_CLASS, ResolvedAppPath } from './ResolvedAppPath';
-import { errorBorderClass } from './field-error';
+import { ProjectPathSuggestionChip } from './ProjectPathSuggestionChip';
+import { PATH_INPUT_CLASS, errorBorderClass } from './field-error';
 
 /**
  * Terminal commands render via EditableStringList (individual removable
@@ -67,24 +68,21 @@ export function VscodeFields({
 
       <span className={`${FIELD_GROUP_LABEL_CLASS} mt-1`}>Project folder</span>
       {!path && projectPathSuggestion && (
-        <button
-          type="button"
-          className="flex h-6 w-fit items-center gap-1.25 self-start rounded-[5px] px-1.5 text-[11px] text-text-faint hover:bg-bg-hover hover:text-text-muted"
+        <ProjectPathSuggestionChip
+          label={
+            <>
+              Use {projectPathSuggestion.sourceLabel}&rsquo;s folder: {projectPathSuggestion.path}
+            </>
+          }
           onClick={() => {
             onChange({ path: projectPathSuggestion.path });
           }}
-        >
-          <Icon name="folder" size={11} />
-          Use {projectPathSuggestion.sourceLabel}&rsquo;s folder: {projectPathSuggestion.path}
-        </button>
+        />
       )}
       <div className="flex items-center gap-1.5">
         <input
           ref={registerPrimaryInputRef}
-          className={errorBorderClass(
-            'h-8 min-w-0 flex-1 rounded-sm border border-border-strong bg-bg px-2.5 text-[12.5px] text-text placeholder:text-text-faint focus:border-accent-border focus:outline-none',
-            fieldErrors?.['path'],
-          )}
+          className={errorBorderClass(PATH_INPUT_CLASS, fieldErrors?.['path'])}
           type="text"
           placeholder="e.g. ~/projects/client-c"
           value={path}

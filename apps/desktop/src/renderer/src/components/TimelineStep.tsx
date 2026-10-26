@@ -5,6 +5,8 @@ import { Icon } from '../icons';
 import { cn } from '../lib/utils';
 import type { SpotifyConnection } from '../lib/useSpotifyConnection';
 import type { AppPathDetection } from '../lib/useAppPathDetections';
+import type { ProjectPathSuggestion } from '../lib/project-path-suggestion';
+import type { ProjectFilesDetectionHandle } from '../lib/useProjectFilesDetection';
 import { stepLaunchTimeLabel, stepLaunchTimeTooltip } from '../lib/launch-time-display';
 import { formatPreciseDuration } from '@workspace-launcher/shared';
 import { getRestoreResultTreatment } from '../lib/restore-result-treatment';
@@ -25,6 +27,18 @@ interface TimelineStepProps {
    * only vscode/chrome/spotify/clockify-fields.tsx read it. Absent for
    * any other tool type (Fields is undefined for those regardless). */
   appPathDetection?: AppPathDetection;
+  /** This row's per-field save-time validation errors — forwarded
+   * verbatim into `<Fields>`, same as WorkspaceFormModal.tsx's own
+   * StepParamsFields call. Only present while `isOpen` and a save just
+   * failed for this exact step (Detail.tsx only ever passes it for the
+   * currently-expanded index). */
+  fieldErrors?: Record<string, string>;
+  /** Forwarded verbatim into `<Fields>` — only vscode/docker/terminal
+   * fields read it. See lib/project-path-suggestion.ts. */
+  projectPathSuggestion?: ProjectPathSuggestion;
+  /** Forwarded verbatim into `<Fields>` — only docker-fields.tsx reads
+   * it. See lib/useProjectFilesDetection.ts. */
+  projectFilesDetection?: ProjectFilesDetectionHandle;
   /** null = no edits made yet in this step's fields (Save stays
    * disabled) — distinct from "edited back to the original value,"
    * which this codebase's established taste treats as an acceptable
@@ -203,6 +217,9 @@ export function TimelineStep({
   recentCommands,
   spotify,
   appPathDetection,
+  fieldErrors,
+  projectPathSuggestion,
+  projectFilesDetection,
   draftParams,
   onDraftChange,
   onSave,
@@ -432,6 +449,9 @@ export function TimelineStep({
               {...(tool.type === 'terminal' ? { recentCommands } : {})}
               {...(tool.type === 'spotify' ? { spotify } : {})}
               {...(appPathDetection !== undefined ? { appPathDetection } : {})}
+              {...(fieldErrors !== undefined ? { fieldErrors } : {})}
+              {...(projectPathSuggestion !== undefined ? { projectPathSuggestion } : {})}
+              {...(projectFilesDetection !== undefined ? { projectFilesDetection } : {})}
             />
             {/* Only shown once there's an actual change to act on — with
                 nothing edited yet, Save has nothing to persist and

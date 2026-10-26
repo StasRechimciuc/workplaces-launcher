@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { appDisplayName } from '@workspace-launcher/shared';
 import { Icon } from '../../icons';
-import { errorBorderClass } from './field-error';
+import { PATH_INPUT_CLASS, errorBorderClass } from './field-error';
 import type { StepFieldsProps } from './types';
 
 /**
@@ -66,10 +66,7 @@ export function LinkFields({
       <div className="flex items-center gap-1.5">
         <input
           ref={registerPrimaryInputRef}
-          className={errorBorderClass(
-            'h-8 min-w-0 flex-1 rounded-sm border border-border-strong bg-bg px-2.5 text-[12.5px] text-text placeholder:text-text-faint focus:border-accent-border focus:outline-none',
-            fieldErrors?.['target'],
-          )}
+          className={errorBorderClass(PATH_INPUT_CLASS, fieldErrors?.['target'])}
           type="text"
           placeholder="Paste a link, or browse to a file…"
           value={target}

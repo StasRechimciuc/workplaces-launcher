@@ -11,6 +11,8 @@ import { workspaceLaunchTimeLabel, workspaceLaunchTimeTooltip } from '../lib/lau
 import { replaceStepParams } from '../lib/replace-step-params';
 import { useSpotifyConnection } from '../lib/useSpotifyConnection';
 import { useAppPathDetections } from '../lib/useAppPathDetections';
+import { useProjectFilesDetection } from '../lib/useProjectFilesDetection';
+import { PROJECT_PATH_STEP_TYPES, getProjectPathSuggestion } from '../lib/project-path-suggestion';
 import type { WorkspaceRestoreState } from '../lib/workspace-restore-state';
 import { TimelineStep } from './TimelineStep';
 import { RestoreResults } from './RestoreResults';
@@ -23,6 +25,17 @@ import { WorkspaceHotkeyControl } from './WorkspaceHotkeyControl';
 interface DisplayError {
   message: string;
   code?: string;
+}
+
+/** `handleSaveStep`'s own error shape — a DisplayError plus the per-
+ * field breakdown of the SAME failed save, kept as a sibling field
+ * rather than nested inside `message`/`code`, matching
+ * WorkspaceFormModal.tsx's own saveError shape. Not folded into the
+ * generic DisplayError above since restoreError/removeStepError never
+ * carry field-level detail — adding it there would leak an always-
+ * unused field into every other error state in this component. */
+interface SaveStepDisplayError extends DisplayError {
+  fieldErrors?: Record<string, string>;
 }
 import {
   DropdownMenu,
@@ -107,7 +120,7 @@ export function Detail({
   // shape that already governs expand/collapse.
   const [draftParams, setDraftParams] = useState<Record<string, unknown> | null>(null);
   const [isSavingStep, setIsSavingStep] = useState(false);
-  const [saveStepError, setSaveStepError] = useState<DisplayError | null>(null);
+  const [saveStepError, setSaveStepError] = useState<SaveStepDisplayError | null>(null);
   // Removing a single step — independent of the quick-edit state above
   // (a step can be removed whether or not it's currently expanded).
   const [removingIndex, setRemovingIndex] = useState<number | null>(null);
@@ -125,6 +138,11 @@ export function Detail({
   // regardless of which workspace's Detail view is showing, so there's
   // nothing to invalidate when switching the selected workspace.
   const appPathDetections = useAppPathDetections();
+  // Same lifted-to-survive-collapse reasoning as appPathDetections above
+  // — a Docker row's fields block fully unmounts when collapsed, so
+  // state owned locally by docker-fields.tsx would re-scan on every
+  // re-expand. No reset-on-close here either, same precedent.
+  const projectFilesDetection = useProjectFilesDetection();
   const isMac = window.api.platform === 'darwin';
 
   function handleToggleStep(i: number): void {
@@ -155,7 +173,11 @@ export function Detail({
         steps,
       });
       if (!result.success) {
-        setSaveStepError({ message: result.error, code: result.code });
+        setSaveStepError({
+          message: result.error,
+          code: result.code,
+          ...(result.fieldErrors ? { fieldErrors: result.fieldErrors } : {}),
+        });
         return false;
       }
       setDraftParams(null);
@@ -666,46 +688,68 @@ export function Detail({
       )}
 
       <div className="flex flex-col">
-        {workspace.tools.map((tool, i) => (
-          <TimelineStep
-            key={i}
-            tool={tool}
-            index={i}
-            isLast={i === workspace.tools.length - 1}
-            isOpen={expandedIndex === i}
-            onToggle={() => {
-              handleToggleStep(i);
-            }}
-            recentFolders={recentFolders.filter((p) => p !== tool.params['path'])}
-            recentCommands={recentCommands}
-            spotify={spotify}
-            {...(isToolAppKey(tool.type)
-              ? { appPathDetection: appPathDetections.forTool(tool.type) }
-              : {})}
-            draftParams={expandedIndex === i ? draftParams : null}
-            onDraftChange={setDraftParams}
-            onSave={() => {
-              void handleSaveStep(i);
-            }}
-            onCancel={handleCancelStep}
-            isSaving={isSavingStep}
-            saveError={expandedIndex === i ? saveStepError : null}
-            onShowErrorCode={onShowErrorCode}
-            onRemove={() => {
-              void handleRemoveStep(i);
-            }}
-            isRemoving={removingIndex === i}
-            {...(restoreResults && toolTypesAtRestore?.[i] === tool.type
-              ? { result: restoreResults[i] }
-              : {})}
-            onRetryStep={(j) => {
-              void handleRetryStep(j);
-            }}
-            retryingIndex={retryingIndex}
-            retryDisabled={isSwitching || isClosing}
-            hasRestoreResults={restoreResults !== null}
-          />
-        ))}
+        {workspace.tools.map((tool, i) => {
+          // Same "the only three project-directory-shaped step types"
+          // scoping as WorkspaceFormModal.tsx, computed fresh per row —
+          // steps here are index-identified (no stable key, confirmed
+          // earlier this session), so the index doubles as the
+          // suggestion's own excludeKey/key.
+          const projectPathSuggestion = PROJECT_PATH_STEP_TYPES.has(tool.type)
+            ? getProjectPathSuggestion(
+                workspace.tools.map((t, idx) => ({ key: idx, type: t.type, params: t.params })),
+                i,
+              )
+            : undefined;
+          const directory =
+            typeof tool.params['directory'] === 'string' ? tool.params['directory'] : '';
+          return (
+            <TimelineStep
+              key={i}
+              tool={tool}
+              index={i}
+              isLast={i === workspace.tools.length - 1}
+              isOpen={expandedIndex === i}
+              onToggle={() => {
+                handleToggleStep(i);
+              }}
+              recentFolders={recentFolders.filter((p) => p !== tool.params['path'])}
+              recentCommands={recentCommands}
+              spotify={spotify}
+              {...(isToolAppKey(tool.type)
+                ? { appPathDetection: appPathDetections.forTool(tool.type) }
+                : {})}
+              draftParams={expandedIndex === i ? draftParams : null}
+              onDraftChange={setDraftParams}
+              onSave={() => {
+                void handleSaveStep(i);
+              }}
+              onCancel={handleCancelStep}
+              isSaving={isSavingStep}
+              saveError={expandedIndex === i ? saveStepError : null}
+              {...(expandedIndex === i && saveStepError?.fieldErrors
+                ? { fieldErrors: saveStepError.fieldErrors }
+                : {})}
+              {...(projectPathSuggestion ? { projectPathSuggestion } : {})}
+              {...(tool.type === 'docker'
+                ? { projectFilesDetection: projectFilesDetection.forDirectory(directory) }
+                : {})}
+              onShowErrorCode={onShowErrorCode}
+              onRemove={() => {
+                void handleRemoveStep(i);
+              }}
+              isRemoving={removingIndex === i}
+              {...(restoreResults && toolTypesAtRestore?.[i] === tool.type
+                ? { result: restoreResults[i] }
+                : {})}
+              onRetryStep={(j) => {
+                void handleRetryStep(j);
+              }}
+              retryingIndex={retryingIndex}
+              retryDisabled={isSwitching || isClosing}
+              hasRestoreResults={restoreResults !== null}
+            />
+          );
+        })}
       </div>
     </main>
   );

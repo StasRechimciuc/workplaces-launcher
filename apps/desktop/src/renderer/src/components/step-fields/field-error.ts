@@ -19,3 +19,11 @@
 export function errorBorderClass(baseClassName: string, message: string | undefined): string {
   return message ? `${baseClassName} border-danger` : baseClassName;
 }
+
+/** The standard single-line text input's base className — byte-
+ * identical across vscode/link/docker/terminal-fields.tsx before this
+ * was extracted, confirmed via direct comparison rather than assumed.
+ * Pass as `errorBorderClass`'s first argument (or use directly where a
+ * field has no `fieldErrors` support). */
+export const PATH_INPUT_CLASS =
+  'h-8 min-w-0 flex-1 rounded-sm border border-border-strong bg-bg px-2.5 text-[12.5px] text-text placeholder:text-text-faint focus:border-accent-border focus:outline-none';

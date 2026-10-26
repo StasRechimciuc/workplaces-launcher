@@ -18,7 +18,7 @@ import { SHORTCUTS, getEffectiveShortcuts, getStoredOverrides } from '../lib/sho
 import { useSpotifyConnection } from '../lib/useSpotifyConnection';
 import { useAppPathDetections } from '../lib/useAppPathDetections';
 import { useProjectFilesDetection } from '../lib/useProjectFilesDetection';
-import { getProjectPathSuggestion } from '../lib/project-path-suggestion';
+import { PROJECT_PATH_STEP_TYPES, getProjectPathSuggestion } from '../lib/project-path-suggestion';
 import { cn } from '../lib/utils';
 import {
   getStepFieldsComponent,
@@ -60,11 +60,6 @@ interface WorkspaceFormModalProps {
    * — the save-error banner's "Learn more about this error" link. */
   onShowErrorCode: (code: string) => void;
 }
-
-/** The only step types with a "project directory"-shaped field — see
- * lib/project-path-suggestion.ts's own doc comment for why this is a
- * fixed, small set rather than a generic cross-field mechanism. */
-const PROJECT_PATH_STEP_TYPES = new Set(['vscode', 'docker', 'terminal']);
 
 /**
  * One row in the "Tools" list (runs in the order added) — a preset (icon/

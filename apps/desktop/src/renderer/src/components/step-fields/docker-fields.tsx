@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from '../../icons';
 import { FIELD_GROUP_LABEL_CLASS } from './ResolvedAppPath';
-import { errorBorderClass } from './field-error';
+import { ProjectPathSuggestionChip } from './ProjectPathSuggestionChip';
+import { PATH_INPUT_CLASS, errorBorderClass } from './field-error';
 import { sanitizeComposeProjectName } from '../../lib/compose-project-name';
 import type { StepFieldsProps } from './types';
 
@@ -63,6 +64,34 @@ export function DockerFields({
   // subsequent change to `directory` (typing, Browse, a suggestion
   // accept) should ever trigger a scan.
   const isFirstRenderRef = useRef(true);
+  // Same "skip on mount" guard, but for APPLYING an already-settled
+  // detection result, not triggering a new scan — a real, previously-
+  // missed bug: detection results are cached and shared by directory
+  // string (useProjectFilesDetection), so a SECOND Docker step pointed
+  // at the same directory as an already-scanned first one mounts with
+  // `projectFilesDetection.state` already 'done'. Without this guard,
+  // the effect below fires immediately on that mount and silently
+  // overwrites the second row's engine/commands from the first row's
+  // cached result, even though nothing about THIS row's directory ever
+  // actually changed. A separate ref from isFirstRenderRef above —
+  // effects run in declaration order within a commit, so sharing one
+  // ref would have this effect observe it already flipped false by the
+  // scan-trigger effect above running first in the same commit.
+  const isFirstApplyRef = useRef(true);
+  // Tracks the exact string WE last auto-filled into upCommand (either
+  // a plain engine default from handleEngineChange, or the richer,
+  // detection-baked variant from the effect below) — initialized to
+  // the CURRENT engine's plain default, so a freshly-mounted, never-
+  // customized row (where the saved value already IS that default)
+  // still recognizes it as replaceable. Comparing against this instead
+  // of a fixed `defaultUpCommand(engine)` string is what makes "is this
+  // still ours to overwrite" survive BOTH kinds of auto-fill — the real
+  // bug this fixes: after detection baked `docker compose -f x.yaml -p
+  // name up ...` in, toggling the engine compared that baked string
+  // against the bare default, never matched, and left a stale command
+  // paired with the new engine (confirmed in real use, not theoretical).
+  const autoFilledUpCommandRef = useRef(defaultUpCommand(engine));
+  const autoFilledDownCommandRef = useRef(defaultDownCommand(engine));
 
   async function handleBrowse(): Promise<void> {
     setIsBrowsing(true);
@@ -79,13 +108,16 @@ export function DockerFields({
   function handleEngineChange(next: DockerEngine): void {
     engineTouchedRef.current = true;
     const update: Record<string, unknown> = { engine: next };
-    // Only replace a command field that's empty or still equal to the
-    // OTHER engine's own default — never clobber a real edit.
-    if (upCommand === '' || upCommand === defaultUpCommand(engine)) {
+    // Only replace a command field that's empty or still equal to
+    // whatever WE last auto-filled (plain default OR a detection-baked
+    // variant) — never clobber a real edit.
+    if (upCommand === '' || upCommand === autoFilledUpCommandRef.current) {
       update['upCommand'] = defaultUpCommand(next);
+      autoFilledUpCommandRef.current = defaultUpCommand(next);
     }
-    if (downCommand === '' || downCommand === defaultDownCommand(engine)) {
+    if (downCommand === '' || downCommand === autoFilledDownCommandRef.current) {
       update['downCommand'] = defaultDownCommand(next);
+      autoFilledDownCommandRef.current = defaultDownCommand(next);
     }
     onChange(update);
   }
@@ -118,21 +150,27 @@ export function DockerFields({
   // alone here — the status message below covers those, since neither
   // has a single correct engine to pick.
   useEffect(() => {
+    if (isFirstApplyRef.current) {
+      isFirstApplyRef.current = false;
+      return;
+    }
     if (engineTouchedRef.current) return;
     const state = projectFilesDetection?.state;
     if (!state || state.status !== 'done' || !state.result) return;
     const { composeFile, hasTiltfile } = state.result;
-    const commandsAreDefault = upCommand === '' || upCommand === defaultUpCommand(engine);
+    const commandsAreDefault = upCommand === '' || upCommand === autoFilledUpCommandRef.current;
     if (!commandsAreDefault) return;
 
     if (composeFile && !hasTiltfile) {
       const projectName = sanitizeComposeProjectName(directory);
-      onChange({
-        engine: 'compose',
-        upCommand: `docker compose -f ${composeFile} -p ${projectName} up -d --wait --wait-timeout 120`,
-        downCommand: `docker compose -f ${composeFile} -p ${projectName} down`,
-      });
+      const newUpCommand = `docker compose -f ${composeFile} -p ${projectName} up -d --wait --wait-timeout 120`;
+      const newDownCommand = `docker compose -f ${composeFile} -p ${projectName} down`;
+      autoFilledUpCommandRef.current = newUpCommand;
+      autoFilledDownCommandRef.current = newDownCommand;
+      onChange({ engine: 'compose', upCommand: newUpCommand, downCommand: newDownCommand });
     } else if (hasTiltfile && !composeFile) {
+      autoFilledUpCommandRef.current = 'tilt up';
+      autoFilledDownCommandRef.current = 'tilt down';
       onChange({ engine: 'tilt', upCommand: 'tilt up', downCommand: 'tilt down' });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally re-runs only when the detection itself settles, not on every upCommand/engine/onChange identity change (those are read fresh via the commandsAreDefault guard, not meant to re-trigger this).
@@ -156,24 +194,21 @@ export function DockerFields({
         The folder containing your docker-compose.yml or Tiltfile — commands below run from here.
       </p>
       {!directory && projectPathSuggestion && (
-        <button
-          type="button"
-          className="flex h-6 w-fit items-center gap-1.25 self-start rounded-[5px] px-1.5 text-[11px] text-text-faint hover:bg-bg-hover hover:text-text-muted"
+        <ProjectPathSuggestionChip
+          label={
+            <>
+              Use {projectPathSuggestion.sourceLabel}&rsquo;s folder: {projectPathSuggestion.path}
+            </>
+          }
           onClick={() => {
             onChange({ directory: projectPathSuggestion.path });
           }}
-        >
-          <Icon name="folder" size={11} />
-          Use {projectPathSuggestion.sourceLabel}&rsquo;s folder: {projectPathSuggestion.path}
-        </button>
+        />
       )}
       <div className="flex items-center gap-1.5">
         <input
           ref={registerPrimaryInputRef}
-          className={errorBorderClass(
-            'h-8 min-w-0 flex-1 rounded-sm border border-border-strong bg-bg px-2.5 text-[12.5px] text-text placeholder:text-text-faint focus:border-accent-border focus:outline-none',
-            fieldErrors?.['directory'],
-          )}
+          className={errorBorderClass(PATH_INPUT_CLASS, fieldErrors?.['directory'])}
           type="text"
           placeholder="e.g. ~/projects/client-c"
           value={directory}

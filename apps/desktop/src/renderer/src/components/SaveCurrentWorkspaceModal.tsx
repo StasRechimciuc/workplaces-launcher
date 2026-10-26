@@ -91,7 +91,12 @@ export function SaveCurrentWorkspaceModal({
   // or re-derivation never clobbers an in-progress edit.
   const [stepParams, setStepParams] = useState<Record<string, unknown>[]>([]);
   const [openIndices, setOpenIndices] = useState<Set<number>>(new Set());
-  const [saveError, setSaveError] = useState<{ message: string; code?: string } | null>(null);
+  const [saveError, setSaveError] = useState<{
+    message: string;
+    code?: string;
+    stepIndex?: number;
+    fieldErrors?: Record<string, string>;
+  } | null>(null);
 
   // Same altitude/instantiation pattern as WorkspaceFormModal: owned
   // once for this modal's lifetime, threaded down to each row's fields
@@ -188,6 +193,39 @@ export function SaveCurrentWorkspaceModal({
     [name, steps, workspaces],
   );
 
+  /**
+   * `result.stepIndex`, when present, indexes into the FILTERED/checked
+   * `steps` array actually sent to the backend — not `draft.steps`'
+   * own indices (unchecked rows are skipped, so the two index spaces
+   * diverge the moment anything is unchecked). Translates back to the
+   * real `draft.steps` index before using it for anything UI-facing
+   * (which row to auto-expand, which row's FieldsComponent gets
+   * `fieldErrors`), same translation WorkspaceFormModal.tsx's own
+   * applySaveFailure does (there via a stable step key instead, since
+   * that form doesn't filter by a checked set).
+   */
+  function applySaveFailure(result: {
+    error: string;
+    code: string;
+    stepIndex?: number;
+    fieldErrors?: Record<string, string>;
+  }): void {
+    let originalIndex: number | undefined;
+    if (typeof result.stepIndex === 'number' && draft && draft.status === 'ready') {
+      const checkedIndices = draft.steps.map((_, i) => i).filter((i) => checked.has(i));
+      originalIndex = checkedIndices[result.stepIndex];
+    }
+    setSaveError({
+      message: result.error,
+      code: result.code,
+      ...(originalIndex !== undefined ? { stepIndex: originalIndex } : {}),
+      ...(result.fieldErrors ? { fieldErrors: result.fieldErrors } : {}),
+    });
+    if (originalIndex !== undefined) {
+      setOpenIndices((current) => new Set(current).add(originalIndex!));
+    }
+  }
+
   async function handleSave(): Promise<void> {
     if (!draft || draft.status !== 'ready') return;
     setPhase('saving');
@@ -196,7 +234,7 @@ export function SaveCurrentWorkspaceModal({
       const result: CreateWorkspaceResult = await window.api.createWorkspace({ name, steps });
       if (!isMountedRef.current) return;
       if (!result.success) {
-        setSaveError({ message: result.error, code: result.code });
+        applySaveFailure(result);
         setPhase('ready');
         return;
       }
@@ -236,7 +274,7 @@ export function SaveCurrentWorkspaceModal({
       });
       if (!isMountedRef.current) return;
       if (!result.success) {
-        setSaveError({ message: result.error, code: result.code });
+        applySaveFailure(result);
         setPhase('ready');
         return;
       }
@@ -468,6 +506,9 @@ export function SaveCurrentWorkspaceModal({
                               spotify={spotify}
                               {...(isToolAppKey(step.type)
                                 ? { appPathDetection: appPathDetections.forTool(step.type) }
+                                : {})}
+                              {...(saveError?.stepIndex === i && saveError.fieldErrors
+                                ? { fieldErrors: saveError.fieldErrors }
                                 : {})}
                             />
                           </div>

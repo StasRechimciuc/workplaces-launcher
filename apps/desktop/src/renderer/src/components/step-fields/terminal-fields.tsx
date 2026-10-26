@@ -14,7 +14,8 @@ import {
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu';
 import { FIELD_GROUP_LABEL_CLASS } from './ResolvedAppPath';
-import { errorBorderClass } from './field-error';
+import { ProjectPathSuggestionChip } from './ProjectPathSuggestionChip';
+import { PATH_INPUT_CLASS, errorBorderClass } from './field-error';
 import type { StepFieldsProps } from './types';
 
 /**
@@ -122,9 +123,13 @@ export function TerminalFields({
           >
             <span className={FIELD_GROUP_LABEL_CLASS}>Working directory</span>
             {index === 0 && !entry.cwd && projectPathSuggestion && (
-              <button
-                type="button"
-                className="flex h-6 w-fit items-center gap-1.25 self-start rounded-[5px] px-1.5 text-[11px] text-text-faint hover:bg-bg-hover hover:text-text-muted"
+              <ProjectPathSuggestionChip
+                label={
+                  <>
+                    Use {projectPathSuggestion.sourceLabel}&rsquo;s folder:{' '}
+                    {projectPathSuggestion.path}
+                  </>
+                }
                 onClick={() => {
                   onChange({
                     terminals: updateTerminalEntry(params, index, {
@@ -132,14 +137,11 @@ export function TerminalFields({
                     }),
                   });
                 }}
-              >
-                <Icon name="folder" size={11} />
-                Use {projectPathSuggestion.sourceLabel}&rsquo;s folder: {projectPathSuggestion.path}
-              </button>
+              />
             )}
             <div className="flex items-center gap-1.5">
               <input
-                className="h-8 min-w-0 flex-1 rounded-sm border border-border-strong bg-bg px-2.5 text-[12.5px] text-text placeholder:text-text-faint focus:border-accent-border focus:outline-none"
+                className={PATH_INPUT_CLASS}
                 type="text"
                 placeholder="e.g. ~/projects/client-c"
                 value={entry.cwd}
@@ -239,17 +241,17 @@ export function TerminalFields({
         );
       })}
       {entries.length === 0 && projectPathSuggestion && (
-        <button
-          type="button"
-          className="flex h-6 w-fit items-center gap-1.25 self-start rounded-[5px] px-1.5 text-[11px] text-text-faint hover:bg-bg-hover hover:text-text-muted"
+        <ProjectPathSuggestionChip
+          label={
+            <>
+              Add a terminal using {projectPathSuggestion.sourceLabel}&rsquo;s folder:{' '}
+              {projectPathSuggestion.path}
+            </>
+          }
           onClick={() => {
             handleAddWithSuggestedCwd(projectPathSuggestion.path);
           }}
-        >
-          <Icon name="folder" size={11} />
-          Add a terminal using {projectPathSuggestion.sourceLabel}&rsquo;s folder:{' '}
-          {projectPathSuggestion.path}
-        </button>
+        />
       )}
       <button
         type="button"

@@ -8,6 +8,9 @@ export * from './save-current-workspace-channel';
 export * from './app-display-name';
 export * from './format-duration';
 export * from './app-detection';
+// project-files-detection.ts is type-only (no runtime values) — same
+// safe-through-this-barrel reasoning as app-detection.ts above.
+export * from './project-files-detection';
 // accelerator.ts has zero Node dependencies (pure string logic) — safe
 // through this barrel for every consumer, same reasoning as
 // spotify.ts/chrome.ts below, not restore-progress.ts's special case.

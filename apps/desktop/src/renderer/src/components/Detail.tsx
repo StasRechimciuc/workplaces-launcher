@@ -1,10 +1,5 @@
 import { useMemo, useState } from 'react';
-import type {
-  LeftOpenEntry,
-  RestoreProgressEvent,
-  StepResult,
-  WorkspaceConfig,
-} from '@workspace-launcher/shared';
+import type { RestoreProgressEvent, StepResult, WorkspaceConfig } from '@workspace-launcher/shared';
 import { ERROR_CODES, isToolAppKey } from '@workspace-launcher/shared';
 import type { WorkspaceDisplay } from '../../../preload';
 import { Icon } from '../icons';
@@ -16,6 +11,7 @@ import { workspaceLaunchTimeLabel, workspaceLaunchTimeTooltip } from '../lib/lau
 import { replaceStepParams } from '../lib/replace-step-params';
 import { useSpotifyConnection } from '../lib/useSpotifyConnection';
 import { useAppPathDetections } from '../lib/useAppPathDetections';
+import type { WorkspaceRestoreState } from '../lib/workspace-restore-state';
 import { TimelineStep } from './TimelineStep';
 import { RestoreResults } from './RestoreResults';
 import { ErrorCode } from './ErrorCode';
@@ -57,13 +53,29 @@ interface DetailProps {
    * both can), so App.tsx does a full refreshWorkspaces() with no
    * specific id to re-select. */
   onWorkspaceActivityChanged: () => void;
+  /** This workspace's last Restore/Switch/Close outcome — owned by
+   * App.tsx (see workspace-restore-state.ts), not local state, so it
+   * survives this component remounting on workspace switch. Looked up
+   * for this exact workspace already — Detail never indexes into a
+   * map itself. */
+  restoreState: WorkspaceRestoreState;
+  /** Patches this workspace's slice of that lifted state — already
+   * bound to this workspace's id by App.tsx, so every call site below
+   * just passes a patch, never an id. */
+  onUpdateRestoreState: (
+    patch:
+      | Partial<WorkspaceRestoreState>
+      | ((prev: WorkspaceRestoreState) => Partial<WorkspaceRestoreState>),
+  ) => void;
 }
 
 /**
  * Render key is the workspace id (see App.tsx) — React remounts this
  * component on workspace switch, which naturally resets expandedIndex
- * (and restore state) to their initial values, same as the mockup's
- * manual `expandedIndex = null` reset.
+ * (and the quick-edit state below) to their initial values, same as
+ * the mockup's manual `expandedIndex = null` reset. Restore state
+ * itself (`restoreState` prop) deliberately does NOT reset on this
+ * remount — it's owned by App.tsx precisely so it doesn't.
  */
 export function Detail({
   workspace,
@@ -73,28 +85,22 @@ export function Detail({
   onQuickEditSaved,
   onShowErrorCode,
   onWorkspaceActivityChanged,
+  restoreState,
+  onUpdateRestoreState,
 }: DetailProps): JSX.Element {
+  const {
+    isRestoring,
+    isSwitching,
+    isClosing,
+    restoreResults,
+    restoredAt,
+    toolTypesAtRestore,
+    activityLog,
+    retryingIndex,
+  } = restoreState;
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
-  const [isRestoring, setIsRestoring] = useState(false);
-  const [isSwitching, setIsSwitching] = useState(false);
-  const [isClosing, setIsClosing] = useState(false);
-  const [restoreResults, setRestoreResults] = useState<StepResult[] | null>(null);
   const [restoreError, setRestoreError] = useState<DisplayError | null>(null);
-  // Switch/Close's own close report — "what got closed, what was left
-  // running and why." Switch's opened-side instead feeds the same
-  // restoreResults state above, via its real StepResult[] (RestoreResults
-  // renders those unchanged, since `open -a` is already idempotent for
-  // anything already running — see orchestrator.ts's switchToWorkspace).
-  const [activityLog, setActivityLog] = useState<{
-    closed: string[];
-    leftOpen: LeftOpenEntry[];
-  } | null>(null);
   const [progress, setProgress] = useState<RestoreProgressEvent | null>(null);
-  // Index of the step currently being retried — only ever set once a
-  // restore has already finished (restoreResults is non-null), per the
-  // founder's settled call that retry doesn't need to be reachable
-  // mid-restore.
-  const [retryingIndex, setRetryingIndex] = useState<number | null>(null);
 
   // Inline quick-edit state — only ever relevant for whichever single
   // step is currently expanded (expandedIndex), same one-at-a-time
@@ -127,8 +133,14 @@ export function Detail({
     setSaveStepError(null);
   }
 
-  async function handleSaveStep(i: number): Promise<void> {
-    if (draftParams === null) return;
+  /**
+   * Returns whether the save actually succeeded — most callers (the
+   * Save button itself) don't need this, but `handleRestore` does: it
+   * must know whether to proceed with an auto-committed draft or abort
+   * the restore entirely, see its own comment on why.
+   */
+  async function handleSaveStep(i: number): Promise<boolean> {
+    if (draftParams === null) return true; // nothing to save is not a failure
     setIsSavingStep(true);
     setSaveStepError(null);
     const steps = replaceStepParams(
@@ -144,15 +156,17 @@ export function Detail({
       });
       if (!result.success) {
         setSaveStepError({ message: result.error, code: result.code });
-        return;
+        return false;
       }
       setDraftParams(null);
       onQuickEditSaved(result.config);
+      return true;
     } catch (err) {
       setSaveStepError({
         message: err instanceof Error ? err.message : String(err),
         code: ERROR_CODES.SYSTEM_UNEXPECTED.code,
       });
+      return false;
     } finally {
       setIsSavingStep(false);
     }
@@ -210,28 +224,41 @@ export function Detail({
     }
   }
 
-  // Restoring a workspace (Docker/Tilt in particular) can take seconds.
-  // If the user switches to a different workspace before it resolves,
-  // App.tsx's key={workspace.id} unmounts this instance — without this
-  // guard, the setState calls below would be no-ops on an unmounted
-  // component and the restore's real result (which did happen — a
-  // container may have actually started) would silently vanish instead
-  // of surfacing anywhere.
+  // Still needed for restoreError/progress below — those stay real
+  // local Detail state (unlike restoreState's 7 fields, which now live
+  // in App.tsx and stay valid regardless of whether THIS component
+  // instance is still mounted when their async work resolves).
   const isMountedRef = useIsMounted();
 
   async function handleRestore(): Promise<void> {
-    setIsRestoring(true);
-    setRestoreResults(null);
-    setRestoreError(null);
-    setActivityLog(null);
-    setProgress(null);
+    // An open, unsaved quick-edit draft must never be silently ignored
+    // by a restore that goes on to use the OLD saved config instead —
+    // commit it first. If the save itself fails (invalid input, a
+    // write error), the restore is aborted entirely rather than
+    // proceeding against config the user explicitly just tried to
+    // change — the failure is already visible inline on the open row
+    // via `saveStepError`, so there's nothing more to surface here.
+    if (expandedIndex !== null && draftParams !== null) {
+      const saved = await handleSaveStep(expandedIndex);
+      if (!saved) return;
+    }
+
     // A fresh full restore makes any in-flight retry from the previous
     // results moot — without this, a retry that resolves after the new
     // restore starts would otherwise leave retryingIndex stuck non-null
-    // forever (its own setRestoreResults call becomes a no-op once
-    // restoreResults has been reset to null above), wrongly disabling
-    // every Retry button on the new results once they arrive.
-    setRetryingIndex(null);
+    // forever (its own update becomes a no-op once restoreResults has
+    // been reset to null above), wrongly disabling every Retry button
+    // on the new results once they arrive.
+    onUpdateRestoreState({
+      isRestoring: true,
+      restoreResults: null,
+      restoredAt: null,
+      toolTypesAtRestore: null,
+      activityLog: null,
+      retryingIndex: null,
+    });
+    setRestoreError(null);
+    setProgress(null);
     // Ignoring events for a different workspace id guards against a
     // stale/overlapping restore: switching workspaces mid-restore
     // remounts this component (key={workspace.id} in App.tsx), but the
@@ -243,9 +270,11 @@ export function Detail({
     });
     try {
       const results = await window.api.restoreWorkspace(workspace.id);
-      if (isMountedRef.current) {
-        setRestoreResults(results);
-      }
+      onUpdateRestoreState({
+        restoreResults: results,
+        restoredAt: Date.now(),
+        toolTypesAtRestore: workspace.tools.map((t) => t.type),
+      });
     } catch (err) {
       if (isMountedRef.current) {
         setRestoreError({
@@ -255,8 +284,12 @@ export function Detail({
       }
     } finally {
       unsubscribe();
+      // Unconditional — unlike `restoreError`/`progress` below, this
+      // belongs to App.tsx's cache now, not this component instance, so
+      // it's just as meaningful to record whether or not this specific
+      // Detail instance is still the one mounted.
+      onUpdateRestoreState({ isRestoring: false });
       if (isMountedRef.current) {
-        setIsRestoring(false);
         setProgress(null);
       }
       // Restoring sets this workspace's intent-active flag server-side
@@ -274,16 +307,22 @@ export function Detail({
    * side only.
    */
   async function handleSwitch(): Promise<void> {
-    setIsSwitching(true);
-    setRestoreResults(null);
+    onUpdateRestoreState({
+      isSwitching: true,
+      restoreResults: null,
+      restoredAt: null,
+      toolTypesAtRestore: null,
+      activityLog: null,
+    });
     setRestoreError(null);
-    setActivityLog(null);
     try {
       const result = await window.api.switchToWorkspace(workspace.id);
-      if (isMountedRef.current) {
-        setRestoreResults(result.stepResults);
-        setActivityLog({ closed: result.closed, leftOpen: result.leftOpen });
-      }
+      onUpdateRestoreState({
+        restoreResults: result.stepResults,
+        restoredAt: Date.now(),
+        toolTypesAtRestore: workspace.tools.map((t) => t.type),
+        activityLog: { closed: result.closed, leftOpen: result.leftOpen },
+      });
     } catch (err) {
       if (isMountedRef.current) {
         setRestoreError({
@@ -292,9 +331,7 @@ export function Detail({
         });
       }
     } finally {
-      if (isMountedRef.current) {
-        setIsSwitching(false);
-      }
+      onUpdateRestoreState({ isSwitching: false });
       onWorkspaceActivityChanged();
     }
   }
@@ -305,14 +342,11 @@ export function Detail({
    * alone; only activityLog is relevant here.
    */
   async function handleClose(): Promise<void> {
-    setIsClosing(true);
-    setActivityLog(null);
+    onUpdateRestoreState({ isClosing: true, activityLog: null });
     setRestoreError(null);
     try {
       const result = await window.api.closeWorkspace(workspace.id);
-      if (isMountedRef.current) {
-        setActivityLog({ closed: result.closed, leftOpen: result.leftOpen });
-      }
+      onUpdateRestoreState({ activityLog: { closed: result.closed, leftOpen: result.leftOpen } });
     } catch (err) {
       if (isMountedRef.current) {
         setRestoreError({
@@ -321,9 +355,7 @@ export function Detail({
         });
       }
     } finally {
-      if (isMountedRef.current) {
-        setIsClosing(false);
-      }
+      onUpdateRestoreState({ isClosing: false });
       onWorkspaceActivityChanged();
     }
   }
@@ -335,7 +367,7 @@ export function Detail({
     // once this resolves (see RestoreResults' own `disabled` prop for
     // the button-level half of this fix).
     if (isSwitching || isClosing) return;
-    setRetryingIndex(i);
+    onUpdateRestoreState({ retryingIndex: i });
     let newResult: StepResult;
     try {
       newResult = await window.api.retryWorkspaceStep(workspace.id, i);
@@ -351,10 +383,19 @@ export function Detail({
         code: ERROR_CODES.SYSTEM_UNEXPECTED.code,
       };
     }
-    if (isMountedRef.current) {
-      setRestoreResults((prev) => (prev ? prev.map((r, idx) => (idx === i ? newResult : r)) : prev));
-      setRetryingIndex(null);
-    }
+    // Reads `prev` from inside this functional patch (not the
+    // `restoreResults` destructured above, which is a snapshot from
+    // whenever THIS render happened) — the same "only mutate if a
+    // fresh Restore hasn't already cleared it" safety the original
+    // local-state version had, now resolved against App.tsx's actual
+    // current value at the moment this update applies, not a stale one
+    // captured back when the retry started.
+    onUpdateRestoreState((prev) => ({
+      restoreResults: prev.restoreResults
+        ? prev.restoreResults.map((r, idx) => (idx === i ? newResult : r))
+        : prev.restoreResults,
+      retryingIndex: null,
+    }));
   }
 
   // Same conditions the three separate buttons used to gate on — only
@@ -470,7 +511,13 @@ export function Detail({
               }}
             >
               <Icon name="zap" size={14} />
-              {isRestoring ? 'Restoring…' : isSwitching ? 'Switching…' : isClosing ? 'Closing…' : 'Restore workspace'}
+              {isRestoring
+                ? 'Restoring…'
+                : isSwitching
+                  ? 'Switching…'
+                  : isClosing
+                    ? 'Closing…'
+                    : 'Restore workspace'}
             </button>
             {hasRestoreAlternatives && (
               <DropdownMenu>
@@ -551,7 +598,11 @@ export function Detail({
       {restoreError && (
         <div className="mb-5.5 flex items-center gap-2 rounded-sm border border-border bg-bg-elevated px-2.5 py-2 text-[12.5px] text-text-muted">
           <Icon name="x" size={13} className="text-danger" />
-          <ErrorCode message={restoreError.message} code={restoreError.code} onLearnMore={onShowErrorCode} />
+          <ErrorCode
+            message={restoreError.message}
+            code={restoreError.code}
+            onLearnMore={onShowErrorCode}
+          />
         </div>
       )}
       {activityLog && (activityLog.closed.length > 0 || activityLog.leftOpen.length > 0) && (
@@ -588,16 +639,12 @@ export function Detail({
           ))}
         </div>
       )}
-      {restoreResults && (
+      {restoreResults && restoredAt !== null && (
         <>
           <RestoreResults
             results={restoreResults}
-            onRetryStep={(i) => {
-              void handleRetryStep(i);
-            }}
-            retryingIndex={retryingIndex}
-            disabled={isSwitching || isClosing}
-            onShowErrorCode={onShowErrorCode}
+            tools={workspace.tools}
+            restoredAt={restoredAt}
           />
           <div className="mt-6.5 mb-5.5 h-px bg-border" />
         </>
@@ -648,6 +695,15 @@ export function Detail({
               void handleRemoveStep(i);
             }}
             isRemoving={removingIndex === i}
+            {...(restoreResults && toolTypesAtRestore?.[i] === tool.type
+              ? { result: restoreResults[i] }
+              : {})}
+            onRetryStep={(j) => {
+              void handleRetryStep(j);
+            }}
+            retryingIndex={retryingIndex}
+            retryDisabled={isSwitching || isClosing}
+            hasRestoreResults={restoreResults !== null}
           />
         ))}
       </div>

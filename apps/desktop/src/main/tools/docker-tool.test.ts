@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ERROR_CODES } from '@workspace-launcher/shared';
-import { dockerTool } from './docker-tool';
+import { dockerTool, ensureDockerDaemonRunning } from './docker-tool';
 import { getPlatformLauncher } from '../platform';
 import { runCommand } from '../lib/shell-exec';
 
@@ -94,6 +94,22 @@ describe('dockerTool', () => {
       expect(result.valid).toBe(false);
     });
 
+    it('rejects --volumes=true in downCommand', () => {
+      const result = dockerTool.validate({
+        ...validCompose,
+        downCommand: 'docker compose down --volumes=true',
+      });
+      expect(result.valid).toBe(false);
+    });
+
+    it('rejects -v=true in downCommand', () => {
+      const result = dockerTool.validate({
+        ...validCompose,
+        downCommand: 'docker compose down -v=true',
+      });
+      expect(result.valid).toBe(false);
+    });
+
     it('accepts a downCommand with no volume flags', () => {
       const result = dockerTool.validate({ ...validCompose, downCommand: 'docker compose down' });
       expect(result.valid).toBe(true);
@@ -126,13 +142,91 @@ describe('dockerTool', () => {
       expect(openTerminal).not.toHaveBeenCalled();
     });
 
-    it('reports a clear, distinct message when the daemon is down', async () => {
+    it("reports a durationMs that includes the daemon-wait time, not just the compose command's own", async () => {
+      const POLL_DELAY_MS = 30;
+      mockedRunCommand
+        .mockResolvedValueOnce({
+          success: false,
+          message: 'connect ECONNREFUSED',
+          stdout: '',
+          stderr: '',
+          code: 1,
+        }) // docker info — down
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) =>
+              setTimeout(() => resolve({ success: true, stdout: '', stderr: '' }), POLL_DELAY_MS),
+            ),
+        ) // docker info — up after a real delay
+        .mockResolvedValueOnce({ success: true, stdout: '', stderr: '' }); // compose up
+      mockedGetPlatformLauncher.mockReturnValue({
+        launchApp: vi.fn().mockResolvedValueOnce({ success: true, message: 'Launched Docker.' }),
+        openInApp: vi.fn(),
+        openUrlInBrowserProfile: vi.fn(),
+        openTerminal,
+        openFileDefault: vi.fn(),
+        openUrlDefault: vi.fn(),
+      });
+
+      const result = await dockerTool.run(
+        { ...validCompose, downCommand: '', stopOnClose: false },
+        { workspaceId: 'w1' },
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.durationMs).toBeGreaterThanOrEqual(POLL_DELAY_MS);
+    });
+
+    it('tries to launch Docker Desktop and waits for the daemon when it was down, then proceeds', async () => {
       mockedRunCommand.mockResolvedValueOnce({
         success: false,
         message: 'connect ECONNREFUSED',
         stdout: '',
         stderr: 'Cannot connect to the Docker daemon',
         code: 1,
+      }); // docker info — down
+      mockedRunCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' }); // docker info — up after launch
+      mockedRunCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' }); // compose up
+      const launchApp = vi
+        .fn()
+        .mockResolvedValueOnce({ success: true, message: 'Launched Docker.' });
+      mockedGetPlatformLauncher.mockReturnValue({
+        launchApp,
+        openInApp: vi.fn(),
+        openUrlInBrowserProfile: vi.fn(),
+        openTerminal,
+        openFileDefault: vi.fn(),
+        openUrlDefault: vi.fn(),
+      });
+
+      const result = await dockerTool.run(
+        { ...validCompose, downCommand: '', stopOnClose: false },
+        { workspaceId: 'w1' },
+      );
+
+      expect(launchApp).toHaveBeenCalledWith('Docker');
+      expect(mockedRunCommand).toHaveBeenCalledTimes(3);
+      expect(result.success).toBe(true);
+    });
+
+    it('reports a clear, distinct message when the daemon is still down after Docker Desktop fails to launch', async () => {
+      mockedRunCommand.mockResolvedValueOnce({
+        success: false,
+        message: 'connect ECONNREFUSED',
+        stdout: '',
+        stderr: 'Cannot connect to the Docker daemon',
+        code: 1,
+      });
+      const launchApp = vi
+        .fn()
+        .mockResolvedValueOnce({ success: false, message: 'Failed to launch Docker.' });
+      mockedGetPlatformLauncher.mockReturnValue({
+        launchApp,
+        openInApp: vi.fn(),
+        openUrlInBrowserProfile: vi.fn(),
+        openTerminal,
+        openFileDefault: vi.fn(),
+        openUrlDefault: vi.fn(),
       });
 
       const result = await dockerTool.run(
@@ -146,13 +240,22 @@ describe('dockerTool', () => {
       expect(mockedRunCommand).toHaveBeenCalledTimes(1); // never attempted the up command
     });
 
-    it("reports a clear, distinct message when Docker isn't installed", async () => {
+    it("reports a clear, distinct message when Docker isn't installed, without attempting to launch it", async () => {
       mockedRunCommand.mockResolvedValueOnce({
         success: false,
         message: 'spawn docker ENOENT',
         stdout: '',
         stderr: '',
         code: null,
+      });
+      const launchApp = vi.fn();
+      mockedGetPlatformLauncher.mockReturnValue({
+        launchApp,
+        openInApp: vi.fn(),
+        openUrlInBrowserProfile: vi.fn(),
+        openTerminal,
+        openFileDefault: vi.fn(),
+        openUrlDefault: vi.fn(),
       });
 
       const result = await dockerTool.run(
@@ -163,6 +266,7 @@ describe('dockerTool', () => {
       expect(result.success).toBe(false);
       expect(result.code).toBe(ERROR_CODES.DOCKER_DAEMON_DOWN.code);
       expect(result.message.toLowerCase()).toContain("isn't installed");
+      expect(launchApp).not.toHaveBeenCalled();
     });
 
     it('reports a real failure when the up command itself fails', async () => {
@@ -184,6 +288,82 @@ describe('dockerTool', () => {
       expect(result.code).toBe(ERROR_CODES.DOCKER_STEP_FAILED.code);
       expect(result.message).toContain('service "web" failed to build');
     });
+
+    it('(regression) prefixes the failure message with whether Docker Desktop was already running — closing the "doesn\'t even say Docker opened" gap', async () => {
+      mockedRunCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' }); // docker info — already up
+      mockedRunCommand.mockResolvedValueOnce({
+        success: false,
+        message: 'exit 1',
+        stdout: '',
+        stderr: 'no configuration file provided: not found',
+        code: 1,
+      });
+
+      const result = await dockerTool.run(
+        { ...validCompose, downCommand: '', stopOnClose: false },
+        { workspaceId: 'w1' },
+      );
+
+      expect(result.message.startsWith('Docker Desktop was already running.')).toBe(true);
+      expect(result.message).toContain('no configuration file provided');
+    });
+  });
+
+  describe('ensureDockerDaemonRunning', () => {
+    it('gives up and reports a clear timeout message once the poll window elapses', async () => {
+      mockedRunCommand.mockResolvedValue({
+        success: false,
+        message: 'connect ECONNREFUSED',
+        stdout: '',
+        stderr: 'Cannot connect to the Docker daemon',
+        code: 1,
+      }); // every docker info call stays down
+      const launchApp = vi
+        .fn()
+        .mockResolvedValueOnce({ success: true, message: 'Launched Docker.' });
+      mockedGetPlatformLauncher.mockReturnValue({
+        launchApp,
+        openInApp: vi.fn(),
+        openUrlInBrowserProfile: vi.fn(),
+        openTerminal,
+        openFileDefault: vi.fn(),
+        openUrlDefault: vi.fn(),
+      });
+
+      const result = await ensureDockerDaemonRunning({ intervalMs: 5, timeoutMs: 20 });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.message.toLowerCase()).toContain("didn't finish starting");
+      }
+    });
+
+    it('returns success as soon as a poll finds the daemon up', async () => {
+      mockedRunCommand
+        .mockResolvedValueOnce({
+          success: false,
+          message: 'connect ECONNREFUSED',
+          stdout: '',
+          stderr: '',
+          code: 1,
+        })
+        .mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
+      const launchApp = vi
+        .fn()
+        .mockResolvedValueOnce({ success: true, message: 'Launched Docker.' });
+      mockedGetPlatformLauncher.mockReturnValue({
+        launchApp,
+        openInApp: vi.fn(),
+        openUrlInBrowserProfile: vi.fn(),
+        openTerminal,
+        openFileDefault: vi.fn(),
+        openUrlDefault: vi.fn(),
+      });
+
+      const result = await ensureDockerDaemonRunning({ intervalMs: 5, timeoutMs: 5_000 });
+
+      expect(result).toEqual({ success: true, wasAlreadyRunning: false });
+    });
   });
 
   describe('run — tilt engine', () => {
@@ -204,9 +384,17 @@ describe('dockerTool', () => {
       expect(result.success).toBe(true);
     });
 
-    it('propagates a terminal-open failure as a real failure', async () => {
+    it('propagates a terminal-open failure as a real failure, using the shared TERMINAL_START_FAILED code (not a Docker-specific one)', async () => {
       mockedRunCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
-      openTerminal.mockResolvedValueOnce({ success: false, message: "couldn't open Terminal" });
+      openTerminal.mockResolvedValueOnce({
+        success: false,
+        message: "couldn't open Terminal",
+        detail: {
+          cwd: '/Users/stas/projects/x',
+          openFailed: { stage: 'open', reason: "couldn't open Terminal" },
+          commands: [{ index: 0, command: 'tilt up', status: 'not-run' }],
+        },
+      });
 
       const result = await dockerTool.run(
         { ...validTilt, downCommand: '', stopOnClose: false },
@@ -214,11 +402,112 @@ describe('dockerTool', () => {
       );
 
       expect(result.success).toBe(false);
-      expect(result.code).toBe(ERROR_CODES.DOCKER_STEP_FAILED.code);
+      expect(result.code).toBe(ERROR_CODES.TERMINAL_START_FAILED.code);
+    });
+
+    it('propagates a real Tilt command failure using TERMINAL_COMMAND_FAILED, with the entry detail passed through', async () => {
+      mockedRunCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
+      const entryDetail = {
+        cwd: '/Users/stas/projects/x',
+        commands: [
+          {
+            index: 0,
+            command: 'tilt up',
+            status: 'failed',
+            exitCode: 1,
+            reason: 'no Tiltfile found',
+          },
+        ],
+      };
+      openTerminal.mockResolvedValueOnce({
+        success: false,
+        message: '"tilt up" failed with exit code 1 shortly after the terminal opened.',
+        detail: entryDetail,
+      });
+
+      const result = await dockerTool.run(
+        { ...validTilt, downCommand: '', stopOnClose: false },
+        { workspaceId: 'w1' },
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.code).toBe(ERROR_CODES.TERMINAL_COMMAND_FAILED.code);
+      expect(result.details).toEqual({ entries: [entryDetail] });
+    });
+
+    it('(regression) prefixes the tilt-branch failure message with the daemon status too, not just the compose branch', async () => {
+      mockedRunCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' }); // docker info — already up
+      openTerminal.mockResolvedValueOnce({
+        success: false,
+        message: '"docker compose up" failed with exit code 1 shortly after the terminal opened.',
+        detail: {
+          cwd: '/Users/stas/projects/x',
+          commands: [{ index: 0, command: 'docker compose up', status: 'failed', exitCode: 1 }],
+        },
+      });
+
+      const result = await dockerTool.run(
+        { ...validTilt, downCommand: '', stopOnClose: false },
+        { workspaceId: 'w1' },
+      );
+
+      expect(result.message.startsWith('Docker Desktop was already running.')).toBe(true);
     });
   });
 
   describe('teardown', () => {
+    it("reports a durationMs that includes the daemon-check wait time, not just the down command's own", async () => {
+      const CHECK_DELAY_MS = 30;
+      mockedRunCommand
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) =>
+              setTimeout(() => resolve({ success: true, stdout: '', stderr: '' }), CHECK_DELAY_MS),
+            ),
+        ) // docker info — slow
+        .mockResolvedValueOnce({ success: true, stdout: '', stderr: '' }); // compose down
+
+      const result = await dockerTool.teardown({
+        ...validCompose,
+        downCommand: '',
+        stopOnClose: false,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.durationMs).toBeGreaterThanOrEqual(CHECK_DELAY_MS);
+    });
+
+    it('reports the daemon-down message with a manual-start instruction, never attempting to launch Docker itself', async () => {
+      mockedRunCommand.mockResolvedValueOnce({
+        success: false,
+        message: 'connect ECONNREFUSED',
+        stdout: '',
+        stderr: 'Cannot connect to the Docker daemon',
+        code: 1,
+      });
+      const launchApp = vi.fn();
+      mockedGetPlatformLauncher.mockReturnValue({
+        launchApp,
+        openInApp: vi.fn(),
+        openUrlInBrowserProfile: vi.fn(),
+        openTerminal,
+        openFileDefault: vi.fn(),
+        openUrlDefault: vi.fn(),
+      });
+
+      const result = await dockerTool.teardown({
+        ...validCompose,
+        downCommand: '',
+        stopOnClose: false,
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.code).toBe(ERROR_CODES.DOCKER_DAEMON_DOWN.code);
+      expect(result.message.toLowerCase()).toContain('start docker desktop');
+      expect(launchApp).not.toHaveBeenCalled();
+      expect(mockedRunCommand).toHaveBeenCalledTimes(1);
+    });
+
     it('defaults to "docker compose down" for the compose engine when downCommand is empty', async () => {
       mockedRunCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' }); // docker info
       mockedRunCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' }); // down

@@ -1,4 +1,7 @@
+import { useState } from 'react';
+import { getErrorCode } from '@workspace-launcher/shared';
 import { Icon } from '../icons';
+import { cn } from '../lib/utils';
 
 interface ErrorCodeProps {
   message: string;
@@ -15,24 +18,65 @@ interface ErrorCodeProps {
  * (RestoreResults, Detail, TimelineStep, WorkspaceFormModal) with one
  * shared presentational component — the message, plus (when a code is
  * present) a small badge and a "Learn more" link into ErrorsModal.
+ *
+ * When the resolved code has a `headline` (error-codes.ts — a staged
+ * rollout, not every code yet), that plain-language text is what's
+ * actually shown here; the raw per-instance `message` is demoted to a
+ * collapsed "Show technical detail" toggle on the same row, instead of
+ * being the only thing a non-debugging user sees. A code with no
+ * `headline` yet falls back to exactly the old behavior (message shown
+ * directly) — this is additive, not a breaking change for the rest of
+ * the catalog. "Learn more" keeps opening ErrorsModal's static catalog
+ * entry unchanged — that page was already designed to never hold
+ * per-instance/dynamic content (see its own doc comment), so the raw
+ * detail belongs here, inline, not threaded into that modal.
  */
 export function ErrorCode({ message, code, onLearnMore }: ErrorCodeProps): JSX.Element {
+  const [showDetail, setShowDetail] = useState(false);
+  const headline = code ? getErrorCode(code)?.headline : undefined;
+
   return (
-    <span className="flex flex-wrap items-center gap-1.5">
-      <span>{message}</span>
-      {code && (
+    <span className="flex flex-col gap-1">
+      <span className="flex flex-wrap items-center gap-1.5">
+        <span>{headline ?? message}</span>
+        {code && (
+          <>
+            <span className="rounded-sm border border-danger px-1 font-mono text-[10.5px] text-danger">
+              {code}
+            </span>
+            <button
+              type="button"
+              className="inline-flex items-center gap-0.5 text-[11px] text-text-faint underline-offset-2 hover:text-text-muted hover:underline"
+              onClick={() => onLearnMore(code)}
+            >
+              Learn more about this error
+              <Icon name="externalLink" size={10} />
+            </button>
+          </>
+        )}
+      </span>
+      {headline && (
         <>
-          <span className="rounded-sm border border-danger px-1 font-mono text-[10.5px] text-danger">
-            {code}
-          </span>
           <button
             type="button"
-            className="inline-flex items-center gap-0.5 text-[11px] text-text-faint underline-offset-2 hover:text-text-muted hover:underline"
-            onClick={() => onLearnMore(code)}
+            className="inline-flex w-fit items-center gap-0.5 text-[11px] text-text-faint hover:text-text-muted"
+            onClick={() => setShowDetail((v) => !v)}
           >
-            Learn more about this error
-            <Icon name="externalLink" size={10} />
+            <span
+              className={cn(
+                'flex items-center transition-transform duration-140',
+                showDetail && 'rotate-90',
+              )}
+            >
+              <Icon name="chevronRight" size={11} />
+            </span>
+            {showDetail ? 'Hide technical detail' : 'Show technical detail'}
           </button>
+          {showDetail && (
+            <pre className="w-full overflow-x-auto rounded-sm bg-bg-hover px-2 py-1.5 font-mono text-[11px] whitespace-pre-wrap text-text-muted">
+              {message}
+            </pre>
+          )}
         </>
       )}
     </span>

@@ -17,11 +17,19 @@ import { useSpotifyConnection } from '../lib/useSpotifyConnection';
 import { getRecentProjectPaths } from '../lib/recent-project-paths';
 import { getRecentCommands } from '../lib/recent-commands';
 import { findDuplicateWorkspace } from '../lib/workspace-duplicate';
+import { posixBasename } from '../lib/posix-basename';
 import { getStepFieldsComponent, stepFieldsIsCollapsible } from './step-fields/registry';
 import { AppHotkeyControl } from './AppHotkeyControl';
 import { ErrorCode } from './ErrorCode';
 import { ToolBadge } from './ToolBadge';
-import { Dialog, DialogClose, DialogContent, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog';
 
 interface SaveCurrentWorkspaceModalProps {
   open: boolean;
@@ -48,10 +56,7 @@ function deriveDefaultName(steps: DetectedStepDraft[]): string {
   const vscodeStep = steps.find((s) => s.type === 'vscode');
   const path = vscodeStep?.params['path'];
   if (typeof path === 'string' && path.length > 0) {
-    // Trailing slash(es) stripped first — otherwise `.split('/').pop()`
-    // returns '' (falsy) and a perfectly good, just-detected project
-    // name is silently discarded in favor of the generic date fallback.
-    const base = path.replace(/\/+$/, '').split('/').pop();
+    const base = posixBasename(path);
     if (base) return base;
   }
   return `Workspace from ${new Date().toLocaleDateString()}`;
@@ -308,8 +313,8 @@ export function SaveCurrentWorkspaceModal({
 
           {phase === 'blocked' && (
             <div className="flex items-center gap-2 rounded-sm border border-border bg-bg-elevated px-2.5 py-2 text-[12.5px] text-text-muted">
-              <Icon name="x" size={13} className="text-danger" />
-              A workspace is already being restored, switched, or closed — try again in a moment.
+              <Icon name="x" size={13} className="text-danger" />A workspace is already being
+              restored, switched, or closed — try again in a moment.
             </div>
           )}
 
@@ -380,7 +385,8 @@ export function SaveCurrentWorkspaceModal({
                     const def = getStepTypeDefinition(step.type);
                     const params = stepParams[i] ?? step.params;
                     const FieldsComponent = getStepFieldsComponent(step.type);
-                    const collapsible = stepFieldsIsCollapsible(step.type) && FieldsComponent !== undefined;
+                    const collapsible =
+                      stepFieldsIsCollapsible(step.type) && FieldsComponent !== undefined;
                     const isOpen = collapsible && openIndices.has(i);
 
                     return (
@@ -454,7 +460,10 @@ export function SaveCurrentWorkspaceModal({
                                 // real detected data by the time it can
                                 // be expanded.
                               }}
-                              recentFolders={getRecentProjectPaths(workspaces, params['path'] as string | undefined)}
+                              recentFolders={getRecentProjectPaths(
+                                workspaces,
+                                params['path'] as string | undefined,
+                              )}
                               recentCommands={getRecentCommands(workspaces)}
                               spotify={spotify}
                               {...(isToolAppKey(step.type)

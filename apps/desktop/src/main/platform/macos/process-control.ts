@@ -1,4 +1,5 @@
 import { runCommand } from '../../lib/shell-exec';
+import { pollUntil } from '../../lib/poll-until';
 
 /**
  * Workspace activity tracking's two macOS-only primitives (see
@@ -44,7 +45,15 @@ const OSASCRIPT_TIMEOUT_MS = 5000;
 export async function isAppRunning(appName: string): Promise<boolean> {
   const result = await runCommand(
     'osascript',
-    ['-e', 'on run argv', '-e', 'return application (item 1 of argv) is running', '-e', 'end run', appName],
+    [
+      '-e',
+      'on run argv',
+      '-e',
+      'return application (item 1 of argv) is running',
+      '-e',
+      'end run',
+      appName,
+    ],
     { timeoutMs: OSASCRIPT_TIMEOUT_MS },
   );
   return result.success && result.stdout.trim() === 'true';
@@ -59,7 +68,15 @@ export async function isAppRunning(appName: string): Promise<boolean> {
 export async function quitApp(appName: string): Promise<{ success: boolean; message: string }> {
   const result = await runCommand(
     'osascript',
-    ['-e', 'on run argv', '-e', 'tell application (item 1 of argv) to quit', '-e', 'end run', appName],
+    [
+      '-e',
+      'on run argv',
+      '-e',
+      'tell application (item 1 of argv) to quit',
+      '-e',
+      'end run',
+      appName,
+    ],
     { timeoutMs: OSASCRIPT_TIMEOUT_MS },
   );
   return result.success
@@ -93,22 +110,12 @@ export async function waitForAppRunning(
   appName: string,
   options: { intervalMs?: number; timeoutMs?: number } = {},
 ): Promise<{ detected: boolean; elapsedMs: number }> {
-  const intervalMs = options.intervalMs ?? APP_LAUNCH_POLL_INTERVAL_MS;
-  const timeoutMs = options.timeoutMs ?? APP_LAUNCH_POLL_TIMEOUT_MS;
-  const startedAt = Date.now();
-
-  for (;;) {
-    if (await isAppRunning(appName)) {
-      return { detected: true, elapsedMs: Date.now() - startedAt };
-    }
-    const elapsed = Date.now() - startedAt;
-    if (elapsed >= timeoutMs) {
-      return { detected: false, elapsedMs: elapsed };
-    }
-    await sleep(Math.min(intervalMs, timeoutMs - elapsed));
-  }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  const { value, elapsedMs } = await pollUntil(
+    async () => ((await isAppRunning(appName)) ? true : undefined),
+    {
+      intervalMs: options.intervalMs ?? APP_LAUNCH_POLL_INTERVAL_MS,
+      timeoutMs: options.timeoutMs ?? APP_LAUNCH_POLL_TIMEOUT_MS,
+    },
+  );
+  return { detected: value === true, elapsedMs };
 }

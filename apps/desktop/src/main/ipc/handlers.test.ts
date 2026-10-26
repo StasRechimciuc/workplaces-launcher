@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ERROR_CODES, RESTORE_PROGRESS_CHANNEL } from '@workspace-launcher/shared';
@@ -11,6 +11,7 @@ import {
   createWorkspace,
   deleteWorkspace,
   detectCurrentWorkspace,
+  detectProjectFiles,
   getAppHotkey,
   getLaunchOnLogin,
   listWorkspaces,
@@ -1532,5 +1533,71 @@ describe('registerIpcHandlers — app-level hotkey + detectCurrent channels', ()
     const handler = getRegisteredHandler('workspaces:markActive');
     await handler({}, 'ws-1');
     expect(activityStore.setIntentActive).toHaveBeenCalledWith('ws-1', true);
+  });
+});
+
+describe('detectProjectFiles', () => {
+  it('reports no composeFile and hasTiltfile: false for an empty directory', async () => {
+    const result = await detectProjectFiles(testUserDataDir);
+    expect(result).toEqual({ success: true, hasTiltfile: false });
+  });
+
+  it("picks compose.yaml over docker-compose.yml when both exist — Compose's own real priority", async () => {
+    await writeFile(join(testUserDataDir, 'compose.yaml'), '');
+    await writeFile(join(testUserDataDir, 'docker-compose.yml'), '');
+    const result = await detectProjectFiles(testUserDataDir);
+    expect(result).toEqual({ success: true, composeFile: 'compose.yaml', hasTiltfile: false });
+  });
+
+  it('falls back through the priority order when higher-priority candidates are absent', async () => {
+    await writeFile(join(testUserDataDir, 'docker-compose.yaml'), '');
+    const result = await detectProjectFiles(testUserDataDir);
+    expect(result).toEqual({
+      success: true,
+      composeFile: 'docker-compose.yaml',
+      hasTiltfile: false,
+    });
+  });
+
+  it('reports a Tiltfile independently of any compose file', async () => {
+    await writeFile(join(testUserDataDir, 'Tiltfile'), '');
+    const result = await detectProjectFiles(testUserDataDir);
+    expect(result).toEqual({ success: true, hasTiltfile: true });
+  });
+
+  it('reports both when a compose file AND a Tiltfile exist — the real cross-engine ambiguity', async () => {
+    await writeFile(join(testUserDataDir, 'compose.yml'), '');
+    await writeFile(join(testUserDataDir, 'Tiltfile'), '');
+    const result = await detectProjectFiles(testUserDataDir);
+    expect(result).toEqual({ success: true, composeFile: 'compose.yml', hasTiltfile: true });
+  });
+
+  it('reports a clean "not found" result, not a failure, for a directory that does not exist', async () => {
+    const result = await detectProjectFiles(join(testUserDataDir, 'does-not-exist'));
+    expect(result).toEqual({ success: true, hasTiltfile: false });
+  });
+
+  it('reports a real failure (not a false "not found") when a candidate check hits a permission error', async () => {
+    const unreadableDir = join(testUserDataDir, 'unreadable');
+    await mkdir(unreadableDir);
+    await chmod(unreadableDir, 0o000);
+    try {
+      const result = await detectProjectFiles(unreadableDir);
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.code).toBe(ERROR_CODES.PROJECT_FILES_DETECTION_FAILED.code);
+      }
+    } finally {
+      // Restore permissions so the outer afterEach's rm -rf can clean it up.
+      await chmod(unreadableDir, 0o755);
+    }
+  });
+
+  it('expands a ~-prefixed directory the same way other tools do', async () => {
+    // Not asserting a specific result here (HOME varies per machine) —
+    // just that it resolves without throwing and without treating `~`
+    // as a literal, nonexistent path segment.
+    const result = await detectProjectFiles('~');
+    expect(result.success).toBe(true);
   });
 });

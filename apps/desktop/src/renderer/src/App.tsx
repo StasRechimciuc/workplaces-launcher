@@ -12,6 +12,11 @@ import { ErrorsModal } from './components/ErrorsModal';
 import { resolveActiveWorkspaceId } from './lib/workspace-selection';
 import { SHORTCUTS, formatCombo, getEffectiveShortcuts, getStoredOverrides } from './lib/shortcuts';
 import { useGlobalShortcuts } from './lib/useGlobalShortcuts';
+import {
+  DEFAULT_RESTORE_STATE,
+  getWorkspaceRestoreOutcome,
+  type WorkspaceRestoreState,
+} from './lib/workspace-restore-state';
 
 const DEFAULT_SEARCH_COMBO =
   SHORTCUTS.find((s) => s.id === 'search.focus')?.defaultCombo ?? 'CommandOrControl+K';
@@ -49,6 +54,55 @@ export function App(): JSX.Element {
   // and is refreshed when Settings closes (the only place a rebind can
   // happen) rather than ever going stale after a user customizes it.
   const [searchCombo, setSearchCombo] = useState(() => currentSearchCombo());
+  // Last Restore/Switch/Close outcome per workspace id — lifted up
+  // here (out of Detail.tsx, where it used to be local state) so it
+  // survives navigating between workspaces, which remounts Detail via
+  // key={activeWorkspace.id} below. Deliberately in-memory only, never
+  // written to disk — see workspace-restore-state.ts's own doc comment
+  // on why a result surviving a full app quit would be misleading
+  // rather than useful. A workspace with no entry here behaves exactly
+  // like DEFAULT_RESTORE_STATE (looked up via `?? DEFAULT_RESTORE_STATE`
+  // at each read site, never backfilled into this map).
+  const [restoreStateById, setRestoreStateById] = useState<Record<string, WorkspaceRestoreState>>(
+    {},
+  );
+
+  /**
+   * Immutable patch of one workspace's slice, keyed by id. Reads the
+   * previous value from INSIDE this functional `setRestoreStateById`
+   * updater (never from a closed-over `restoreStateById` variable) —
+   * that's what keeps a race like "a fresh Restore clears results to
+   * null while an old Retry is still in flight" resolving correctly:
+   * whichever update actually runs last sees the other's real effect,
+   * not a stale snapshot captured before either started.
+   */
+  const updateRestoreState = useCallback(
+    (
+      id: string,
+      patch:
+        | Partial<WorkspaceRestoreState>
+        | ((prev: WorkspaceRestoreState) => Partial<WorkspaceRestoreState>),
+    ): void => {
+      setRestoreStateById((prevMap) => {
+        const prev = prevMap[id] ?? DEFAULT_RESTORE_STATE;
+        const patchObj = typeof patch === 'function' ? patch(prev) : patch;
+        return { ...prevMap, [id]: { ...prev, ...patchObj } };
+      });
+    },
+    [],
+  );
+
+  // Drives the sidebar's per-row status dot — omits any workspace with
+  // no restore activity this session ('none'), so a row with nothing
+  // to report renders no badge at all rather than a third neutral one.
+  const restoreOutcomeById = useMemo(() => {
+    const outcomes: Record<string, 'success' | 'partial' | 'failed'> = {};
+    for (const [id, state] of Object.entries(restoreStateById)) {
+      const outcome = getWorkspaceRestoreOutcome(state);
+      if (outcome !== 'none') outcomes[id] = outcome;
+    }
+    return outcomes;
+  }, [restoreStateById]);
 
   /**
    * Fetches the real workspace list (see src/main/ipc/handlers.ts's
@@ -214,6 +268,7 @@ export function App(): JSX.Element {
             setSettingsOpen(true);
           }}
           searchQuery={searchQuery}
+          restoreOutcomeById={restoreOutcomeById}
         />
 
         {activeWorkspace && (
@@ -229,6 +284,10 @@ export function App(): JSX.Element {
             onShowErrorCode={setErrorsModalCode}
             onWorkspaceActivityChanged={() => {
               void refreshWorkspaces();
+            }}
+            restoreState={restoreStateById[activeWorkspace.id] ?? DEFAULT_RESTORE_STATE}
+            onUpdateRestoreState={(patch) => {
+              updateRestoreState(activeWorkspace.id, patch);
             }}
           />
         )}
@@ -274,6 +333,14 @@ export function App(): JSX.Element {
           // if it's still showing the workspace that was actually
           // deleted, not whatever a later-opened dialog is showing now.
           setDeletingWorkspace((current) => (current?.id === id ? null : current));
+          // Unconditional, unlike the dialog-clearing line above — this
+          // id's restore state is gone regardless of what the dialog is
+          // currently showing.
+          setRestoreStateById((prev) => {
+            if (!(id in prev)) return prev;
+            const { [id]: _removed, ...rest } = prev;
+            return rest;
+          });
           void refreshWorkspaces();
         }}
       />

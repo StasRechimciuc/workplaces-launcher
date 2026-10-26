@@ -40,12 +40,19 @@ import type { StepFieldsProps } from './types';
  * red-border the exact offending card — it shows one message below the
  * whole list instead, still far better than the bottom banner alone
  * (the right STEP is at least auto-expanded/scrolled to already).
+ *
+ * `projectPathSuggestion` only ever targets the FIRST card, for the
+ * same "keep it simple and predictable" reason — with zero cards, the
+ * suggestion both adds one AND fills its cwd in a single click; with
+ * one or more cards, it only ever offers itself on card 0 if that one
+ * specific cwd is still empty, never on a later card.
  */
 export function TerminalFields({
   params,
   onChange,
   recentCommands,
   fieldErrors,
+  projectPathSuggestion,
 }: StepFieldsProps): JSX.Element {
   const entries = getTerminalEntries(params);
   const nextEntryIdRef = useRef(0);
@@ -84,6 +91,21 @@ export function TerminalFields({
     setEntryIds((ids) => [...ids, nextEntryIdRef.current++]);
   }
 
+  /** Adds a new card AND fills its cwd with the suggestion in one
+   * click — only reachable with zero cards (see the render below),
+   * where a plain "use this folder" chip would have nothing to attach
+   * itself to yet. */
+  function handleAddWithSuggestedCwd(cwd: string): void {
+    const withNewEntry = addTerminalEntry(params);
+    const withSuggestedCwd = updateTerminalEntry(
+      { terminals: withNewEntry },
+      withNewEntry.length - 1,
+      { cwd },
+    );
+    onChange({ terminals: withSuggestedCwd });
+    setEntryIds((ids) => [...ids, nextEntryIdRef.current++]);
+  }
+
   function handleRemove(index: number): void {
     onChange({ terminals: removeTerminalEntry(params, index) });
     setEntryIds((ids) => ids.filter((_, i) => i !== index));
@@ -99,6 +121,22 @@ export function TerminalFields({
             className="flex flex-col gap-1.5 rounded-sm border border-border p-2.5"
           >
             <span className={FIELD_GROUP_LABEL_CLASS}>Working directory</span>
+            {index === 0 && !entry.cwd && projectPathSuggestion && (
+              <button
+                type="button"
+                className="flex h-6 w-fit items-center gap-1.25 self-start rounded-[5px] px-1.5 text-[11px] text-text-faint hover:bg-bg-hover hover:text-text-muted"
+                onClick={() => {
+                  onChange({
+                    terminals: updateTerminalEntry(params, index, {
+                      cwd: projectPathSuggestion.path,
+                    }),
+                  });
+                }}
+              >
+                <Icon name="folder" size={11} />
+                Use {projectPathSuggestion.sourceLabel}&rsquo;s folder: {projectPathSuggestion.path}
+              </button>
+            )}
             <div className="flex items-center gap-1.5">
               <input
                 className="h-8 min-w-0 flex-1 rounded-sm border border-border-strong bg-bg px-2.5 text-[12.5px] text-text placeholder:text-text-faint focus:border-accent-border focus:outline-none"
@@ -200,6 +238,19 @@ export function TerminalFields({
           </div>
         );
       })}
+      {entries.length === 0 && projectPathSuggestion && (
+        <button
+          type="button"
+          className="flex h-6 w-fit items-center gap-1.25 self-start rounded-[5px] px-1.5 text-[11px] text-text-faint hover:bg-bg-hover hover:text-text-muted"
+          onClick={() => {
+            handleAddWithSuggestedCwd(projectPathSuggestion.path);
+          }}
+        >
+          <Icon name="folder" size={11} />
+          Add a terminal using {projectPathSuggestion.sourceLabel}&rsquo;s folder:{' '}
+          {projectPathSuggestion.path}
+        </button>
+      )}
       <button
         type="button"
         className={errorBorderClass(

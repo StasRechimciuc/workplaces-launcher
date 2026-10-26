@@ -11,6 +11,12 @@
 export interface PlatformResult {
   success: boolean;
   message: string;
+  /** Optional, method-specific structured detail — today only
+   * populated by openTerminal (a TerminalEntryResult, packages/shared),
+   * and only on failure. Every other method here never sets this;
+   * callers that care narrow it themselves for the one method that
+   * does, same reasoning as StepResult.details' own doc comment. */
+  detail?: Record<string, unknown>;
 }
 
 export interface PlatformLauncher {

@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { access } from 'node:fs/promises';
+import { join } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 import type {
   ChromeListProfilesResult,
@@ -6,6 +8,7 @@ import type {
   CreateWorkspaceResult,
   DeleteWorkspaceResult,
   DetectAppResult,
+  DetectProjectFilesResult,
   DetectWorkspaceDraftResult,
   GetLaunchOnLoginResult,
   RestoreProgressEvent,
@@ -27,6 +30,7 @@ import {
   RESTORE_PROGRESS_CHANNEL,
 } from '@workspace-launcher/shared';
 import { startRestoreFocusSession } from './restore-focus';
+import { expandHome } from '../lib/paths';
 import {
   buildRunningAppNameMap,
   closeWorkspace,
@@ -722,6 +726,64 @@ export async function listWorkspaces(): Promise<WorkspaceDisplay[]> {
   return configs.map((config) => ({ ...toWorkspaceDisplay(config), active: activeFor(config) }));
 }
 
+// Compose's own real discovery priority with no explicit `-f` given —
+// confirmed empirically against a real local Compose install this same
+// session (2026-10-24 orchestration-testbed work, WCs/WC__project-
+// status.md): with several present, it only warns and picks the first
+// in this order. Mirroring it here isn't a guess, it's exactly what
+// `docker compose` would pick anyway.
+const COMPOSE_FILE_CANDIDATES = [
+  'compose.yaml',
+  'compose.yml',
+  'docker-compose.yaml',
+  'docker-compose.yml',
+];
+
+// Only a genuine "not there" (ENOENT) resolves to false — anything else
+// (EACCES, a parent path segment being a file, etc.) is a real failure
+// and must propagate to detectProjectFiles' own try/catch below, not get
+// silently swallowed into a false "not found" the UI can't tell apart
+// from an actual clean scan.
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return false;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Given a project directory, reports which Compose file `docker
+ * compose` would pick with no `-f` given (if any) and whether a
+ * Tiltfile exists — both checked in parallel, per-candidate, never
+ * reading file contents. The one real cross-engine ambiguity (both
+ * present) is deliberately left unresolved here — see
+ * ProjectFilesDetection's own doc comment for why.
+ */
+export async function detectProjectFiles(directory: string): Promise<DetectProjectFilesResult> {
+  try {
+    const dir = expandHome(directory);
+    const [composeHits, hasTiltfile] = await Promise.all([
+      Promise.all(COMPOSE_FILE_CANDIDATES.map((name) => fileExists(join(dir, name)))),
+      fileExists(join(dir, 'Tiltfile')),
+    ]);
+    const composeFileIndex = composeHits.findIndex(Boolean);
+    const composeFile =
+      composeFileIndex === -1 ? undefined : COMPOSE_FILE_CANDIDATES[composeFileIndex];
+    return { success: true, ...(composeFile ? { composeFile } : {}), hasTiltfile };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+      code: ERROR_CODES.PROJECT_FILES_DETECTION_FAILED.code,
+    };
+  }
+}
+
 /**
  * Registers every 'channel' the preload bridge is allowed to invoke.
  * This is the single place that decides what the renderer can ask the
@@ -876,6 +938,16 @@ export function registerIpcHandlers(): void {
           code: ERROR_CODES.APP_DETECTION_FAILED.code,
         };
       }
+    },
+  );
+
+  ipcMain.handle(
+    'fs:detectProjectFiles',
+    async (_event, directory: unknown): Promise<DetectProjectFilesResult> => {
+      if (typeof directory !== 'string' || directory.length === 0) {
+        throw new Error('fs:detectProjectFiles expects a non-empty string directory.');
+      }
+      return detectProjectFiles(directory);
     },
   );
 

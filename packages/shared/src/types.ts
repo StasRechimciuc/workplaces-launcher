@@ -12,6 +12,84 @@ export interface StepResult {
   durationMs: number;
   /** Stable lookup key into ERROR_CODES (error-codes.ts) — absent on success. */
   code?: string;
+  /**
+   * Optional, per-code structured instance data — deliberately generic
+   * (not named fields like `command`/`exitCode` directly on StepResult)
+   * so the vast majority of tool plugins (VS Code, Chrome, Spotify,
+   * Clockify, ...) that never produce this kind of detail don't carry
+   * dead, always-undefined fields. A consumer narrows this by the
+   * result's own `code` — e.g. for ER-TERM-01/02 (and the shared Docker
+   * Tilt-engine failures, which reuse those same codes — see
+   * docker-tool.ts), cast via `asTerminalFailureDetail` below. Absent
+   * on every result that isn't one of those specific codes, and on
+   * every result from before this field existed — a consumer must
+   * treat it as optional and degrade to the plain `message` string,
+   * never assume its shape from `code` alone without narrowing.
+   */
+  details?: Record<string, unknown>;
+}
+
+/** One configured command's outcome within a single terminal entry. */
+export interface TerminalCommandResult {
+  index: number;
+  command: string;
+  status: 'success' | 'failed' | 'not-run';
+  /** Only set when `status === 'failed'`. */
+  exitCode?: number;
+  /** Only set when `status === 'failed'` — falls back to a generic
+   * "no output captured" style string rather than ever being empty,
+   * see openTerminal's own construction of this value. */
+  reason?: string;
+}
+
+/**
+ * One terminal window's worth of outcome — a Terminal step can have
+ * several of these (one per configured terminal card); Docker's Tilt
+ * branch always has exactly one, so `entries.length === 1` there. Kept
+ * as a real array (not a single object) specifically because a flat,
+ * single-entry shape can't represent "entry A fully succeeded, entry
+ * B's second command failed" once a step has more than one terminal.
+ */
+export interface TerminalEntryResult {
+  cwd: string;
+  /**
+   * Present only when NOTHING configured for this entry ever got a
+   * chance to run — either the terminal app itself failed to launch,
+   * or its generated script's own `cd` into `cwd` failed. Both map to
+   * the same "not run" UI treatment, but keep their own distinct
+   * `reason` text (see launcher.ts's openTerminal), since "Terminal.app
+   * wouldn't launch" and "this directory no longer exists" point at
+   * different fixes even though they look the same.
+   */
+  openFailed?: { stage: 'open' | 'cd'; reason: string };
+  /** Empty when `openFailed` is set — nothing ran, so there's nothing
+   * to list here. */
+  commands: TerminalCommandResult[];
+}
+
+/** The shape `StepResult.details` carries for ER-TERM-01/ER-TERM-02
+ * results (and Docker Tilt-branch failures, which reuse those same
+ * codes). See `StepResult.details`'s own doc comment for why this
+ * isn't a set of named fields directly on StepResult instead. */
+export interface TerminalFailureDetail {
+  entries: TerminalEntryResult[];
+}
+
+/**
+ * Narrows `StepResult.details` to `TerminalFailureDetail` — callers
+ * should only trust this for a result whose `code` is one of the
+ * terminal-failure codes (ER-TERM-01/02); this function itself doesn't
+ * check `code`, since it has no access to it, only to `details`. A
+ * minimal structural check (an `entries` array), not a full schema
+ * validation — `details` only ever comes from this app's own main
+ * process, not untrusted external input, so this is a type-narrowing
+ * convenience, not a security boundary.
+ */
+export function asTerminalFailureDetail(
+  details: Record<string, unknown> | undefined,
+): TerminalFailureDetail | undefined {
+  if (!details || !Array.isArray(details['entries'])) return undefined;
+  return details as unknown as TerminalFailureDetail;
 }
 
 /**

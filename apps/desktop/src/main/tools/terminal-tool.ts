@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import type { StepResult, ToolPlugin, ValidationResult } from '@workspace-launcher/shared';
+import type {
+  StepResult,
+  TerminalEntryResult,
+  ToolPlugin,
+  ValidationResult,
+} from '@workspace-launcher/shared';
 import { ERROR_CODES, zodValidate } from '@workspace-launcher/shared';
 import { getPlatformLauncher } from '../platform';
 import { isAcceptableToolPath } from '../lib/paths';
@@ -52,8 +57,7 @@ function readEntries(params: Record<string, unknown>): { cwd: string; commands: 
   const terminals = Array.isArray(params['terminals']) ? params['terminals'] : [];
   return terminals
     .filter(
-      (t): t is Record<string, unknown> =>
-        typeof t === 'object' && t !== null && !Array.isArray(t),
+      (t): t is Record<string, unknown> => typeof t === 'object' && t !== null && !Array.isArray(t),
     )
     .map((t) => ({
       cwd: typeof t['cwd'] === 'string' ? t['cwd'] : '',
@@ -88,7 +92,7 @@ export const terminalTool: ToolPlugin<TerminalStepParams> = {
     // Sequential, not Promise.all — same reasoning as chrome-tool.ts's
     // own multi-url handling: concurrent window creation gives no
     // guaranteed order, risking focus/z-order races.
-    const results: { success: boolean; message: string }[] = [];
+    const results: { success: boolean; message: string; detail?: Record<string, unknown> }[] = [];
     for (const entry of terminals) {
       results.push(await getPlatformLauncher().openTerminal(entry.cwd, entry.commands));
     }
@@ -101,11 +105,50 @@ export const terminalTool: ToolPlugin<TerminalStepParams> = {
           .map((f) => f.message)
           .join('; ')}`;
 
+    if (success) {
+      return { success, message, durationMs: Date.now() - startedAt };
+    }
+
+    // One entry per configured terminal, success or failure alike — the
+    // restore-results UI needs "entry A fully succeeded, entry B's
+    // second command failed" together, not just the failing entries.
+    // A successful openTerminal call never sets `detail` (nothing to
+    // report), so a trivial all-succeeded entry is synthesized here for
+    // those, from the step's own already-known params.
+    const entries: TerminalEntryResult[] = results.map((r, i) => {
+      if (r.detail) return r.detail as unknown as TerminalEntryResult;
+      const entry = terminals[i]!;
+      return {
+        cwd: entry.cwd,
+        commands: entry.commands.map((command, index) => ({
+          index,
+          command,
+          status: 'success' as const,
+        })),
+      };
+    });
+
+    // Scans every failed entry, not just the first — a multi-entry step
+    // can fail for two different reasons at once (one entry's directory
+    // no longer exists, another's command actually ran and failed), and
+    // picking from only entries[0] would mislabel the whole step with
+    // the wrong code's headline/fixSteps whenever it isn't the one that
+    // happened to fail first. A real command failure anywhere wins —
+    // it's the more specific, more actionable case.
+    const anyCommandFailed = failed.some((r) => {
+      const detail = r.detail as TerminalEntryResult | undefined;
+      return detail && !detail.openFailed;
+    });
+    const code = anyCommandFailed
+      ? ERROR_CODES.TERMINAL_COMMAND_FAILED.code
+      : ERROR_CODES.TERMINAL_START_FAILED.code;
+
     return {
       success,
       message,
       durationMs: Date.now() - startedAt,
-      ...(success ? {} : { code: ERROR_CODES.TERMINAL_STEP_FAILED.code }),
+      code,
+      details: { entries },
     };
   },
 
@@ -128,8 +171,7 @@ export const terminalTool: ToolPlugin<TerminalStepParams> = {
     return entries.map((entry, i) => ({
       i: 'terminal',
       label: `Terminal ${i + 1}`,
-      mono:
-        entry.commands.length > 0 ? `${entry.cwd} — ${entry.commands.join(' && ')}` : entry.cwd,
+      mono: entry.commands.length > 0 ? `${entry.cwd} — ${entry.commands.join(' && ')}` : entry.cwd,
     }));
   },
 };

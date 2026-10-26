@@ -44,16 +44,16 @@ describe('terminalTool', () => {
     });
 
     it('accepts a ~-prefixed cwd', () => {
-      expect(terminalTool.validate({ terminals: [{ cwd: '~/projects/x', commands: [] }] }).valid).toBe(
-        true,
-      );
+      expect(
+        terminalTool.validate({ terminals: [{ cwd: '~/projects/x', commands: [] }] }).valid,
+      ).toBe(true);
     });
 
     it('accepts a bare "~" as cwd', () => {
       expect(terminalTool.validate({ terminals: [{ cwd: '~', commands: [] }] }).valid).toBe(true);
     });
 
-    it('rejects a relative cwd — same precedent as vscode-tool.ts\'s path field', () => {
+    it("rejects a relative cwd — same precedent as vscode-tool.ts's path field", () => {
       const result = terminalTool.validate({ terminals: [{ cwd: 'projects/x', commands: [] }] });
       expect(result.valid).toBe(false);
     });
@@ -125,10 +125,18 @@ describe('terminalTool', () => {
       expect(result.message).toBe('Opened 2 terminals.');
     });
 
-    it('opens the rest even when one terminal fails, aggregating the failure — same precedent as chrome-tool.ts\'s multi-url handling', async () => {
+    it("opens the rest even when one terminal fails, aggregating the failure — same precedent as chrome-tool.ts's multi-url handling", async () => {
       openTerminal
         .mockResolvedValueOnce({ success: true, message: 'Opened a terminal.' })
-        .mockResolvedValueOnce({ success: false, message: '"~/gone" doesn\'t exist.' });
+        .mockResolvedValueOnce({
+          success: false,
+          message: '"~/gone" doesn\'t exist.',
+          detail: {
+            cwd: '~/gone',
+            openFailed: { stage: 'cd', reason: '"~/gone" doesn\'t exist.' },
+            commands: [],
+          },
+        });
 
       const result = await terminalTool.run(
         {
@@ -143,7 +151,119 @@ describe('terminalTool', () => {
       expect(openTerminal).toHaveBeenCalledTimes(2);
       expect(result.success).toBe(false);
       expect(result.message).toBe('Opened 1 of 2 terminal(s); failed: "~/gone" doesn\'t exist.');
-      expect(result.code).toBe(ERROR_CODES.TERMINAL_STEP_FAILED.code);
+      expect(result.code).toBe(ERROR_CODES.TERMINAL_START_FAILED.code);
+    });
+
+    it('picks TERMINAL_COMMAND_FAILED when a command actually ran and failed, not TERMINAL_START_FAILED', async () => {
+      openTerminal.mockResolvedValueOnce({
+        success: false,
+        message:
+          '"npm run dev" failed with exit code 127 shortly after the terminal at ~/a opened.',
+        detail: {
+          cwd: '~/a',
+          commands: [
+            {
+              index: 0,
+              command: 'npm run dev',
+              status: 'failed',
+              exitCode: 127,
+              reason: 'zsh: command not found: npm',
+            },
+          ],
+        },
+      });
+
+      const result = await terminalTool.run(
+        { terminals: [{ cwd: '~/a', commands: ['npm run dev'] }] },
+        { workspaceId: 'ws-1' },
+      );
+
+      expect(result.code).toBe(ERROR_CODES.TERMINAL_COMMAND_FAILED.code);
+    });
+
+    it("picks TERMINAL_COMMAND_FAILED when the FIRST failed entry never started but a LATER entry's command did run and fail", async () => {
+      openTerminal
+        .mockResolvedValueOnce({
+          success: false,
+          message: '"~/gone" doesn\'t exist.',
+          detail: {
+            cwd: '~/gone',
+            openFailed: { stage: 'cd', reason: '"~/gone" doesn\'t exist.' },
+            commands: [],
+          },
+        })
+        .mockResolvedValueOnce({
+          success: false,
+          message:
+            '"npm run dev" failed with exit code 127 shortly after the terminal at ~/b opened.',
+          detail: {
+            cwd: '~/b',
+            commands: [
+              {
+                index: 0,
+                command: 'npm run dev',
+                status: 'failed',
+                exitCode: 127,
+                reason: 'zsh: command not found: npm',
+              },
+            ],
+          },
+        });
+
+      const result = await terminalTool.run(
+        {
+          terminals: [
+            { cwd: '~/gone', commands: [] },
+            { cwd: '~/b', commands: ['npm run dev'] },
+          ],
+        },
+        { workspaceId: 'ws-1' },
+      );
+
+      // The real command failure (entry 2) is the more specific, more
+      // actionable case — it must win even though entry 1 (a "never
+      // started" failure) comes first in the array.
+      expect(result.code).toBe(ERROR_CODES.TERMINAL_COMMAND_FAILED.code);
+    });
+
+    it('builds StepResult.details.entries with one entry per terminal — a successful entry synthesized from params, a failed one passed through verbatim', async () => {
+      const failedDetail = {
+        cwd: '~/b',
+        commands: [
+          {
+            index: 0,
+            command: 'npm run dev',
+            status: 'failed',
+            exitCode: 127,
+            reason: 'zsh: command not found: npm',
+          },
+        ],
+      };
+      openTerminal
+        .mockResolvedValueOnce({ success: true, message: 'Opened a terminal.' })
+        .mockResolvedValueOnce({
+          success: false,
+          message:
+            '"npm run dev" failed with exit code 127 shortly after the terminal at ~/b opened.',
+          detail: failedDetail,
+        });
+
+      const result = await terminalTool.run(
+        {
+          terminals: [
+            { cwd: '~/a', commands: ['npm i'] },
+            { cwd: '~/b', commands: ['npm run dev'] },
+          ],
+        },
+        { workspaceId: 'ws-1' },
+      );
+
+      expect(result.details).toEqual({
+        entries: [
+          { cwd: '~/a', commands: [{ index: 0, command: 'npm i', status: 'success' }] },
+          failedDetail,
+        ],
+      });
     });
 
     it('uses singular wording for exactly one terminal', async () => {
@@ -159,8 +279,24 @@ describe('terminalTool', () => {
 
     it('reports failure correctly when every terminal fails, not just a partial failure', async () => {
       openTerminal
-        .mockResolvedValueOnce({ success: false, message: '"~/gone-a" doesn\'t exist.' })
-        .mockResolvedValueOnce({ success: false, message: '"~/gone-b" doesn\'t exist.' });
+        .mockResolvedValueOnce({
+          success: false,
+          message: '"~/gone-a" doesn\'t exist.',
+          detail: {
+            cwd: '~/gone-a',
+            openFailed: { stage: 'cd', reason: '"~/gone-a" doesn\'t exist.' },
+            commands: [],
+          },
+        })
+        .mockResolvedValueOnce({
+          success: false,
+          message: '"~/gone-b" doesn\'t exist.',
+          detail: {
+            cwd: '~/gone-b',
+            openFailed: { stage: 'cd', reason: '"~/gone-b" doesn\'t exist.' },
+            commands: [],
+          },
+        });
 
       const result = await terminalTool.run(
         {
@@ -176,7 +312,7 @@ describe('terminalTool', () => {
       expect(result.message).toBe(
         'Opened 0 of 2 terminal(s); failed: "~/gone-a" doesn\'t exist.; "~/gone-b" doesn\'t exist.',
       );
-      expect(result.code).toBe(ERROR_CODES.TERMINAL_STEP_FAILED.code);
+      expect(result.code).toBe(ERROR_CODES.TERMINAL_START_FAILED.code);
     });
 
     it('truly runs sequentially — the second terminal is not opened until the first resolves', async () => {
@@ -236,9 +372,9 @@ describe('terminalTool', () => {
 
     it('reports a singular/plural terminal count', () => {
       expect(terminalTool.detail?.({ terminals: [{ cwd: '~/x' }] })).toBe('Opens 1 terminal.');
-      expect(
-        terminalTool.detail?.({ terminals: [{ cwd: '~/x' }, { cwd: '~/y' }] }),
-      ).toBe('Opens 2 terminals.');
+      expect(terminalTool.detail?.({ terminals: [{ cwd: '~/x' }, { cwd: '~/y' }] })).toBe(
+        'Opens 2 terminals.',
+      );
     });
 
     it('never throws on garbage/legacy params, filtering out non-object entries', () => {

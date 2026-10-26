@@ -32,8 +32,10 @@ export function VscodeFields({
   recentFolders,
   appPathDetection,
   fieldErrors,
+  projectPathSuggestion,
 }: StepFieldsProps): JSX.Element {
   const commands = getFirstTerminalCommands(params);
+  const path = typeof params['path'] === 'string' ? params['path'] : '';
   const appPath = typeof params['appPath'] === 'string' ? params['appPath'] : '';
   // Local, not threaded from the parent — a second concurrent dialog
   // from a DIFFERENT row isn't prevented by this (isBrowsing is per-row
@@ -64,6 +66,18 @@ export function VscodeFields({
       />
 
       <span className={`${FIELD_GROUP_LABEL_CLASS} mt-1`}>Project folder</span>
+      {!path && projectPathSuggestion && (
+        <button
+          type="button"
+          className="flex h-6 w-fit items-center gap-1.25 self-start rounded-[5px] px-1.5 text-[11px] text-text-faint hover:bg-bg-hover hover:text-text-muted"
+          onClick={() => {
+            onChange({ path: projectPathSuggestion.path });
+          }}
+        >
+          <Icon name="folder" size={11} />
+          Use {projectPathSuggestion.sourceLabel}&rsquo;s folder: {projectPathSuggestion.path}
+        </button>
+      )}
       <div className="flex items-center gap-1.5">
         <input
           ref={registerPrimaryInputRef}
@@ -73,7 +87,7 @@ export function VscodeFields({
           )}
           type="text"
           placeholder="e.g. ~/projects/client-c"
-          value={typeof params['path'] === 'string' ? params['path'] : ''}
+          value={path}
           onChange={(e) => {
             onChange({ path: e.target.value });
           }}

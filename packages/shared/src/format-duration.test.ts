@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatDuration } from './format-duration';
+import { formatDuration, formatPreciseDuration } from './format-duration';
 
 describe('formatDuration', () => {
   it('formats whole seconds under a minute', () => {
@@ -34,5 +34,29 @@ describe('formatDuration', () => {
 
   it('treats a negative value as zero', () => {
     expect(formatDuration(-500)).toBe('0s');
+  });
+});
+
+describe('formatPreciseDuration', () => {
+  it('formats to one decimal place of seconds, under a minute', () => {
+    expect(formatPreciseDuration(3700)).toBe('3.7s');
+    expect(formatPreciseDuration(900)).toBe('0.9s');
+    expect(formatPreciseDuration(400)).toBe('0.4s');
+  });
+
+  it('never floors a small-but-real value to a misleadingly rounder number', () => {
+    expect(formatPreciseDuration(50)).toBe('0.1s');
+  });
+
+  it("falls back to formatDuration's whole-minutes form at and beyond 60s", () => {
+    expect(formatPreciseDuration(60_000)).toBe('1m');
+    expect(formatPreciseDuration(80_000)).toBe('1m 20s');
+  });
+
+  it('returns "0.0s" for zero, negative, or non-finite input', () => {
+    expect(formatPreciseDuration(0)).toBe('0.0s');
+    expect(formatPreciseDuration(-500)).toBe('0.0s');
+    expect(formatPreciseDuration(NaN)).toBe('0.0s');
+    expect(formatPreciseDuration(Infinity)).toBe('0.0s');
   });
 });

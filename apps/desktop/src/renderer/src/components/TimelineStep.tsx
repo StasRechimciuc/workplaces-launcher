@@ -1,9 +1,13 @@
+import type { StepResult, TerminalCommandResult } from '@workspace-launcher/shared';
+import { asTerminalFailureDetail } from '@workspace-launcher/shared';
 import type { WorkspaceToolStepDisplay } from '../../../preload';
 import { Icon } from '../icons';
 import { cn } from '../lib/utils';
 import type { SpotifyConnection } from '../lib/useSpotifyConnection';
 import type { AppPathDetection } from '../lib/useAppPathDetections';
 import { stepLaunchTimeLabel, stepLaunchTimeTooltip } from '../lib/launch-time-display';
+import { formatPreciseDuration } from '@workspace-launcher/shared';
+import { getRestoreResultTreatment } from '../lib/restore-result-treatment';
 import { getStepFieldsComponent, stepFieldsIsCollapsible } from './step-fields/registry';
 import { ToolBadge } from './ToolBadge';
 import { ErrorCode } from './ErrorCode';
@@ -40,6 +44,153 @@ interface TimelineStepProps {
    * flow, which discards the whole workspace with no way back. */
   onRemove: () => void;
   isRemoving: boolean;
+  /**
+   * This step's outcome from the most recent restore, if any — absent
+   * when the step has never been restored, or wasn't covered by the
+   * last restore attempt (e.g. added since). Ignored entirely while
+   * `isOpen` — entering edit mode always reverts a row to its neutral
+   * "plan" look, unconditionally, since a shown result is a statement
+   * about a specific saved config that's stale the instant that config
+   * starts being edited (this was a deliberate, researched call, not
+   * an oversight — see this feature's own design notes).
+   */
+  result?: StepResult;
+  onRetryStep?: (index: number) => void;
+  retryingIndex?: number | null;
+  retryDisabled?: boolean;
+  /**
+   * True once a restore has happened at all (`restoreResults !== null`
+   * in Detail.tsx), regardless of whether THIS specific step has a
+   * `result`. Lets a step with no result be told apart from a step
+   * that's simply never been restored at all — e.g. one added to the
+   * workspace after the last restore ran.
+   */
+  hasRestoreResults?: boolean;
+}
+
+const STATUS_BADGE_BASE =
+  'absolute -right-1 -bottom-1 flex h-3.5 w-3.5 items-center justify-center rounded-full border-2 border-bg-elevated';
+
+/** Small corner badge on the tool logo once a result exists — the
+ * quick, read-at-a-glance signal; the row's own text carries the
+ * specific reason. */
+function statusBadge(treatment: ReturnType<typeof getRestoreResultTreatment>): JSX.Element {
+  switch (treatment) {
+    case 'success':
+      return (
+        <span className={cn(STATUS_BADGE_BASE, 'bg-success')}>
+          <Icon name="check" size={8} className="text-bg" />
+        </span>
+      );
+    case 'skipped':
+      return (
+        <span className={cn(STATUS_BADGE_BASE, 'bg-text-faint')}>
+          <Icon name="minus" size={8} className="text-bg" />
+        </span>
+      );
+    case 'started-then-failed':
+      // Distinct from the solid-red cases below — the terminal DID
+      // open and the command DID start running, it just ended badly.
+      // Same half-green/half-red split already used for this exact
+      // concept in RestoreResultsLegend.tsx's per-step bar and the
+      // sidebar's own per-workspace dot — "something real happened
+      // before this broke" must not look identical to "nothing ever
+      // got going at all" (`not-started`), which is what prompted this
+      // fix: a Docker step whose daemon came up fine and whose
+      // terminal opened fine, with only the configured command itself
+      // failing, read as a flat, undifferentiated failure.
+      return (
+        <span
+          className={cn(
+            STATUS_BADGE_BASE,
+            'bg-gradient-to-r from-success from-50% to-danger to-50%',
+          )}
+        />
+      );
+    case 'not-started':
+    case 'failed':
+      return (
+        <span className={cn(STATUS_BADGE_BASE, 'bg-danger')}>
+          <Icon name="x" size={8} className="text-bg" />
+        </span>
+      );
+  }
+}
+
+/** One configured command's line inside a terminal/Tilt entry's
+ * breakdown — success is a single muted line (nothing more to say),
+ * failed gets the full monospace box with its exit code + reason,
+ * not-run gets the dashed "didn't get a chance to run" stub. */
+function CommandLine({ command }: { command: TerminalCommandResult }): JSX.Element {
+  if (command.status === 'success') {
+    return (
+      <div className="flex items-center gap-1.5 pl-1 text-[11.5px] text-text-faint">
+        <Icon name="check" size={10} className="text-success" />
+        <span className="truncate font-mono" title={command.command}>
+          {command.command}
+        </span>
+      </div>
+    );
+  }
+
+  if (command.status === 'not-run') {
+    return (
+      <div className="flex items-center gap-2 rounded-sm border border-dashed border-border px-2 py-1.5 text-[11.5px] text-text-faint">
+        <Icon name="minus" size={11} />
+        <span className="truncate font-mono" title={command.command}>
+          {command.command}
+        </span>
+        <span className="ml-auto shrink-0">Not run</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-0.5 rounded-sm border border-danger/40 bg-bg px-2 py-1.5 font-mono text-[11.5px]">
+      <span className="truncate text-text-muted" title={command.command}>
+        <span className="text-text-faint">$ </span>
+        {command.command}
+      </span>
+      <span className="text-text-faint">
+        <span className="font-semibold text-danger">exit {command.exitCode}</span> {command.reason}
+      </span>
+    </div>
+  );
+}
+
+/** The structured two/three-stage breakdown for a terminal/Tilt-engine
+ * failure — one block per configured terminal entry. Absent entirely
+ * for a plain one-shot failure (an app that couldn't launch, a Chrome
+ * tab that failed) — those just keep the single ErrorCode line above,
+ * nothing more to break down. */
+function TerminalBreakdown({ result }: { result: StepResult }): JSX.Element | null {
+  const detail = asTerminalFailureDetail(result.details);
+  if (!detail) return null;
+
+  return (
+    <div className="mt-1.5 flex flex-col gap-1.5">
+      {detail.entries.map((entry, entryIndex) =>
+        entry.openFailed ? (
+          <div
+            key={entryIndex}
+            className="flex items-center gap-2 rounded-sm border border-dashed border-border px-2 py-1.5 text-[11.5px] text-text-faint"
+          >
+            <Icon name="minus" size={11} />
+            <span className="truncate" title={entry.cwd}>
+              {entry.cwd}
+            </span>
+            <span className="ml-auto shrink-0">Not run · {entry.openFailed.reason}</span>
+          </div>
+        ) : (
+          <div key={entryIndex} className="flex flex-col gap-1">
+            {entry.commands.map((command) => (
+              <CommandLine key={command.index} command={command} />
+            ))}
+          </div>
+        ),
+      )}
+    </div>
+  );
 }
 
 export function TimelineStep({
@@ -61,7 +212,26 @@ export function TimelineStep({
   onShowErrorCode,
   onRemove,
   isRemoving,
+  result,
+  onRetryStep,
+  retryingIndex = null,
+  retryDisabled = false,
+  hasRestoreResults = false,
 }: TimelineStepProps): JSX.Element {
+  // See `result`'s own doc comment — isOpen always wins over the
+  // DETAIL content (the message/breakdown row reverts to the plain
+  // plan text while editing, since that content IS specific to a saved
+  // config that's stale the instant editing starts). The corner status
+  // badge on the tool icon is deliberately a SEPARATE decision from
+  // `showResult` below, NOT gated on `!isOpen` — expanding a row to
+  // look at (or tweak) its config is not the same as having actually
+  // changed anything yet, and hiding "this succeeded/failed last time"
+  // the moment you merely open the row to look was confirmed
+  // confusing in real use: the badge should stay put until a save
+  // actually happens, not disappear just from expanding.
+  const treatment = result !== undefined ? getRestoreResultTreatment(result) : undefined;
+  const showResult = result !== undefined && !isOpen;
+  const dimmed = treatment === 'skipped';
   // Inline quick-edit reuses the exact same per-tool field component
   // the "Edit workspace" modal uses (real pickers — Chrome's profile
   // list, Spotify's OAuth+playlist picker, VS Code's folder dialog —
@@ -97,30 +267,72 @@ export function TimelineStep({
           className={cn('group flex items-center gap-2.5', hasExpand && 'cursor-pointer')}
           onClick={hasExpand ? onToggle : undefined}
         >
-          <ToolBadge
-            type={tool.type}
-            icon={tool.icon}
-            color={tool.color}
-            size={15}
-            chipClassName="h-7 w-7 text-[15px]"
-            params={tool.params}
-          />
-          <span className="text-[13.5px] font-medium text-text">{tool.name}</span>
-          {/* tool.launchTime is real (on macOS) or honestly-absent
-              launch-time data (step-timing-history.ts, via
-              workspace-display.ts) — "launch," not "restore"/"ready":
-              some apps may still be finishing their own startup after
-              this point. A bare number with no icon/label gave no hint
-              it was about timing at all — the clock icon + tooltip make
-              that explicit regardless of state. */}
-          <span
-            className="flex items-center gap-1 rounded-full border border-border bg-bg-elevated px-1.75 py-px text-[11px] text-text-faint"
-            title={stepLaunchTimeTooltip(tool.launchTime)}
-          >
-            <Icon name="clock" size={10} />
-            {stepLaunchTimeLabel(tool.launchTime)}
+          <span className="relative shrink-0">
+            <ToolBadge
+              type={tool.type}
+              icon={tool.icon}
+              color={tool.color}
+              size={15}
+              chipClassName={cn('h-7 w-7 text-[15px]', dimmed && 'opacity-60')}
+              params={tool.params}
+            />
+            {treatment !== undefined && statusBadge(treatment)}
           </span>
-          <span className="ml-auto flex shrink-0 items-center gap-0.5">
+          <span
+            className={cn('text-[13.5px] font-medium', dimmed ? 'text-text-faint' : 'text-text')}
+          >
+            {tool.name}
+          </span>
+          {result !== undefined ? (
+            // A real, single measurement from the last restore —
+            // precise to a decimal, not the estimate below (which is
+            // an average across past runs — see formatPreciseDuration's
+            // own doc comment for why these are two different
+            // formatters, not one). Deliberately NOT gated on
+            // `showResult`/`!isOpen` — same reasoning as the corner
+            // status badge above: expanding the row to look at its
+            // config shouldn't make the real last-restore time vanish
+            // back into a generic estimate, only actually saving a
+            // change should.
+            <span
+              className="flex items-center gap-1 rounded-full border border-border bg-bg-elevated px-1.75 py-px text-[11px] text-text-faint"
+              title="How long this step actually took on the last restore"
+            >
+              <Icon name="clock" size={10} />
+              {formatPreciseDuration(result!.durationMs)}
+            </span>
+          ) : (
+            // tool.launchTime is real (on macOS) or honestly-absent
+            // launch-time data (step-timing-history.ts, via
+            // workspace-display.ts) — "launch," not "restore"/"ready":
+            // some apps may still be finishing their own startup after
+            // this point. A bare number with no icon/label gave no hint
+            // it was about timing at all — the clock icon + tooltip make
+            // that explicit regardless of state.
+            <span
+              className="flex items-center gap-1 rounded-full border border-border bg-bg-elevated px-1.75 py-px text-[11px] text-text-faint"
+              title={stepLaunchTimeTooltip(tool.launchTime)}
+            >
+              <Icon name="clock" size={10} />
+              {stepLaunchTimeLabel(tool.launchTime)}
+            </span>
+          )}
+          <span className="ml-auto flex shrink-0 items-center gap-1.5">
+            {showResult && treatment !== 'success' && treatment !== 'skipped' && onRetryStep && (
+              <button
+                type="button"
+                disabled={retryingIndex !== null || retryDisabled}
+                title="Retries this step's whole configuration, including any commands that already succeeded"
+                className="flex h-6 shrink-0 items-center gap-1 rounded-sm border border-border-strong px-2 text-[11px] text-text-muted hover:bg-bg-hover disabled:pointer-events-none disabled:opacity-50"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRetryStep(index);
+                }}
+              >
+                <Icon name="refresh" size={11} />
+                {retryingIndex === index ? 'Retrying…' : 'Retry'}
+              </button>
+            )}
             {/* Always available, any step type — shown only on hover,
                 same reveal convention as the pencil below, so an
                 ordinary row doesn't read as cluttered/deletable by
@@ -180,7 +392,30 @@ export function TimelineStep({
             )}
           </span>
         </div>
-        <p className="mt-1.25 ml-9.5 text-[12.5px] leading-[1.4] text-text-muted">{tool.detail}</p>
+        {result !== undefined ? (
+          // Same reasoning as the corner badge/time pill above: the
+          // actual last-restore outcome (the error headline, exit
+          // code, captured output) is real, useful information while
+          // fixing a broken step's config, not something that should
+          // vanish into generic plan text just from opening the row —
+          // it stays, with the edit form rendering right below it.
+          <div className="mt-1.25 ml-9.5 text-[12.5px] leading-[1.4]">
+            <ErrorCode message={result.message} code={result.code} onLearnMore={onShowErrorCode} />
+            <TerminalBreakdown result={result} />
+          </div>
+        ) : (
+          <p className="mt-1.25 ml-9.5 text-[12.5px] leading-[1.4] text-text-muted">
+            {tool.detail}
+            {/* A restore happened, but THIS step has no result from it
+                — distinguishes "added since the last restore" from a
+                workspace that's simply never been restored at all
+                (hasRestoreResults false). Not gated on `!isOpen` either,
+                same reasoning as everywhere else on this row. */}
+            {hasRestoreResults && (
+              <span className="ml-1.5 text-text-faint italic">· Added since last restore</span>
+            )}
+          </p>
+        )}
 
         {isOpen && Fields && (
           <div className="mt-2.5 ml-9.5 flex flex-col gap-2 rounded-sm border border-border bg-bg-elevated px-3 py-2.5">

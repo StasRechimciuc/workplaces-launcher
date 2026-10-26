@@ -26,4 +26,18 @@ describe('ERROR_CODES', () => {
   it('returns undefined for a code not in the catalog, without throwing', () => {
     expect(getErrorCode('ER-NONEXISTENT-99')).toBeUndefined();
   });
+
+  it('gives every entry with a headline/fixSteps only non-empty values', () => {
+    for (const def of ERROR_CODES_LIST) {
+      if (def.headline !== undefined) {
+        expect(def.headline.length).toBeGreaterThan(0);
+      }
+      if (def.fixSteps !== undefined) {
+        expect(def.fixSteps.length).toBeGreaterThan(0);
+        for (const step of def.fixSteps) {
+          expect(step.length).toBeGreaterThan(0);
+        }
+      }
+    }
+  });
 });

@@ -23,6 +23,16 @@ interface SidebarProps {
   /** Only used to pick the right empty-state copy below — App.tsx has
    * already filtered `workspaces` by this before passing it down. */
   searchQuery: string;
+  /** Each workspace's last Restore/Switch outcome this session, keyed
+   * by id — a workspace absent here (never restored this session, or
+   * restored with nothing to report either way) gets no status badge
+   * at all, same "nothing to show" convention as TimelineStep's own
+   * per-step statusBadge. Distinct from `ws.active` (the existing dot
+   * below) — that's "is it running right now," live-checked and never
+   * stale; this is "did its last restore succeed," which can disagree
+   * with `active` (e.g. active because some steps opened, but one
+   * step's command actually failed). */
+  restoreOutcomeById: Record<string, 'success' | 'partial' | 'failed'>;
 }
 
 export function Sidebar({
@@ -35,6 +45,7 @@ export function Sidebar({
   onDeleteWorkspace,
   onOpenSettings,
   searchQuery,
+  restoreOutcomeById,
 }: SidebarProps): JSX.Element {
   // Active workspaces always float to the top — a stable partition, so
   // each group (active/inactive) keeps its own existing relative order
@@ -89,7 +100,10 @@ export function Sidebar({
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-76">
-            <DropdownMenuItem className="flex-col items-start gap-0.5 py-2" onSelect={onSaveCurrentWorkspace}>
+            <DropdownMenuItem
+              className="flex-col items-start gap-0.5 py-2"
+              onSelect={onSaveCurrentWorkspace}
+            >
               <span className="flex items-center gap-2">
                 <Icon name="refresh" size={13} />
                 Save current workspace
@@ -198,6 +212,38 @@ export function Sidebar({
                 </div>
                 <span className="shrink-0 text-[11.5px] text-text-faint">{ws.subtitle}</span>
               </div>
+            )}
+            {restoreOutcomeById[ws.id] && (
+              <span
+                className={cn(
+                  'mt-1 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full',
+                  restoreOutcomeById[ws.id] === 'success' && 'bg-success',
+                  restoreOutcomeById[ws.id] === 'failed' && 'bg-danger',
+                  // Half-green/half-red — same convention RestoreResultsLegend
+                  // already uses for a step's own "ran, then failed" state, not
+                  // a new color invented just for this. A flat red dot here
+                  // would read identically to a total wipeout, which is exactly
+                  // what a user skimming several sidebar rows needs to tell
+                  // apart without opening each one.
+                  restoreOutcomeById[ws.id] === 'partial' &&
+                    'bg-gradient-to-r from-success from-50% to-danger to-50%',
+                )}
+                title={
+                  restoreOutcomeById[ws.id] === 'success'
+                    ? 'Last restore: every step succeeded'
+                    : restoreOutcomeById[ws.id] === 'partial'
+                      ? 'Last restore: some steps succeeded, at least one failed'
+                      : 'Last restore: every step failed'
+                }
+              >
+                {restoreOutcomeById[ws.id] !== 'partial' && (
+                  <Icon
+                    name={restoreOutcomeById[ws.id] === 'success' ? 'check' : 'x'}
+                    size={8}
+                    className="text-bg"
+                  />
+                )}
+              </span>
             )}
             <div className="relative mt-0.5 h-5 w-5 shrink-0">
               {!ws.active && (

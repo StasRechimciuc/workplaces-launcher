@@ -1,5 +1,7 @@
 import type { SpotifyConnection } from '../../lib/useSpotifyConnection';
 import type { AppPathDetection } from '../../lib/useAppPathDetections';
+import type { ProjectPathSuggestion } from '../../lib/project-path-suggestion';
+import type { ProjectFilesDetectionHandle } from '../../lib/useProjectFilesDetection';
 
 /**
  * Shape every per-tool-type params-form component implements — see
@@ -63,6 +65,21 @@ export interface StepFieldsProps {
    * visual convention this follows).
    */
   fieldErrors?: Record<string, string>;
+  /**
+   * Suggests reusing another step's already-set project-path value for
+   * this row's own empty path field — see
+   * lib/project-path-suggestion.ts. Only vscode/docker/terminal fields
+   * read this (the only three step types with a "project directory"
+   * shaped field); WorkspaceFormModal.tsx computes it fresh per row.
+   * Click-to-accept only, never silently applied.
+   */
+  projectPathSuggestion?: ProjectPathSuggestion;
+  /**
+   * Docker-only: the lifted Compose/Tiltfile detection for this row's
+   * current `directory` value — see lib/useProjectFilesDetection.ts.
+   * Same lifted-to-survive-collapse reasoning as appPathDetection above.
+   */
+  projectFilesDetection?: ProjectFilesDetectionHandle;
 }
 
 export type StepFieldsComponent = (props: StepFieldsProps) => JSX.Element | null;

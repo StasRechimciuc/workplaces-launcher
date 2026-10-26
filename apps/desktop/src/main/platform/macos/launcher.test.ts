@@ -1,8 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { shell } from 'electron';
 import { macosLauncher } from './launcher';
+import type { PlatformResult } from '../types';
 import * as shellExec from '../../lib/shell-exec';
 import * as fsPromises from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+// The real openTerminal takes a 3rd, non-interface parameter (a test-
+// only seam — see launcher.ts's own comment on it) that the exported
+// macosLauncher binding's PlatformLauncher-typed signature hides from
+// callers. This cast reaches past that, deliberately, only in tests
+// that need the real exit-code poll to run fast.
+const openTerminalWithPollOptions = macosLauncher.openTerminal as (
+  cwd: string,
+  commands: string[],
+  pollOptions?: { intervalMs?: number; timeoutMs?: number; startTimeoutMs?: number },
+) => Promise<PlatformResult>;
 
 vi.mock('../../lib/shell-exec', () => ({
   runCommand: vi.fn(),
@@ -11,6 +25,27 @@ vi.mock('../../lib/shell-exec', () => ({
 vi.mock('node:fs/promises', () => ({
   stat: vi.fn(),
   writeFile: vi.fn(),
+  readFile: vi.fn(),
+  unlink: vi.fn(),
+}));
+
+/** A real `readFile` ENOENT rejection carries `.code`, not just a
+ * message that happens to say "ENOENT" — waitForEarlyCommandFailure's
+ * error handling keys off `.code` specifically (see its own comment
+ * on why a non-ENOENT I/O error must NOT be swallowed the same way),
+ * so a mock without it would test a shape readFile never actually
+ * produces. */
+function enoentError(): NodeJS.ErrnoException {
+  const err = new Error('ENOENT: no such file or directory') as NodeJS.ErrnoException;
+  err.code = 'ENOENT';
+  return err;
+}
+
+// Fixed so openTerminal's generated script content (which now embeds a
+// uuid'd sentinel path) is deterministic and assertable with `.toBe()`
+// instead of only loose substring checks.
+vi.mock('node:crypto', () => ({
+  randomUUID: () => 'fixed-uuid',
 }));
 
 vi.mock('electron', () => ({
@@ -23,6 +58,8 @@ vi.mock('electron', () => ({
 const runCommand = vi.mocked(shellExec.runCommand);
 const stat = vi.mocked(fsPromises.stat);
 const writeFile = vi.mocked(fsPromises.writeFile);
+const readFile = vi.mocked(fsPromises.readFile);
+const unlink = vi.mocked(fsPromises.unlink);
 const openPath = vi.mocked(shell.openPath);
 const openExternal = vi.mocked(shell.openExternal);
 
@@ -30,6 +67,9 @@ beforeEach(() => {
   runCommand.mockClear();
   stat.mockReset();
   writeFile.mockReset();
+  readFile.mockReset();
+  unlink.mockReset();
+  unlink.mockResolvedValue(undefined);
   openPath.mockReset();
   openExternal.mockReset();
 });
@@ -168,24 +208,43 @@ describe('macosLauncher', () => {
   });
 
   describe('openTerminal', () => {
+    // randomUUID is mocked to 'fixed-uuid' at the top of this file, so
+    // the sentinel path openTerminal embeds into the script is
+    // deterministic — computed here via the REAL (unmocked) tmpdir/join
+    // so it matches exactly what the implementation itself computes.
+    const sentinelPath = join(tmpdir(), 'workspace-launcher-terminal-fixed-uuid.status');
+    const outputLogPath = join(tmpdir(), 'workspace-launcher-terminal-fixed-uuid.out');
+    // Fast, test-only poll window — passed as openTerminal's 3rd (non-
+    // interface) parameter so tests never wait out the real ~2.5s
+    // window.
+    const fastPoll = { intervalMs: 1, timeoutMs: 10, startTimeoutMs: 10 };
+
     it('writes the exact, full script content in the correct line order — not just scattered substrings, which could pass even with the lines reordered or something extra leaked in between them', async () => {
       stat.mockResolvedValueOnce({ isDirectory: () => true } as never);
       writeFile.mockResolvedValueOnce(undefined);
       runCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
+      readFile.mockRejectedValue(enoentError());
 
-      await macosLauncher.openTerminal('/Users/stas/projects/x', ['npm i', 'npm run dev']);
+      await openTerminalWithPollOptions(
+        '/Users/stas/projects/x',
+        ['npm i', 'npm run dev'],
+        fastPoll,
+      );
 
       const [, contents] = writeFile.mock.calls[0]!;
       expect(contents).toBe(
         [
           '#!/bin/zsh -l',
           'rm -f -- "$0"',
+          `echo "started" >> '${sentinelPath}'`,
           'clear',
-          `cd '/Users/stas/projects/x' || { echo "cd into the configured directory failed."; exec "$SHELL" -l; }`,
+          `cd '/Users/stas/projects/x' || { echo "cd into the configured directory failed."; echo "cd:1" >> '${sentinelPath}'; exec "$SHELL" -l; }`,
           `echo '$ npm i'`,
-          'npm i',
+          `echo "###OUT:0###" >> '${outputLogPath}'`,
+          `{ npm i; echo "0:$?" >> '${sentinelPath}'; } 2>&1 | tee -a '${outputLogPath}'`,
           `echo '$ npm run dev'`,
-          'npm run dev',
+          `echo "###OUT:1###" >> '${outputLogPath}'`,
+          `{ npm run dev; echo "1:$?" >> '${sentinelPath}'; } 2>&1 | tee -a '${outputLogPath}'`,
           'exec "$SHELL" -l',
           '',
         ].join('\n'),
@@ -196,28 +255,51 @@ describe('macosLauncher', () => {
       stat.mockResolvedValueOnce({ isDirectory: () => true } as never);
       writeFile.mockResolvedValueOnce(undefined);
       runCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
+      readFile.mockRejectedValue(enoentError());
 
-      await macosLauncher.openTerminal('/Users/stas/projects/x', []);
+      await openTerminalWithPollOptions('/Users/stas/projects/x', [], fastPoll);
 
       const [, contents] = writeFile.mock.calls[0]!;
       expect(contents).toBe(
         [
           '#!/bin/zsh -l',
           'rm -f -- "$0"',
+          `echo "started" >> '${sentinelPath}'`,
           'clear',
-          `cd '/Users/stas/projects/x' || { echo "cd into the configured directory failed."; exec "$SHELL" -l; }`,
+          `cd '/Users/stas/projects/x' || { echo "cd into the configured directory failed."; echo "cd:1" >> '${sentinelPath}'; exec "$SHELL" -l; }`,
           'exec "$SHELL" -l',
           '',
         ].join('\n'),
       );
     });
 
+    it('still catches a cd failure for a terminal with zero commands — the only thing that CAN fail for one', async () => {
+      stat.mockResolvedValueOnce({ isDirectory: () => true } as never);
+      writeFile.mockResolvedValueOnce(undefined);
+      runCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
+      // Not *Once* — phase 1 (did the script even start?) and phase 2
+      // (did anything fail?) each read the sentinel at least once now,
+      // and both need to see this same content.
+      readFile.mockResolvedValue('cd:1\n');
+
+      const result = await openTerminalWithPollOptions('/Users/stas/projects/x', [], fastPoll);
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('changing into "/Users/stas/projects/x"');
+      expect(unlink).toHaveBeenCalledWith(sentinelPath);
+    });
+
     it('writes a .command script and hands it to `open -a Terminal`', async () => {
       stat.mockResolvedValueOnce({ isDirectory: () => true } as never);
       writeFile.mockResolvedValueOnce(undefined);
       runCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
+      readFile.mockRejectedValue(enoentError());
 
-      const result = await macosLauncher.openTerminal('/Users/stas/projects/x', ['npm run dev']);
+      const result = await openTerminalWithPollOptions(
+        '/Users/stas/projects/x',
+        ['npm run dev'],
+        fastPoll,
+      );
 
       expect(stat).toHaveBeenCalledWith('/Users/stas/projects/x');
       expect(writeFile).toHaveBeenCalledTimes(1);
@@ -229,15 +311,22 @@ describe('macosLauncher', () => {
       expect(contents).toContain('exec "$SHELL" -l');
 
       expect(runCommand).toHaveBeenCalledWith('open', ['-a', 'Terminal', scriptPath]);
-      expect(result).toEqual({ success: true, message: 'Opened a terminal at /Users/stas/projects/x.' });
+      expect(result).toEqual({
+        success: true,
+        message: 'Opened a terminal at /Users/stas/projects/x.',
+      });
+      // The sentinel is cleaned up once a result has been decided,
+      // regardless of outcome.
+      expect(unlink).toHaveBeenCalledWith(sentinelPath);
     });
 
     it('never lets a hostile command be interpreted as anything other than a literal script line', async () => {
       stat.mockResolvedValueOnce({ isDirectory: () => true } as never);
       writeFile.mockResolvedValueOnce(undefined);
       runCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
+      readFile.mockRejectedValue(enoentError());
 
-      await macosLauncher.openTerminal('/tmp/x', ['echo "$(rm -rf ~)"']);
+      await openTerminalWithPollOptions('/tmp/x', ['echo "$(rm -rf ~)"'], fastPoll);
 
       // Written verbatim as plain file bytes — never shell-interpolated
       // or AppleScript-embedded by this process itself.
@@ -245,12 +334,37 @@ describe('macosLauncher', () => {
       expect(contents).toContain('echo "$(rm -rf ~)"');
     });
 
+    it("wraps a command containing its own pipe in a { ...; } group, so $? still captures the user's command — never $pipestatus misreading the outer tee wrapping", async () => {
+      stat.mockResolvedValueOnce({ isDirectory: () => true } as never);
+      writeFile.mockResolvedValueOnce(undefined);
+      runCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
+      readFile.mockRejectedValue(enoentError());
+
+      await openTerminalWithPollOptions(
+        '/Users/stas/projects/x',
+        ['npm run build | tee build.log'],
+        fastPoll,
+      );
+
+      const [, contents] = writeFile.mock.calls[0]!;
+      // The user's own pipe stays completely verbatim INSIDE the group
+      // — our own tee wrapping and $? capture sit outside it, so the
+      // user's command's own exit code (not some outer pipeline stage)
+      // is what ends up in the sentinel, regardless of what the user's
+      // command itself contains.
+      expect(contents).toContain(
+        `{ npm run build | tee build.log; echo "0:$?" >> '${sentinelPath}'; } 2>&1 | tee -a '${outputLogPath}'`,
+      );
+      expect(contents).not.toContain('pipestatus');
+    });
+
     it('single-quote-escapes a cwd containing a literal single quote', async () => {
       stat.mockResolvedValueOnce({ isDirectory: () => true } as never);
       writeFile.mockResolvedValueOnce(undefined);
       runCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
+      readFile.mockRejectedValue(enoentError());
 
-      await macosLauncher.openTerminal("/tmp/it's-a-dir", []);
+      await openTerminalWithPollOptions("/tmp/it's-a-dir", [], fastPoll);
 
       const [, contents] = writeFile.mock.calls[0]!;
       expect(contents).toContain(`cd '/tmp/it'\\''s-a-dir'`);
@@ -260,8 +374,9 @@ describe('macosLauncher', () => {
       stat.mockResolvedValueOnce({ isDirectory: () => true } as never);
       writeFile.mockResolvedValueOnce(undefined);
       runCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
+      readFile.mockRejectedValue(enoentError());
 
-      await macosLauncher.openTerminal('/tmp/x', [`echo "it's a test"`]);
+      await openTerminalWithPollOptions('/tmp/x', [`echo "it's a test"`], fastPoll);
 
       const [, contents] = writeFile.mock.calls[0]!;
       // The echo label is its own, separately-escaped single-quoted
@@ -269,20 +384,34 @@ describe('macosLauncher', () => {
       // affected by) the following line, which stays completely
       // verbatim since it's meant to run exactly as typed.
       expect(contents).toContain(`echo '$ echo "it'\\''s a test"'`);
-      expect(contents).toContain(`echo "it's a test"`);
-      // The echo line must come immediately before the command's own
-      // execution line, in that order.
+      expect(contents).toContain(
+        `{ echo "it's a test"; echo "0:$?" >> '${sentinelPath}'; } 2>&1 | tee -a '${outputLogPath}'`,
+      );
+      // The echo label must come immediately before the output-log
+      // marker, which comes immediately before the command's own
+      // (grouped, piped) execution line, in that order.
       const lines = String(contents).split('\n');
       const echoIndex = lines.indexOf(`echo '$ echo "it'\\''s a test"'`);
-      expect(lines[echoIndex + 1]).toBe(`echo "it's a test"`);
+      expect(lines[echoIndex + 1]).toBe(`echo "###OUT:0###" >> '${outputLogPath}'`);
+      expect(lines[echoIndex + 2]).toBe(
+        `{ echo "it's a test"; echo "0:$?" >> '${sentinelPath}'; } 2>&1 | tee -a '${outputLogPath}'`,
+      );
     });
 
     it('fails loudly when cwd does not exist, without writing a script or opening anything', async () => {
       stat.mockRejectedValueOnce(new Error('ENOENT'));
 
-      const result = await macosLauncher.openTerminal('/tmp/gone', []);
+      const result = await openTerminalWithPollOptions('/tmp/gone', []);
 
-      expect(result).toEqual({ success: false, message: '"/tmp/gone" doesn\'t exist.' });
+      expect(result).toEqual({
+        success: false,
+        message: '"/tmp/gone" doesn\'t exist.',
+        detail: {
+          cwd: '/tmp/gone',
+          openFailed: { stage: 'cd', reason: '"/tmp/gone" doesn\'t exist.' },
+          commands: [],
+        },
+      });
       expect(writeFile).not.toHaveBeenCalled();
       expect(runCommand).not.toHaveBeenCalled();
     });
@@ -290,9 +419,17 @@ describe('macosLauncher', () => {
     it('fails loudly when cwd is a file, not a directory', async () => {
       stat.mockResolvedValueOnce({ isDirectory: () => false } as never);
 
-      const result = await macosLauncher.openTerminal('/tmp/a-file.txt', []);
+      const result = await openTerminalWithPollOptions('/tmp/a-file.txt', []);
 
-      expect(result).toEqual({ success: false, message: '"/tmp/a-file.txt" is not a directory.' });
+      expect(result).toEqual({
+        success: false,
+        message: '"/tmp/a-file.txt" is not a directory.',
+        detail: {
+          cwd: '/tmp/a-file.txt',
+          openFailed: { stage: 'cd', reason: '"/tmp/a-file.txt" is not a directory.' },
+          commands: [],
+        },
+      });
       expect(writeFile).not.toHaveBeenCalled();
     });
 
@@ -300,7 +437,7 @@ describe('macosLauncher', () => {
       stat.mockResolvedValueOnce({ isDirectory: () => true } as never);
       writeFile.mockRejectedValueOnce(new Error('EACCES: permission denied'));
 
-      const result = await macosLauncher.openTerminal('/tmp/x', []);
+      const result = await openTerminalWithPollOptions('/tmp/x', []);
 
       expect(result.success).toBe(false);
       expect(result.message).toContain('permission denied');
@@ -318,11 +455,256 @@ describe('macosLauncher', () => {
         code: 1,
       });
 
-      const result = await macosLauncher.openTerminal('/tmp/x', []);
+      const result = await openTerminalWithPollOptions('/tmp/x', []);
 
       expect(result.success).toBe(false);
       expect(result.message).toContain('/tmp/x');
       expect(result.message).toContain('no such app');
+    });
+
+    describe('early command-failure detection', () => {
+      it("(regression) still catches a near-instant real failure even when the sentinel takes a while to appear at all — the actual bug: Terminal.app's own launch/window-open overhead (measured ~2.1s even warm) used to eat directly into the command-failure budget, so a real `docker compose up` failure (no compose file present, fails in ~0.1s once it actually runs) could be missed simply because the terminal itself was slow to open, not because the command was slow to fail", async () => {
+        stat.mockResolvedValueOnce({ isDirectory: () => true } as never);
+        writeFile.mockResolvedValueOnce(undefined);
+        runCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
+        // Simulates Terminal.app taking a few poll ticks to even open the
+        // window and start running the script (ENOENT — nothing written
+        // yet) — by the time it finally does, the command has ALREADY
+        // failed, exactly as it does in reality (the command itself
+        // fails in well under a second once it actually starts).
+        let calls = 0;
+        readFile.mockImplementation((path) => {
+          calls++;
+          if (calls <= 3) return Promise.reject(enoentError());
+          if (path === sentinelPath) return Promise.resolve('started\n0:1\n');
+          return Promise.reject(enoentError());
+        });
+
+        const result = await openTerminalWithPollOptions(
+          '/Users/stas/projects/x',
+          ['docker compose up -d --wait-timeout 120'],
+          fastPoll,
+        );
+
+        expect(result.success).toBe(false);
+        expect(result.message).toContain('exit code 1');
+      });
+
+      it('reports a real failure when a command exits nonzero within the poll window, with structured detail including captured output', async () => {
+        stat.mockResolvedValueOnce({ isDirectory: () => true } as never);
+        writeFile.mockResolvedValueOnce(undefined);
+        runCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
+        readFile.mockImplementation((path) => {
+          if (path === sentinelPath) return Promise.resolve('0:1\n');
+          if (path === outputLogPath) {
+            return Promise.resolve('###OUT:0###\nno configuration file provided\n');
+          }
+          return Promise.reject(new Error('ENOENT'));
+        });
+
+        const result = await openTerminalWithPollOptions(
+          '/Users/stas/projects/x',
+          ['docker compose up'],
+          fastPoll,
+        );
+
+        expect(result.success).toBe(false);
+        expect(result.message).toContain('"docker compose up"');
+        expect(result.message).toContain('exit code 1');
+        expect(result.detail).toEqual({
+          cwd: '/Users/stas/projects/x',
+          commands: [
+            {
+              index: 0,
+              command: 'docker compose up',
+              status: 'failed',
+              exitCode: 1,
+              reason: 'no configuration file provided',
+            },
+          ],
+        });
+        expect(unlink).toHaveBeenCalledWith(outputLogPath);
+      });
+
+      it('identifies which command failed by index in a multi-command terminal, marking the earlier one success and the later one not-run', async () => {
+        stat.mockResolvedValueOnce({ isDirectory: () => true } as never);
+        writeFile.mockResolvedValueOnce(undefined);
+        runCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
+        readFile.mockImplementation((path) => {
+          if (path === sentinelPath) return Promise.resolve('0:0\n1:127\n');
+          if (path === outputLogPath) {
+            return Promise.resolve('###OUT:0###\nok\n###OUT:1###\nzsh: command not found: npm\n');
+          }
+          return Promise.reject(new Error('ENOENT'));
+        });
+
+        const result = await openTerminalWithPollOptions(
+          '/Users/stas/projects/x',
+          ['nvm use', 'npm run dev', 'npm run build'],
+          fastPoll,
+        );
+
+        expect(result.success).toBe(false);
+        expect(result.message).toContain('"npm run dev"');
+        expect(result.message).toContain('exit code 127');
+        expect(result.detail).toEqual({
+          cwd: '/Users/stas/projects/x',
+          commands: [
+            { index: 0, command: 'nvm use', status: 'success' },
+            {
+              index: 1,
+              command: 'npm run dev',
+              status: 'failed',
+              exitCode: 127,
+              reason: 'zsh: command not found: npm',
+            },
+            { index: 2, command: 'npm run build', status: 'not-run' },
+          ],
+        });
+      });
+
+      it('reports a real failure when cd into the configured directory fails inside the script', async () => {
+        stat.mockResolvedValueOnce({ isDirectory: () => true } as never);
+        writeFile.mockResolvedValueOnce(undefined);
+        runCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
+        // Not *Once* — see the zero-commands cd-failure test's own
+        // comment above for why both poll phases need the same value.
+        readFile.mockResolvedValue('cd:1\n');
+
+        const result = await openTerminalWithPollOptions(
+          '/Users/stas/projects/x',
+          ['npm run dev'],
+          fastPoll,
+        );
+
+        expect(result.success).toBe(false);
+        expect(result.message).toContain('changing into "/Users/stas/projects/x"');
+      });
+
+      it('treats a command still running at the end of the window as success, not a failure', async () => {
+        stat.mockResolvedValueOnce({ isDirectory: () => true } as never);
+        writeFile.mockResolvedValueOnce(undefined);
+        runCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
+        // A real long-running dev server never writes its own sentinel
+        // line — simulated here as the sentinel never existing.
+        readFile.mockRejectedValue(enoentError());
+
+        const result = await openTerminalWithPollOptions(
+          '/Users/stas/projects/x',
+          ['npm run dev'],
+          fastPoll,
+        );
+
+        expect(result).toEqual({
+          success: true,
+          message: 'Opened a terminal at /Users/stas/projects/x.',
+        });
+      });
+
+      it('(regression) propagates a real I/O error from the sentinel read, instead of treating it as "not written yet"', async () => {
+        stat.mockResolvedValueOnce({ isDirectory: () => true } as never);
+        writeFile.mockResolvedValueOnce(undefined);
+        runCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
+        const eacces = new Error('EACCES: permission denied') as NodeJS.ErrnoException;
+        eacces.code = 'EACCES';
+        readFile.mockRejectedValue(eacces);
+
+        await expect(
+          openTerminalWithPollOptions('/Users/stas/projects/x', ['npm run dev'], fastPoll),
+        ).rejects.toThrow('EACCES');
+      });
+
+      it('treats an exit code of 0 as success, not as "still running"', async () => {
+        stat.mockResolvedValueOnce({ isDirectory: () => true } as never);
+        writeFile.mockResolvedValueOnce(undefined);
+        runCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
+        // Persistent: a 0-exit entry alone never stops the poll early
+        // (there could still be a later command to watch for), so this
+        // content is read more than once before the window elapses.
+        readFile.mockResolvedValue('0:0\n');
+
+        const result = await openTerminalWithPollOptions(
+          '/Users/stas/projects/x',
+          ['echo hi'],
+          fastPoll,
+        );
+
+        expect(result.success).toBe(true);
+      });
+
+      it('ignores a trailing partial line still being written when it reads mid-write', async () => {
+        stat.mockResolvedValueOnce({ isDirectory: () => true } as never);
+        writeFile.mockResolvedValueOnce(undefined);
+        runCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
+        // No trailing newline — "1:1" hasn't finished being written yet.
+        // Persistent (not Once): the content never changes across
+        // repeated polls in this test, so the window simply elapses.
+        readFile.mockResolvedValue('0:0\n1:1');
+
+        const result = await openTerminalWithPollOptions(
+          '/Users/stas/projects/x',
+          ['echo hi', 'docker compose up'],
+          fastPoll,
+        );
+
+        // The incomplete line must be ignored this round — nothing
+        // failed among the complete lines, so this poll tick alone
+        // isn't a failure (a later tick would see it once complete).
+        expect(result.success).toBe(true);
+      });
+
+      it('falls back to a generic reason when a failed command captured no output', async () => {
+        stat.mockResolvedValueOnce({ isDirectory: () => true } as never);
+        writeFile.mockResolvedValueOnce(undefined);
+        runCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
+        readFile.mockImplementation((path) => {
+          if (path === sentinelPath) return Promise.resolve('0:1\n');
+          return Promise.reject(new Error('ENOENT')); // no output log at all
+        });
+
+        const result = await openTerminalWithPollOptions(
+          '/Users/stas/projects/x',
+          ['false'],
+          fastPoll,
+        );
+
+        expect(result.detail).toEqual({
+          cwd: '/Users/stas/projects/x',
+          commands: [
+            {
+              index: 0,
+              command: 'false',
+              status: 'failed',
+              exitCode: 1,
+              reason: 'Exited with code 1 (no output captured).',
+            },
+          ],
+        });
+      });
+
+      it('caps a captured reason to the last COMMAND_OUTPUT_TAIL_MAX_CHARS characters, keeping the real terminal window as the source of the full output', async () => {
+        stat.mockResolvedValueOnce({ isDirectory: () => true } as never);
+        writeFile.mockResolvedValueOnce(undefined);
+        runCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
+        const longOutput = 'x'.repeat(3000);
+        readFile.mockImplementation((path) => {
+          if (path === sentinelPath) return Promise.resolve('0:1\n');
+          if (path === outputLogPath) return Promise.resolve(`###OUT:0###\n${longOutput}\n`);
+          return Promise.reject(new Error('ENOENT'));
+        });
+
+        const result = await openTerminalWithPollOptions(
+          '/Users/stas/projects/x',
+          ['verbose-command'],
+          fastPoll,
+        );
+
+        const detail = result.detail as { commands: { reason?: string }[] };
+        const reason = detail.commands[0]!.reason!;
+        expect(reason.startsWith('…')).toBe(true);
+        expect(reason.length).toBe(2001); // the ellipsis plus the 2000-char cap
+        expect(reason.endsWith('x')).toBe(true);
+      });
     });
   });
 

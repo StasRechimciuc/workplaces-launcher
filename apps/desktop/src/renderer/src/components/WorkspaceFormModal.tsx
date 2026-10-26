@@ -17,6 +17,8 @@ import { matchesCombo } from '../lib/useGlobalShortcuts';
 import { SHORTCUTS, getEffectiveShortcuts, getStoredOverrides } from '../lib/shortcuts';
 import { useSpotifyConnection } from '../lib/useSpotifyConnection';
 import { useAppPathDetections } from '../lib/useAppPathDetections';
+import { useProjectFilesDetection } from '../lib/useProjectFilesDetection';
+import { getProjectPathSuggestion } from '../lib/project-path-suggestion';
 import { cn } from '../lib/utils';
 import {
   getStepFieldsComponent,
@@ -58,6 +60,11 @@ interface WorkspaceFormModalProps {
    * — the save-error banner's "Learn more about this error" link. */
   onShowErrorCode: (code: string) => void;
 }
+
+/** The only step types with a "project directory"-shaped field — see
+ * lib/project-path-suggestion.ts's own doc comment for why this is a
+ * fixed, small set rather than a generic cross-field mechanism. */
+const PROJECT_PATH_STEP_TYPES = new Set(['vscode', 'docker', 'terminal']);
 
 /**
  * One row in the "Tools" list (runs in the order added) — a preset (icon/
@@ -192,6 +199,12 @@ interface StepParamsFieldsProps {
   /** See step-fields/types.ts's StepFieldsProps — forwarded verbatim,
    * only for the one row a save attempt actually failed on. */
   fieldErrors?: StepFieldsProps['fieldErrors'];
+  /** See step-fields/types.ts's StepFieldsProps — forwarded verbatim,
+   * only vscode/docker/terminal-fields.tsx read it. */
+  projectPathSuggestion?: StepFieldsProps['projectPathSuggestion'];
+  /** See step-fields/types.ts's StepFieldsProps — forwarded verbatim,
+   * only docker-fields.tsx reads it. */
+  projectFilesDetection?: StepFieldsProps['projectFilesDetection'];
 }
 
 /**
@@ -211,6 +224,8 @@ function StepParamsFields({
   spotify,
   appPathDetection,
   fieldErrors,
+  projectPathSuggestion,
+  projectFilesDetection,
 }: StepParamsFieldsProps): JSX.Element | null {
   const Fields = getStepFieldsComponent(preset.type);
   if (!Fields) {
@@ -226,6 +241,8 @@ function StepParamsFields({
       {...(spotify !== undefined ? { spotify } : {})}
       {...(appPathDetection !== undefined ? { appPathDetection } : {})}
       {...(fieldErrors !== undefined ? { fieldErrors } : {})}
+      {...(projectPathSuggestion !== undefined ? { projectPathSuggestion } : {})}
+      {...(projectFilesDetection !== undefined ? { projectFilesDetection } : {})}
     />
   );
 }
@@ -323,6 +340,11 @@ export function WorkspaceFormModal({
   // one workspace share one detection, never a second redundant scan.
   const appPathDetections = useAppPathDetections();
 
+  // Same lifted-to-survive-collapse reasoning as appPathDetections
+  // above, keyed by directory string instead of tool type — only
+  // Docker's own fields component reads this.
+  const projectFilesDetection = useProjectFilesDetection();
+
   // Populated for whichever type's row renders a primary field via
   // StepParamsFields' `registerPrimaryInputRef` prop — vscode's path,
   // chrome's profile, spotify's playlist. A removed row's ref callback
@@ -356,6 +378,7 @@ export function WorkspaceFormModal({
   const isMountedRef = useIsMounted();
 
   const resetAppPathDetections = appPathDetections.reset;
+  const resetProjectFilesDetection = projectFilesDetection.reset;
   const resetForm = useCallback(() => {
     nextKeyRef.current = 0;
     setName('');
@@ -364,7 +387,8 @@ export function WorkspaceFormModal({
     setSaveError(null);
     setIsSaving(false);
     resetAppPathDetections();
-  }, [resetAppPathDetections]);
+    resetProjectFilesDetection();
+  }, [resetAppPathDetections, resetProjectFilesDetection]);
 
   function closeAndReset(): void {
     resetForm();
@@ -385,10 +409,11 @@ export function WorkspaceFormModal({
       setOpenKeys(new Set());
       setSaveError(null);
       resetAppPathDetections();
+      resetProjectFilesDetection();
     } else {
       resetForm();
     }
-  }, [open, editingWorkspace, resetForm, resetAppPathDetections]);
+  }, [open, editingWorkspace, resetForm, resetAppPathDetections, resetProjectFilesDetection]);
 
   /**
    * Adds a row for the picked preset and queues it to receive focus
@@ -695,6 +720,16 @@ export function WorkspaceFormModal({
                 preset.type === 'app' && typeof params['path'] === 'string' && params['path']
                   ? appDisplayName(params['path'])
                   : preset.name;
+              // Only the three "project directory"-shaped step types
+              // ever get a suggestion — see project-path-suggestion.ts's
+              // own doc comment for why this isn't a generic mechanism.
+              const projectPathSuggestion = PROJECT_PATH_STEP_TYPES.has(preset.type)
+                ? getProjectPathSuggestion(
+                    createSteps.map((d) => ({ key: d.key, type: d.preset.type, params: d.params })),
+                    key,
+                  )
+                : undefined;
+              const directory = typeof params['directory'] === 'string' ? params['directory'] : '';
               return (
                 <div
                   className="flex gap-2.5"
@@ -799,6 +834,13 @@ export function WorkspaceFormModal({
                             : {})}
                           {...(saveError?.stepKey === key && saveError.fieldErrors
                             ? { fieldErrors: saveError.fieldErrors }
+                            : {})}
+                          {...(projectPathSuggestion ? { projectPathSuggestion } : {})}
+                          {...(preset.type === 'docker'
+                            ? {
+                                projectFilesDetection:
+                                  projectFilesDetection.forDirectory(directory),
+                              }
                             : {})}
                         />
                       </div>

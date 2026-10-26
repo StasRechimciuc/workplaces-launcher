@@ -9,6 +9,7 @@ import { ERROR_CODES, zodValidate } from '@workspace-launcher/shared';
 import { getPlatformLauncher } from '../platform';
 import { runCommand } from '../lib/shell-exec';
 import { expandHome, isAcceptableToolPath } from '../lib/paths';
+import { pollUntil } from '../lib/poll-until';
 
 /**
  * Minimal, local-only tokenizer for the Up/Down command text fields —
@@ -104,8 +105,16 @@ const DockerStepParamsSchema = z
       return;
     }
     // Hard constraint, not just a default — never let a saved/edited
-    // Down command silently delete volumes on teardown.
-    if (tokens.includes('-v') || tokens.includes('--volumes')) {
+    // Down command silently delete volumes on teardown. Matches
+    // `--volumes=true`/`-v=true` too, not just the bare flag — pflag
+    // (Compose's flag parser) accepts `--flag=value` for a boolean
+    // flag just as much as the bare form, so checking only the exact
+    // tokens would let the same effect through under a different
+    // spelling.
+    const hasVolumesFlag = tokens.some(
+      (t) => t === '-v' || t === '--volumes' || t.startsWith('-v=') || t.startsWith('--volumes='),
+    );
+    if (hasVolumesFlag) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['downCommand'],
@@ -133,24 +142,87 @@ function readRawParams(params: Record<string, unknown>): {
  * Cheap pre-check before attempting any compose/tilt command — `docker
  * info` fails fast whether Docker isn't installed at all or is
  * installed but its daemon isn't running, and this tells those two
- * apart (an ENOENT-shaped failure vs. anything else) so the step's
- * message points at the right fix instead of surfacing a raw
- * connection-refused error. Directly closes the "no guidance when
- * Docker/Tilt prerequisites are missing" gap found during this
- * session's own orchestration-testbed work (WCs/WC__project-status.md,
- * 2026-10-24).
+ * apart (an ENOENT-shaped failure vs. anything else) so the caller can
+ * decide whether launching Docker Desktop is even worth attempting.
+ * Deliberately doesn't editorialize about what to do next — that's
+ * each caller's job (run() tries to launch it itself; teardown()
+ * doesn't, so it tells the user to).
  */
-async function checkDockerDaemon(): Promise<
-  { success: true } | { success: false; message: string }
-> {
+type DockerDaemonStatus =
+  | { status: 'up' }
+  | { status: 'not-installed'; message: string }
+  | { status: 'down'; message: string };
+
+async function checkDockerDaemon(): Promise<DockerDaemonStatus> {
   const result = await runCommand('docker', ['info'], { timeoutMs: 8_000 });
-  if (result.success) return { success: true };
-  const notInstalled = /ENOENT|command not found/i.test(result.message);
+  if (result.success) return { status: 'up' };
+  if (/ENOENT|command not found/i.test(result.message)) {
+    return {
+      status: 'not-installed',
+      message: "Docker isn't installed — install Docker Desktop and try again.",
+    };
+  }
+  return {
+    status: 'down',
+    message: `Docker doesn't seem to be running (checked via "docker info"): ${result.stderr || result.message}.`,
+  };
+}
+
+/** How often ensureDockerDaemonRunning re-checks the daemon while
+ * waiting for a just-launched Docker Desktop to finish starting. */
+export const DOCKER_LAUNCH_POLL_INTERVAL_MS = 2_000;
+
+/**
+ * Hard cap on how long ensureDockerDaemonRunning will wait for Docker
+ * Desktop to finish starting — generous (90s) because a cold start
+ * (especially right after a reboot) is genuinely slow, but this IS on
+ * the restore's critical path (unlike process-control.ts's
+ * waitForAppRunning, which runs detached after its step already
+ * succeeded), so it can't be unbounded.
+ */
+export const DOCKER_LAUNCH_POLL_TIMEOUT_MS = 90_000;
+
+/**
+ * Closes the "no guidance when Docker/Tilt prerequisites are missing"
+ * gap found during this session's own orchestration-testbed work
+ * (WCs/WC__project-status.md, 2026-10-24) one step further: rather than
+ * just telling the user Docker isn't running, actually launches Docker
+ * Desktop (same `open -a` mechanism every other tool plugin already
+ * uses to open its own app) and waits for its daemon to come up before
+ * giving up — matching this app's own core pitch ("Docker's up ...
+ * zero setup"), not something the user should have to do by hand every
+ * single restore. Only used by run() — teardown() has nothing to wait
+ * for if Docker was never running, so it still just reports the fact.
+ */
+export async function ensureDockerDaemonRunning(
+  options: { intervalMs?: number; timeoutMs?: number } = {},
+): Promise<{ success: true; wasAlreadyRunning: boolean } | { success: false; message: string }> {
+  const initial = await checkDockerDaemon();
+  if (initial.status === 'up') return { success: true, wasAlreadyRunning: true };
+  if (initial.status === 'not-installed') {
+    return { success: false, message: initial.message };
+  }
+
+  const launch = await getPlatformLauncher().launchApp('Docker');
+  if (!launch.success) {
+    return {
+      success: false,
+      message: `${initial.message} Tried to start Docker Desktop automatically but couldn't: ${launch.message}. Start it yourself and try again.`,
+    };
+  }
+
+  const timeoutMs = options.timeoutMs ?? DOCKER_LAUNCH_POLL_TIMEOUT_MS;
+  const { value } = await pollUntil(
+    async () => {
+      const check = await checkDockerDaemon();
+      return check.status === 'up' ? true : undefined;
+    },
+    { intervalMs: options.intervalMs ?? DOCKER_LAUNCH_POLL_INTERVAL_MS, timeoutMs },
+  );
+  if (value) return { success: true, wasAlreadyRunning: false };
   return {
     success: false,
-    message: notInstalled
-      ? "Docker isn't installed — install Docker Desktop and try again."
-      : `Docker doesn't seem to be running (checked via "docker info"): ${result.stderr || result.message}. Start Docker Desktop (or your daemon) and try again.`,
+    message: `Started Docker Desktop, but its daemon didn't finish starting within ${Math.round(timeoutMs / 1000)}s. It may still be starting — try restoring again in a moment.`,
   };
 }
 
@@ -193,7 +265,7 @@ export const dockerTool: ToolPlugin<DockerStepParams> = {
     const startedAt = Date.now();
     const directory = expandHome(params.directory);
 
-    const daemon = await checkDockerDaemon();
+    const daemon = await ensureDockerDaemonRunning();
     if (!daemon.success) {
       return {
         success: false,
@@ -202,22 +274,56 @@ export const dockerTool: ToolPlugin<DockerStepParams> = {
         code: ERROR_CODES.DOCKER_DAEMON_DOWN.code,
       };
     }
+    // Only prefixed onto FAILURE messages below, not success ones — a
+    // successful "Containers are up" already implies Docker itself was
+    // fine, so saying so again would just be noise there. On a failure
+    // it closes a real gap: the shared ER-TERM-01/02 headlines (reused
+    // from the plain Terminal step, see their own catalog comments)
+    // have no way to mention Docker specifically, so without this a
+    // failed step never says whether Docker itself was ever the
+    // problem — confirmed confusing in real use (a genuine compose-
+    // file-not-found failure read as if Docker itself might be broken).
+    const daemonNote = daemon.wasAlreadyRunning
+      ? 'Docker Desktop was already running.'
+      : 'Docker Desktop started successfully.';
 
     if (params.engine === 'tilt') {
       // Same mechanism/honesty-bar as the Terminal step — reuses
-      // openTerminal unchanged. Success here means "the terminal
-      // opened," NOT "tilt up finished successfully" — Tilt stays
-      // running/interactive (live-reload), so there is no one-shot
-      // exit code to check, identical to how the Terminal step already
-      // works and is already accepted.
+      // openTerminal unchanged, which now also catches a near-instant
+      // command failure itself (see macos/launcher.ts's sentinel-file
+      // exit-code detection) within a short grace window after the
+      // terminal opens. Success here still doesn't mean "tilt up (or
+      // whatever upCommand is) will keep running forever" — there's no
+      // one-shot exit code to wait out for a genuinely long-running,
+      // interactive process — but it now DOES mean "didn't die within
+      // the first ~2.5s," catching the common case (a typo, a missing
+      // compose/Tiltfile, a port already in use) that used to silently
+      // report success just because a terminal window opened.
       const result = await getPlatformLauncher().openTerminal(directory, [params.upCommand]);
+      if (result.success) {
+        return {
+          success: true,
+          message: `Opened a terminal running "${params.upCommand}" in ${directory}.`,
+          durationMs: Date.now() - startedAt,
+        };
+      }
+      // Same two-code split as the Terminal step (ER-TERM-01/02) — this
+      // branch reuses the exact same openTerminal mechanism, so it
+      // reuses the exact same codes rather than minting a Docker-
+      // specific pair that would just duplicate them (DOCKER_STEP_FAILED
+      // stays reserved for the compose engine's own, genuinely different
+      // direct-command-failure path below).
+      const entryDetail = result.detail as
+        { openFailed?: unknown; cwd: string; commands: unknown[] } | undefined;
+      const code = entryDetail?.openFailed
+        ? ERROR_CODES.TERMINAL_START_FAILED.code
+        : ERROR_CODES.TERMINAL_COMMAND_FAILED.code;
       return {
-        success: result.success,
-        message: result.success
-          ? `Opened a terminal running "${params.upCommand}" in ${directory}.`
-          : result.message,
+        success: false,
+        message: `${daemonNote} ${result.message}`,
         durationMs: Date.now() - startedAt,
-        ...(result.success ? {} : { code: ERROR_CODES.DOCKER_STEP_FAILED.code }),
+        code,
+        ...(entryDetail ? { details: { entries: [entryDetail] } } : {}),
       };
     }
 
@@ -226,14 +332,21 @@ export const dockerTool: ToolPlugin<DockerStepParams> = {
     // its own health-waiting and hand back a real, meaningful exit
     // code — no new readiness infrastructure needed on our side.
     const result = await runEngineCommand(directory, params.upCommand, 130_000);
+    // Report run()'s own startedAt, not runEngineCommand's internal
+    // timer — that one starts fresh after ensureDockerDaemonRunning's
+    // (possibly 90s) wait, so using it would silently drop that wait
+    // from the duration fed into the adaptive-timeout history
+    // (step-timing-history.ts), same bug the tilt branch above never
+    // had since it already measures from this function's own startedAt.
+    const durationMs = Date.now() - startedAt;
     if (result.success) {
       return {
         success: true,
         message: `Containers are up in ${directory}.`,
-        durationMs: result.durationMs,
+        durationMs,
       };
     }
-    return { ...result, message: result.message };
+    return { ...result, message: `${daemonNote} ${result.message}`, durationMs };
   },
 
   async teardown(params: DockerStepParams): Promise<StepResult> {
@@ -247,10 +360,16 @@ export const dockerTool: ToolPlugin<DockerStepParams> = {
           : 'docker compose down';
 
     const daemon = await checkDockerDaemon();
-    if (!daemon.success) {
+    if (daemon.status !== 'up') {
+      // Unlike run(), teardown never launches Docker Desktop itself —
+      // if it's not running, there's nothing left to tear down, so the
+      // user (not this step) decides whether that's worth investigating.
       return {
         success: false,
-        message: daemon.message,
+        message:
+          daemon.status === 'not-installed'
+            ? daemon.message
+            : `${daemon.message} Start Docker Desktop (or your daemon) and try again.`,
         durationMs: Date.now() - startedAt,
         code: ERROR_CODES.DOCKER_DAEMON_DOWN.code,
       };
@@ -263,15 +382,22 @@ export const dockerTool: ToolPlugin<DockerStepParams> = {
     // invisible plumbing rather than a visible action, and execFile
     // gives a real exit code the retry/status UI can trust, which
     // openTerminal's "a window opened" success never does.
+    // Report teardown()'s own startedAt, not runEngineCommand's internal
+    // timer — same durationMs bug as run()'s compose branch once had
+    // (see its own comment): runEngineCommand's timer starts fresh
+    // after the daemon check above, silently dropping that wait (up to
+    // 8s for `docker info`) from the duration fed into the adaptive-
+    // timeout history.
     const result = await runEngineCommand(directory, downCommand, 60_000);
+    const durationMs = Date.now() - startedAt;
     if (result.success) {
       return {
         success: true,
         message: `Containers are down in ${directory}.`,
-        durationMs: result.durationMs,
+        durationMs,
       };
     }
-    return { ...result, message: result.message };
+    return { ...result, durationMs };
   },
 
   detail(params: Record<string, unknown>): string {

@@ -67,6 +67,15 @@ const ICON_PATHS: Record<string, string> = {
   // Persistent "what does this mean" affordance (WorkspaceHotkeyControl.tsx)
   // — click, not hover, so the explanation is actually discoverable.
   info: '<circle cx="12" cy="12" r="9"/><line x1="12" y1="16" x2="12" y2="11.5"/><line x1="12" y1="8" x2="12" y2="8"/>',
+  // "Not run" — a configured command that never got its turn (an
+  // earlier command in the same sequence failed first, or the terminal
+  // itself never started) — TimelineStep.tsx's result display.
+  // Deliberately not
+  // `x` (reserved for an actual failure) or `clock` (reserved for "not
+  // yet attempted," a different, pre-restore meaning elsewhere in this
+  // app) — a plain dash reads as "skipped over," not "failed" or
+  // "pending."
+  minus: '<line x1="5" y1="12" x2="19" y2="12"/>',
 };
 
 export type IconName = keyof typeof ICON_PATHS;

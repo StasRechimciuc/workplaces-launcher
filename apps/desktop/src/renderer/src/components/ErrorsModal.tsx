@@ -127,6 +127,13 @@ export function ErrorsModal({ code, onClose }: ErrorsModalProps): JSX.Element {
                     <span className="text-[12.5px] font-medium text-text">{def.title}</span>
                   </div>
                   <p className="mt-1 text-[12px] text-text-muted">{def.explanation}</p>
+                  {def.fixSteps && def.fixSteps.length > 0 && (
+                    <ul className="mt-1.5 list-disc pl-4 text-[12px] text-text-muted">
+                      {def.fixSteps.map((step) => (
+                        <li key={step}>{step}</li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
               );
             })}

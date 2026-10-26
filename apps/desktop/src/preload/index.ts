@@ -6,6 +6,7 @@ import type {
   CreateWorkspaceResult,
   DeleteWorkspaceResult,
   DetectAppResult,
+  DetectProjectFilesResult,
   DetectWorkspaceDraftResult,
   GetLaunchOnLoginResult,
   SetHotkeyBindingResult,
@@ -187,6 +188,11 @@ const api = {
   // already covers that case.
   detectInstalledApp: (toolKey: ToolAppKey): Promise<DetectAppResult> =>
     ipcRenderer.invoke('app:detectInstalls', toolKey),
+  // Checks a directory for a Compose file / Tiltfile — see
+  // docker-fields.tsx / lib/useProjectFilesDetection.ts for how this
+  // drives auto-selecting the Compose/Tilt engine toggle.
+  detectProjectFiles: (directory: string): Promise<DetectProjectFilesResult> =>
+    ipcRenderer.invoke('fs:detectProjectFiles', directory),
   // The workspace's own base accelerator (fires Restore) — undefined if
   // none is set. The Shift variant (fires Switch) is always derived
   // from this, never a separate stored value — see
@@ -205,7 +211,8 @@ const api = {
   // Workspace ids whose hotkey failed to (re-)register on the most
   // recent sync (e.g. a macOS update changed what owns a combo) — the
   // Settings UI's "needs to be re-picked" indicator.
-  getFailedWorkspaceHotkeys: (): Promise<string[]> => ipcRenderer.invoke('hotkeys:getFailedBindings'),
+  getFailedWorkspaceHotkeys: (): Promise<string[]> =>
+    ipcRenderer.invoke('hotkeys:getFailedBindings'),
   // Always a live read of the OS's own login-item state — see
   // ipc/handlers.ts's getLaunchOnLogin.
   getLaunchOnLogin: (): Promise<GetLaunchOnLoginResult> =>

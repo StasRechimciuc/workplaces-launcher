@@ -1,4 +1,8 @@
-import type { StepResult, TerminalCommandResult } from '@workspace-launcher/shared';
+import type {
+  RestoreProgressEvent,
+  StepResult,
+  TerminalCommandResult,
+} from '@workspace-launcher/shared';
 import { asTerminalFailureDetail } from '@workspace-launcher/shared';
 import type { WorkspaceToolStepDisplay } from '../../../preload';
 import { Icon } from '../icons';
@@ -80,6 +84,17 @@ interface TimelineStepProps {
    * workspace after the last restore ran.
    */
   hasRestoreResults?: boolean;
+  /**
+   * This step's live status for a restore IN PROGRESS right now — the
+   * same per-step event stream `result` is eventually built from
+   * (orchestrator.ts fires one on start, another the instant this step
+   * finishes), just read provisionally before the full batched
+   * `restoreResults` lands. Only ever a stand-in: once `result` exists
+   * for this step, it wins (richer — exit codes, command breakdowns),
+   * which falls out naturally below without extra logic, since
+   * `result`'s own badge/detail branches are checked first.
+   */
+  liveStatus?: RestoreProgressEvent;
 }
 
 const STATUS_BADGE_BASE =
@@ -129,6 +144,20 @@ function statusBadge(treatment: ReturnType<typeof getRestoreResultTreatment>): J
         </span>
       );
   }
+}
+
+/** The currently-running step's own corner badge — a spinner, not one
+ * of statusBadge's five outcome treatments (there's no outcome yet).
+ * Kept as a separate function rather than a sixth case on
+ * `RestoreResultTreatment` — that type specifically enumerates
+ * *finished* outcomes (see its own doc comment), and "running" isn't
+ * one. */
+function liveRunningBadge(): JSX.Element {
+  return (
+    <span className={cn(STATUS_BADGE_BASE, 'bg-bg-elevated')}>
+      <Icon name="refresh" size={8} className="animate-spin text-text-faint" />
+    </span>
+  );
 }
 
 /** One configured command's line inside a terminal/Tilt entry's
@@ -234,6 +263,7 @@ export function TimelineStep({
   retryingIndex = null,
   retryDisabled = false,
   hasRestoreResults = false,
+  liveStatus,
 }: TimelineStepProps): JSX.Element {
   // See `result`'s own doc comment — isOpen always wins over the
   // DETAIL content (the message/breakdown row reverts to the plain
@@ -248,6 +278,20 @@ export function TimelineStep({
   // actually happens, not disappear just from expanding.
   const treatment = result !== undefined ? getRestoreResultTreatment(result) : undefined;
   const showResult = result !== undefined && !isOpen;
+  // A restore is happening RIGHT NOW and this step doesn't have its
+  // final `result` yet (the full batch only lands once every step in
+  // the restore has finished) — same isOpen-wins rule as `result`
+  // itself, same reasoning. `undefined` (not a literal 'running'/
+  // 'resolved' union) when there's nothing live to show, so every call
+  // site below can use a single falsy check.
+  const liveTreatment =
+    result === undefined && !isOpen && liveStatus
+      ? liveStatus.status === 'running'
+        ? ('running' as const)
+        : liveStatus.status === 'success'
+          ? ('success' as const)
+          : ('failed' as const)
+      : undefined;
   const dimmed = treatment === 'skipped';
   // Inline quick-edit reuses the exact same per-tool field component
   // the "Edit workspace" modal uses (real pickers — Chrome's profile
@@ -293,7 +337,13 @@ export function TimelineStep({
               chipClassName={cn('h-7 w-7 text-[15px]', dimmed && 'opacity-60')}
               params={tool.params}
             />
-            {treatment !== undefined && statusBadge(treatment)}
+            {treatment !== undefined
+              ? statusBadge(treatment)
+              : liveTreatment === 'running'
+                ? liveRunningBadge()
+                : liveTreatment !== undefined
+                  ? statusBadge(liveTreatment)
+                  : null}
           </span>
           <span
             className={cn('text-[13.5px] font-medium', dimmed ? 'text-text-faint' : 'text-text')}

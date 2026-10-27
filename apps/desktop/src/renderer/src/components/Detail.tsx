@@ -114,6 +114,18 @@ export function Detail({
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
   const [restoreError, setRestoreError] = useState<DisplayError | null>(null);
   const [progress, setProgress] = useState<RestoreProgressEvent | null>(null);
+  // Per-step live status during an in-flight restore, keyed by index —
+  // the SAME event stream `progress` above already reads (orchestrator.ts
+  // fires one per step on start, another on finish, with the real
+  // success/failure already known), just accumulated instead of
+  // overwritten, so each row can show its own live state (a spinner
+  // while running, a quick provisional result the instant it resolves)
+  // rather than only one generic "Step N of M" line above the whole
+  // list. Deliberately NOT replacing `restoreResults` once the full
+  // batch lands — TimelineStep still prefers the real `result` (richer:
+  // exit codes, command breakdowns) over this provisional one wherever
+  // both exist.
+  const [liveStepStatus, setLiveStepStatus] = useState<Record<number, RestoreProgressEvent>>({});
 
   // Inline quick-edit state — only ever relevant for whichever single
   // step is currently expanded (expandedIndex), same one-at-a-time
@@ -281,6 +293,7 @@ export function Detail({
     });
     setRestoreError(null);
     setProgress(null);
+    setLiveStepStatus({});
     // Ignoring events for a different workspace id guards against a
     // stale/overlapping restore: switching workspaces mid-restore
     // remounts this component (key={workspace.id} in App.tsx), but the
@@ -289,6 +302,7 @@ export function Detail({
     const unsubscribe = window.api.onRestoreProgress((event) => {
       if (event.workspaceId !== workspace.id || !isMountedRef.current) return;
       setProgress(event);
+      setLiveStepStatus((prev) => ({ ...prev, [event.stepIndex]: event }));
     });
     try {
       const results = await window.api.restoreWorkspace(workspace.id);
@@ -747,6 +761,7 @@ export function Detail({
               retryingIndex={retryingIndex}
               retryDisabled={isSwitching || isClosing}
               hasRestoreResults={restoreResults !== null}
+              {...(liveStepStatus[i] ? { liveStatus: liveStepStatus[i] } : {})}
             />
           );
         })}

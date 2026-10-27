@@ -102,8 +102,8 @@ function stepDisplayName(step: WorkspaceStep, def: StepTypeDefinition | undefine
  * below MIN_SAMPLES_FOR_ADAPTIVE_TIMEOUT samples (step-timing-history.ts)
  * — not a guess, an honest "no data yet."
  */
-function stepLaunchTime(stepType: string): TimingDisplay {
-  const typicalMs = getTypicalStepDurationMs(stepType);
+function stepLaunchTime(stepType: string, stepParams: Record<string, unknown>): TimingDisplay {
+  const typicalMs = getTypicalStepDurationMs(stepType, stepParams);
   if (typicalMs === undefined) {
     return { display: 'Not yet measured', state: 'unmeasured' };
   }
@@ -125,7 +125,7 @@ function workspaceLaunchTime(steps: WorkspaceStep[]): TimingDisplay {
     return { display: '—', state: 'no-steps' };
   }
 
-  const durations = steps.map((step) => getTypicalStepDurationMs(step.type));
+  const durations = steps.map((step) => getTypicalStepDurationMs(step.type, step.params));
   const known = durations.filter((ms): ms is number => ms !== undefined);
 
   if (known.length === 0) {
@@ -150,7 +150,7 @@ function toWorkspaceToolStepDisplay(step: WorkspaceStep): WorkspaceToolStepDispl
     icon: def?.icon ?? 'box',
     color: def?.color ?? 'zinc',
     name: stepDisplayName(step, def),
-    launchTime: stepLaunchTime(step.type),
+    launchTime: stepLaunchTime(step.type, step.params),
     detail,
     // Spread conditionally, not `expand: expand`: exactOptionalPropertyTypes
     // treats an explicit `undefined` value differently from the key

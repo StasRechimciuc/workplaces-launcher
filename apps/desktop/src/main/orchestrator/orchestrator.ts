@@ -380,7 +380,12 @@ async function runStep(
     // whole thing forever — see step-timing-history.ts for how the
     // actual timeout value adapts from a generous default to this
     // tool's own real historical durations.
-    const timeoutMs = getStepTimeoutMs(step.type);
+    // validation.data is type-erased to `unknown` here (this function is
+    // generic across every tool type), but every tool's Zod schema
+    // always parses to a real object — safe to treat as a plain record
+    // for the timing-history key lookup (only Docker's `engine` field is
+    // ever actually read from it there).
+    const timeoutMs = getStepTimeoutMs(step.type, validation.data as Record<string, unknown>);
     // validation.data, not the raw step.params: this is zod's own
     // parsed-and-defaulted output, so a tool's run() never has to
     // re-guess whether an optional/defaulted field survived a config
@@ -412,7 +417,11 @@ async function runStep(
         void waitForAppRunning(appName)
           .then(({ detected, elapsedMs }) => {
             const measuredDurationMs = detected ? durationMs + elapsedMs : durationMs;
-            recordSuccessfulStepDuration(step.type, measuredDurationMs);
+            recordSuccessfulStepDuration(
+              step.type,
+              validation.data as Record<string, unknown>,
+              measuredDurationMs,
+            );
           })
           .catch((err: unknown) => {
             console.error(
@@ -427,7 +436,11 @@ async function runStep(
         // timing sample couldn't be persisted (e.g. a corrupted store
         // file, a disk I/O error).
         try {
-          recordSuccessfulStepDuration(step.type, durationMs);
+          recordSuccessfulStepDuration(
+            step.type,
+            validation.data as Record<string, unknown>,
+            durationMs,
+          );
         } catch (err) {
           console.error(
             `Failed to record step timing for "${step.type}": ${err instanceof Error ? err.message : String(err)}`,

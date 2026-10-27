@@ -38,6 +38,21 @@ const TIMEOUT_BUFFER_MULTIPLIER = 1.5;
 export const MIN_ADAPTIVE_TIMEOUT_MS = 5000;
 
 /**
+ * Docker's own, far higher floor — its real worst case dwarfs every
+ * other tool type's. Confirmed via a real false-timeout: a cold Docker
+ * Desktop launch alone can take up to ~90s (ensureDockerDaemonRunning,
+ * docker-tool.ts), on top of which Tilt's own terminal-detection
+ * window adds up to ~10.5s more (macos/launcher.ts's two-phase
+ * detection — it has to wait for the terminal to actually start before
+ * it can begin checking for a failure) and Compose's own internal
+ * command timeout adds up to 130s more (runEngineCommand,
+ * docker-tool.ts) — a genuine ~220s worst case for Compose alone. 4
+ * minutes leaves real buffer above that rather than cutting it at the
+ * line.
+ */
+export const DOCKER_MIN_ADAPTIVE_TIMEOUT_MS = 4 * 60 * 1000;
+
+/**
  * Generous first-run ceiling for any tool type with no history yet.
  * Real steps can legitimately take a long time (Docker/Tilt
  * cold-building several containers, a slow VPN-gated registry pull) —
@@ -53,18 +68,48 @@ const historyStore = new Store<StepTimingHistoryShape>({
 });
 
 /**
+ * The key timing samples are stored/looked up under — usually just the
+ * tool type, but Docker's compose and tilt engines get their OWN
+ * separate keys. They have fundamentally different speed profiles:
+ * Compose is a direct, usually-fast execFile call, while Tilt always
+ * takes at least ~8-10.5s by design (openTerminal's own two-phase
+ * detection has to wait for the terminal to actually start before it
+ * can even begin checking for a failure). Blending them into one
+ * 'docker' average silently skews the adaptive timeout toward whichever
+ * engine happens to dominate recent runs — confirmed as a real bug,
+ * not theoretical: Compose's fast completions pulled the learned
+ * 'docker' timeout down to ~6s, which then falsely killed a genuinely
+ * successful Tilt deployment that was still well within its own
+ * normal latency.
+ */
+function timingHistoryKey(type: string, params: Record<string, unknown>): string {
+  if (type === 'docker' && (params['engine'] === 'tilt' || params['engine'] === 'compose')) {
+    return `${type}:${params['engine']}`;
+  }
+  return type;
+}
+
+function minAdaptiveTimeoutMsFor(key: string): number {
+  return key.startsWith('docker:') ? DOCKER_MIN_ADAPTIVE_TIMEOUT_MS : MIN_ADAPTIVE_TIMEOUT_MS;
+}
+
+/**
  * The timeout to use for a step of this tool type: the generous
  * DEFAULT_STEP_TIMEOUT_MS until MIN_SAMPLES_FOR_ADAPTIVE_TIMEOUT
  * successful runs have been recorded for it, then
- * average(recent successful durations) * TIMEOUT_BUFFER_MULTIPLIER.
+ * average(recent successful durations) * TIMEOUT_BUFFER_MULTIPLIER —
+ * floored per `minAdaptiveTimeoutMsFor` so a tool type with a known-high
+ * worst case (Docker) can never adapt down below it, however fast its
+ * own recent runs happened to be.
  */
-export function getStepTimeoutMs(toolType: string): number {
-  const samples = historyStore.get('durationsByToolType')[toolType] ?? [];
+export function getStepTimeoutMs(type: string, params: Record<string, unknown>): number {
+  const key = timingHistoryKey(type, params);
+  const samples = historyStore.get('durationsByToolType')[key] ?? [];
   if (samples.length < MIN_SAMPLES_FOR_ADAPTIVE_TIMEOUT) {
     return DEFAULT_STEP_TIMEOUT_MS;
   }
   const average = samples.reduce((sum, ms) => sum + ms, 0) / samples.length;
-  return Math.max(MIN_ADAPTIVE_TIMEOUT_MS, Math.round(average * TIMEOUT_BUFFER_MULTIPLIER));
+  return Math.max(minAdaptiveTimeoutMsFor(key), Math.round(average * TIMEOUT_BUFFER_MULTIPLIER));
 }
 
 /**
@@ -73,10 +118,15 @@ export function getStepTimeoutMs(toolType: string): number {
  * failed or timed-out run's duration isn't representative of normal
  * operation time and would corrupt the average downward.
  */
-export function recordSuccessfulStepDuration(toolType: string, durationMs: number): void {
+export function recordSuccessfulStepDuration(
+  type: string,
+  params: Record<string, unknown>,
+  durationMs: number,
+): void {
+  const key = timingHistoryKey(type, params);
   const all = historyStore.get('durationsByToolType');
-  const samples = [...(all[toolType] ?? []), durationMs].slice(-MAX_SAMPLES_PER_TOOL);
-  historyStore.set('durationsByToolType', { ...all, [toolType]: samples });
+  const samples = [...(all[key] ?? []), durationMs].slice(-MAX_SAMPLES_PER_TOOL);
+  historyStore.set('durationsByToolType', { ...all, [key]: samples });
 }
 
 /**
@@ -90,8 +140,12 @@ export function recordSuccessfulStepDuration(toolType: string, durationMs: numbe
  * corrupted store value), rather than letting NaN/Infinity silently
  * propagate into a displayed duration.
  */
-export function getTypicalStepDurationMs(toolType: string): number | undefined {
-  const samples = historyStore.get('durationsByToolType')[toolType] ?? [];
+export function getTypicalStepDurationMs(
+  type: string,
+  params: Record<string, unknown>,
+): number | undefined {
+  const key = timingHistoryKey(type, params);
+  const samples = historyStore.get('durationsByToolType')[key] ?? [];
   if (samples.length < MIN_SAMPLES_FOR_ADAPTIVE_TIMEOUT) {
     return undefined;
   }

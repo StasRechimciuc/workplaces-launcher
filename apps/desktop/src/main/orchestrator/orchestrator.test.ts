@@ -12,11 +12,13 @@ import { registerTool } from '../tools/registry';
 // threshold, the buffer multiplier) is covered by
 // step-timing-history.test.ts instead. Returns a short timeout so the
 // "hangs past its timeout" test below doesn't have to wait long.
-const getStepTimeoutMs = vi.fn((_toolType: string) => 50);
-const recordSuccessfulStepDuration = vi.fn((_toolType: string, _durationMs: number) => {});
+const getStepTimeoutMs = vi.fn((_toolType: string, _params: Record<string, unknown>) => 50);
+const recordSuccessfulStepDuration = vi.fn(
+  (_toolType: string, _params: Record<string, unknown>, _durationMs: number) => {},
+);
 vi.mock('./step-timing-history', () => ({
-  getStepTimeoutMs: (...args: [string]) => getStepTimeoutMs(...args),
-  recordSuccessfulStepDuration: (...args: [string, number]) =>
+  getStepTimeoutMs: (...args: [string, Record<string, unknown>]) => getStepTimeoutMs(...args),
+  recordSuccessfulStepDuration: (...args: [string, Record<string, unknown>, number]) =>
     recordSuccessfulStepDuration(...args),
 }));
 
@@ -178,7 +180,7 @@ describe('runWorkspace', () => {
     );
 
     expect(recordSuccessfulStepDuration).toHaveBeenCalledTimes(1);
-    expect(recordSuccessfulStepDuration).toHaveBeenCalledWith('good', 42);
+    expect(recordSuccessfulStepDuration).toHaveBeenCalledWith('good', expect.any(Object), 42);
   });
 
   it('still reports the step as successful when recording its timing throws', async () => {
@@ -297,7 +299,11 @@ describe('runWorkspace', () => {
       // — the improved measurement isn't known yet at return time.
       expect(results[0]).toMatchObject({ success: true, durationMs: 5 });
       await vi.waitFor(() => {
-        expect(recordSuccessfulStepDuration).toHaveBeenCalledWith('vscode', 105);
+        expect(recordSuccessfulStepDuration).toHaveBeenCalledWith(
+          'vscode',
+          expect.any(Object),
+          105,
+        );
       });
     });
 
@@ -320,7 +326,7 @@ describe('runWorkspace', () => {
       await run(baseConfig([{ type: 'vscode', params: { path: '/x' } }]));
 
       await vi.waitFor(() => {
-        expect(recordSuccessfulStepDuration).toHaveBeenCalledWith('vscode', 5);
+        expect(recordSuccessfulStepDuration).toHaveBeenCalledWith('vscode', expect.any(Object), 5);
       });
     });
 
@@ -339,7 +345,7 @@ describe('runWorkspace', () => {
       await run(baseConfig([{ type: 'good', params: {} }]));
 
       expect(processControl.waitForAppRunning).not.toHaveBeenCalled();
-      expect(recordSuccessfulStepDuration).toHaveBeenCalledWith('good', 5);
+      expect(recordSuccessfulStepDuration).toHaveBeenCalledWith('good', expect.any(Object), 5);
     });
 
     it('never polls on a non-macOS platform, even for a step type with a mac app mapping', async () => {
@@ -357,7 +363,7 @@ describe('runWorkspace', () => {
       await run(baseConfig([{ type: 'vscode', params: { path: '/x' } }]));
 
       expect(processControl.waitForAppRunning).not.toHaveBeenCalled();
-      expect(recordSuccessfulStepDuration).toHaveBeenCalledWith('vscode', 5);
+      expect(recordSuccessfulStepDuration).toHaveBeenCalledWith('vscode', expect.any(Object), 5);
     });
 
     it('still reports the step as successful, and still records the plain duration, if the poll itself rejects', async () => {

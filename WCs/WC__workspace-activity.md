@@ -17,7 +17,7 @@ behind the rejection shaped everything that followed.
   (two client projects, two companies) already use, with zero new
   logic — see "Why Restore needed no changes" below.
 - **Switch to this workspace** — shown whenever another workspace is
-  currently active. Reconciles *everything* currently running
+  currently active. Reconciles _everything_ currently running
   (regardless of which workspace it came from) to match just this
   one: closes what's not needed, opens what's missing, leaves Chrome
   alone either way.
@@ -37,8 +37,8 @@ same company shape with a slightly different app set; dev-you in the
 morning sharing Chrome/Spotify with personal-you in the evening) all
 turned out to be the same underlying operation — a diff between what's
 running and what the target needs — not a yes/no decision to surface
-per restore. Once "switch" became a *computation* instead of a
-*question*, the keep-or-close prompt disappeared entirely, replaced by
+per restore. Once "switch" became a _computation_ instead of a
+_question_, the keep-or-close prompt disappeared entirely, replaced by
 two distinctly-named actions whose names alone tell you which one you
 want (see `WORKING-DECISIONS-TEMP.md` item 6 for the full back-and-forth).
 
@@ -48,11 +48,11 @@ want (see `WORKING-DECISIONS-TEMP.md` item 6 for the full back-and-forth).
 refocuses it (confirmed existing behavior, not new). So "Switch to
 X"'s open side is just: call the existing `runWorkspace(X)` unchanged.
 The only genuinely new execution logic in this whole feature is the
-*close* side.
+_close_ side.
 
 ## Identity, not app name
 
-Two steps count as "the same" only if they're the same tool type *and*
+Two steps count as "the same" only if they're the same tool type _and_
 the same target — VS Code open to project A and VS Code open to
 project B are different identities, even though "VS Code" is one app.
 A tool with no distinguishing target (Spotify, Clockify) is the same
@@ -65,13 +65,18 @@ single source of truth, not a duplicated string), and
 ## One global running-fact, not a per-workspace ownership ledger
 
 Settled while resolving the "what if I want A and B running at the
-same time" case: there's no need to track *which workspace* owns a
+same time" case: there's no need to track _which workspace_ owns a
 running app. Just one fact — what's currently running, by identity —
 plus each workspace's own tool list (already on disk). Restore unions
 into it; Switch diffs the whole thing against one target; "Active" per
 workspace is derived from it, not stored as its own source of truth.
 `orchestrator.ts`'s `buildRunningAppNameMap` computes this once per
 call (deduped across every config, parallelized), not once per step.
+
+**Planned replacement (2026-10-28):** per-window tracking needs exactly
+the ownership ledger rejected here — "this VS Code window is A's, that
+one is B's" can't be expressed as one global fact. See
+WC__window-tracking.md; this section stays accurate until that ships.
 
 ## "Active" = intent AND liveness, never liveness alone
 
@@ -82,9 +87,9 @@ needs actually still running) can only turn displayed "Active" **off**
 — it can never turn it **on** for a workspace nobody touched. This
 was a real bug caught mid-design, not in build: without the intent
 half, a workspace that merely references a shared no-target tool
-(Spotify) would show falsely "Active" the moment *any other* workspace
+(Spotify) would show falsely "Active" the moment _any other_ workspace
 turned Spotify on, even if this one was never restored. Switching
-clears every *other* workspace's intent too (a full context change
+clears every _other_ workspace's intent too (a full context change
 means leaving all of them, even one that still has a shared tool open
 for someone else's sake); Close only ever clears its own.
 
@@ -152,7 +157,7 @@ intent-flag rules (including Switch clearing every other workspace).
 feature's design round was built around: a workspace that merely
 shares a no-target tool with an active one never shows falsely active.
 
-A real bug was caught and fixed *during this feature's own build*, not
+A real bug was caught and fixed _during this feature's own build_, not
 via live testing: the first pass of `listWorkspaces()`'s `active`
 computation shelled out to **real** `osascript` in the test suite,
 because `process-control.ts` wasn't mocked in `handlers.test.ts`/
@@ -174,7 +179,7 @@ kind of mistake worth not repeating:
 - **[Critical] Plain Restore never set intent.** `restoreWorkspace`
   called `runWorkspace` directly; only `switchToWorkspace`/
   `closeWorkspace` touched the intent store. Since Restore is the
-  *only* reachable first action for any workspace, nothing could ever
+  _only_ reachable first action for any workspace, nothing could ever
   become "Active" through normal use — Switch/Close's own "another
   workspace is active" conditions could never trigger either. Fixed
   by moving the `setIntentActive(config.id, true)` call into
@@ -191,7 +196,7 @@ kind of mistake worth not repeating:
   launch). Fixed by passing the app name as a real `argv` entry to an
   `on run argv` handler instead of ever building script text from it
   — makes a break-out structurally impossible regardless of content.
-  A related, lower-severity path-traversal in the *existing*
+  A related, lower-severity path-traversal in the _existing_
   `app-icon.ts` (a crafted `CFBundleIconFile` could point `sips` at an
   arbitrary file outside the bundle) was fixed alongside it.
 - **[High] A failed quit was silently dropped, and intent was cleared
@@ -211,7 +216,7 @@ kind of mistake worth not repeating:
   alongside it rather than replacing it.
 
 Two smaller fixes from the same pass: `closeWorkspace` checked
-exclusion/still-used *before* liveness, producing a misleading "left
+exclusion/still-used _before_ liveness, producing a misleading "left
 X running" for an app that was never running at all — reordered to
 check liveness first. The per-step Retry button and a Switch/Close in
 flight could race and splice a stale retry result into an unrelated
@@ -226,14 +231,14 @@ running and vice versa (`RestoreResults`'s new `disabled` prop).
   one, Switch to the other — and it closed the founder's own,
   completely unrelated, real VS Code window. Root cause:
   `switchToWorkspace`'s "what's currently running" set was computed
-  from `allConfigs` — *every* known config, including this app's own
+  from `allConfigs` — _every_ known config, including this app's own
   bundled demo/mock workspaces (`client-a`, etc., shipped with the app,
   never restored by the founder) — not just workspaces actually made
   active through this app. One of those demo configs has a `vscode`
   step; the founder's own real, unrelated VS Code happened to be open;
   the app name matched; it got closed. Fixed: an app is only ever a
-  candidate for closing if it belongs to some *other workspace that is
-  itself currently active* (intent + liveness) — never merely because
+  candidate for closing if it belongs to some _other workspace that is
+  itself currently active_ (intent + liveness) — never merely because
   some config, used or not, mentions a matching app name. This is the
   single most important correctness property of the whole feature —
   "never touch something that isn't yours" — and the first version

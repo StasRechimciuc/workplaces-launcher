@@ -146,6 +146,18 @@ export const ERROR_CODES = {
   WORKSPACE_INVALID: {
     code: 'ER-CFG-01',
     title: 'Invalid workspace configuration',
+    // headline is deliberately short and generic, never restating the
+    // specific field message — when a save failure has fieldErrors, the
+    // broken row is already auto-expanded with the exact message shown
+    // directly under the offending field, so repeating it here too
+    // (behind the "technical detail" toggle this headline enables) was
+    // confirmed pure duplication in real use: the same "Down command
+    // must not include -v/--volumes..." text shown twice, once inline,
+    // once in this banner. Callers suppress the toggle entirely via
+    // ErrorCode's hideTechnicalDetail when fieldErrors exist; it's kept
+    // available for the rarer case where a save fails with no specific
+    // field to point at (a whole-object check with no field path).
+    headline: "This workspace couldn't be saved.",
     explanation:
       "This workspace couldn't be saved because one or more of its steps have invalid settings.",
   },
@@ -233,7 +245,7 @@ export const ERROR_CODES = {
     // Terminal step.
     headline: "A terminal for this step didn't start.",
     explanation:
-      'This step hands a command to a real terminal window, and that terminal never got far enough to run it — either the terminal app itself couldn\'t be launched, or it opened but couldn\'t change into the configured directory (it may no longer exist). Expand "Show technical detail" on the step for which one happened.',
+      "This step hands a command to a real terminal window, and that terminal never got far enough to run it. The two real causes: the terminal app itself couldn't be launched (rare — check it's actually installed), or it opened but couldn't change into the configured directory, usually because that folder was moved, renamed, deleted, or lives on a drive that isn't currently mounted. The step's own row shows which one happened and the exact path it tried.",
   },
   TERMINAL_COMMAND_FAILED: {
     code: 'ER-TERM-02',
@@ -245,7 +257,7 @@ export const ERROR_CODES = {
     // Docker's Tilt engine (see TERMINAL_START_FAILED's own note).
     headline: "This step's terminal opened, but a command inside it failed.",
     explanation:
-      'A command configured for this step\'s terminal ran and exited with a failure. Expand "Show technical detail" on the step for the exact command and output.',
+      "A command configured for this step's terminal ran and exited with a failure — the terminal and the command itself were both fine up to that point. Common causes: a typo in the command, a tool it depends on isn't installed or isn't on PATH, a port it needs is already in use by something else, or a config file it expects (a compose file, a Tiltfile) is missing from that directory. The step's own row shows the exact command, exit code, and captured output.",
   },
   HOTKEY_INVALID: {
     code: 'ER-HOTKEY-01',

@@ -977,6 +977,14 @@ export function WorkspaceFormModal({
                 message={saveError.message}
                 code={saveError.code}
                 onLearnMore={onShowErrorCode}
+                // The broken row (if any) is already auto-expanded with
+                // this exact message shown inline under the offending
+                // field — see WORKSPACE_INVALID's own doc comment for
+                // why repeating it here too is pure duplication.
+                hideTechnicalDetail={
+                  saveError.fieldErrors !== undefined &&
+                  Object.keys(saveError.fieldErrors).length > 0
+                }
               />
             </div>
           )}

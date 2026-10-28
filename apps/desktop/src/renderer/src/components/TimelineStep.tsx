@@ -467,7 +467,12 @@ export function TimelineStep({
           // vanish into generic plan text just from opening the row —
           // it stays, with the edit form rendering right below it.
           <div className="mt-1.25 ml-9.5 text-[12.5px] leading-[1.4]">
-            <ErrorCode message={result.message} code={result.code} onLearnMore={onShowErrorCode} />
+            <ErrorCode
+              message={result.message}
+              code={result.code}
+              onLearnMore={onShowErrorCode}
+              hideTechnicalDetail={asTerminalFailureDetail(result.details) !== undefined}
+            />
             <TerminalBreakdown result={result} />
           </div>
         ) : (
@@ -533,6 +538,14 @@ export function TimelineStep({
                       message={saveError.message}
                       code={saveError.code}
                       onLearnMore={onShowErrorCode}
+                      // The broken field (if any) already shows this
+                      // exact message inline, right under it — see
+                      // WORKSPACE_INVALID's own doc comment for why
+                      // repeating it here too is pure duplication, not a
+                      // different level of detail.
+                      hideTechnicalDetail={
+                        fieldErrors !== undefined && Object.keys(fieldErrors).length > 0
+                      }
                     />
                   </span>
                 )}

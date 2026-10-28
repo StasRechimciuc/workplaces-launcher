@@ -544,6 +544,13 @@ export function SaveCurrentWorkspaceModal({
                     message={saveError.message}
                     code={saveError.code}
                     onLearnMore={onShowErrorCode}
+                    // Same reasoning as WorkspaceFormModal.tsx's
+                    // identical fix — the broken row already shows this
+                    // exact message inline, under the offending field.
+                    hideTechnicalDetail={
+                      saveError.fieldErrors !== undefined &&
+                      Object.keys(saveError.fieldErrors).length > 0
+                    }
                   />
                 </div>
               )}

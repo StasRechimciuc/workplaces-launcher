@@ -11,6 +11,18 @@ interface ErrorCodeProps {
    * plain text, same as before this feature existed. */
   code?: string | undefined;
   onLearnMore: (code: string) => void;
+  /**
+   * Suppresses the "Show technical detail" toggle even when the code
+   * has a `headline` — for a caller that's ALSO rendering something
+   * more specific right below this (TimelineStep.tsx's
+   * TerminalBreakdown, for a terminal-shaped failure: the real
+   * command, exit code, and captured output). `message` there is just
+   * a prose restatement of exactly those same facts, less precisely —
+   * showing both was confirmed redundant, not two different levels of
+   * detail. Has no effect when there's no `headline` (message is
+   * already the only thing shown, nothing to suppress).
+   */
+  hideTechnicalDetail?: boolean;
 }
 
 /**
@@ -31,9 +43,15 @@ interface ErrorCodeProps {
  * per-instance/dynamic content (see its own doc comment), so the raw
  * detail belongs here, inline, not threaded into that modal.
  */
-export function ErrorCode({ message, code, onLearnMore }: ErrorCodeProps): JSX.Element {
+export function ErrorCode({
+  message,
+  code,
+  onLearnMore,
+  hideTechnicalDetail,
+}: ErrorCodeProps): JSX.Element {
   const [showDetail, setShowDetail] = useState(false);
   const headline = code ? getErrorCode(code)?.headline : undefined;
+  const showToggle = headline && !hideTechnicalDetail;
 
   return (
     <span className="flex flex-col gap-1">
@@ -55,7 +73,7 @@ export function ErrorCode({ message, code, onLearnMore }: ErrorCodeProps): JSX.E
           </>
         )}
       </span>
-      {headline && (
+      {showToggle && (
         <>
           <button
             type="button"

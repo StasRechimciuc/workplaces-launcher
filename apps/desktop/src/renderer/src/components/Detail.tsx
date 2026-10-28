@@ -714,8 +714,20 @@ export function Detail({
                 i,
               )
             : undefined;
+          // The EFFECTIVE directory — the in-progress draft's, while this
+          // row is the one being edited, not the workspace's last-saved
+          // value. Using tool.params unconditionally here was a real bug:
+          // projectFilesDetection stayed permanently locked to whatever
+          // directory was saved when the step was last saved, so typing
+          // or browsing to a NEW directory while editing never actually
+          // got scanned at all, no matter how long you waited — confirmed
+          // live (darpiano-front's real docker-compose.yml never got
+          // detected after Browse-ing to it on an existing, already-
+          // saved step). Mirrors the exact `draftParams ?? tool.params`
+          // precedence DockerFields itself already uses internally.
+          const effectiveParams = expandedIndex === i ? (draftParams ?? tool.params) : tool.params;
           const directory =
-            typeof tool.params['directory'] === 'string' ? tool.params['directory'] : '';
+            typeof effectiveParams['directory'] === 'string' ? effectiveParams['directory'] : '';
           return (
             <TimelineStep
               key={i}

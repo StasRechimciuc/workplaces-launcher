@@ -6,6 +6,7 @@
 //   trusted                      Is the calling process Accessibility-trusted?
 //   windows <bundleId>           List AX windows + CGWindowList entries for the app
 //   ids <bundleId>               Space-separated CGWindowIDs of the app's AX windows
+//   exists <windowId>            Is the window in the system-wide window list?
 //   close <bundleId> <windowId>  Press the window's close button via AX, report outcome
 //   terminate <bundleId>         NSRunningApplication.terminate(), report outcome
 
@@ -41,6 +42,20 @@ func axWindows(_ pid: pid_t) -> [AXUIElement] {
 func windowId(_ window: AXUIElement) -> CGWindowID? {
   var id: CGWindowID = 0
   return axGetWindow(window, &id) == .success ? id : nil
+}
+
+// The AX window list drops windows on other Spaces and windows with an
+// attached sheet, so "gone from AX" doesn't mean closed — check the
+// system-wide window list instead.
+func cgWindowExists(_ id: CGWindowID) -> Bool {
+  let info = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
+  return info.contains { ($0[kCGWindowNumber as String] as? Int) == Int(id) }
+}
+
+// NSRunningApplication.isTerminated only refreshes via the run loop,
+// which this CLI never spins — ask the kernel directly.
+func processAlive(_ pid: pid_t) -> Bool {
+  kill(pid, 0) == 0
 }
 
 func hasSheet(_ window: AXUIElement) -> Bool {
@@ -82,6 +97,10 @@ case "ids":
   let ids = axWindows(app(args[2]).processIdentifier).compactMap(windowId)
   print(ids.map(String.init).joined(separator: " "))
 
+case "exists":
+  guard args.count == 3, let id = CGWindowID(args[2]) else { fail("usage: exists <windowId>") }
+  print(cgWindowExists(id) ? "yes" : "no")
+
 case "close":
   guard args.count == 4, let target = CGWindowID(args[3]) else {
     fail("usage: close <bundleId> <windowId>")
@@ -96,20 +115,21 @@ case "close":
   let pressed = AXUIElementPerformAction(button, kAXPressAction as CFString)
   print("PRESS_RESULT \(pressed == .success ? "success" : "error \(pressed.rawValue)")")
   Thread.sleep(forTimeInterval: 2)
-  if let still = axWindows(pid).first(where: { windowId($0) == target }) {
-    print("CLOSE_OUTCOME still_open sheet_shown=\(hasSheet(still))")
-  } else {
-    print("CLOSE_OUTCOME closed")
-  }
+  let axListed = axWindows(pid).first(where: { windowId($0) == target })
+  let sheet = axListed.map(hasSheet).map(String.init) ?? "unknown"
+  print(
+    "CLOSE_OUTCOME window_exists=\(cgWindowExists(target)) ax_listed=\(axListed != nil) sheet_shown=\(sheet)"
+  )
 
 case "terminate":
   guard args.count == 3 else { fail("usage: terminate <bundleId>") }
   let target = app(args[2])
+  let pid = target.processIdentifier
   print("TERMINATE_RETURNED \(target.terminate())")
-  for _ in 0..<50 where !target.isTerminated {
+  for _ in 0..<50 where processAlive(pid) {
     Thread.sleep(forTimeInterval: 0.1)
   }
-  print("TERMINATE_OUTCOME \(target.isTerminated ? "quit" : "still_running")")
+  print("TERMINATE_OUTCOME \(processAlive(pid) ? "still_running" : "quit")")
 
 default:
   fail("unknown subcommand \(args[1])")

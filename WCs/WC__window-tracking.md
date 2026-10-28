@@ -247,8 +247,188 @@ always-available "focus this step's window" action covers the need:
 the user decides whether a window needs them; the app makes it one
 click away.
 
+## Stage 2 technical plan (2026-10-28, stress-tested, approved)
+
+Written from a full codebase survey, then attacked by an adversarial
+review against the real code before approval; the review's fixes are
+folded in below.
+
+### Codebase facts that shape it
+
+- Steps have no stable ids — only their array index.
+- `retryStep` re-runs `runStep` with no teardown (the motivating bug).
+- `getMacAppName` is undefined for terminal and docker, so those are
+  invisible to Close and liveness today.
+- The desktop app can't reach a running VS Code window (the extension
+  only reads the handoff file on activation/focus/manual command).
+- `openTerminal` returns no handle; its script deletes itself and its
+  sentinel.
+- "Save current workspace" uses AppleScript `tell application
+"Terminal"/"iTerm2"` (Automation) in `terminal-inspection.ts`.
+- `withOrchestratorBusy` is a refcount, not a lock; Retry isn't wrapped.
+
+### 1. Native helper (`wl-helper`, Swift)
+
+- Persistent child process of Electron main, JSON-lines RPC over
+  stdin/stdout. Persistent because held AX references live only in the
+  process that created them (S1); a child because it inherits the app's
+  grant (C). Why not Node: no direct API access — a native addon needs
+  rebuilding per Electron version and crashes the app with it; `koffi`
+  FFI is clumsy for AX and the private window-id call. Same shape as
+  Wispr Flow (Electron + Swift helper).
+- Methods: list window ids, capture new window, window state
+  (alive / gone / blocked-by-sheet), close, focus (unminimize, raise,
+  `NSRunningApplication.activate`, `open -b` only if activation is
+  refused), is-running, quit (`terminate`, finding A).
+- Hardening: runs its own run loop (no stale app state), AX messaging
+  timeout 1s, per-request client timeouts, exits on stdin EOF,
+  restarted with backoff on crash.
+- Permission check: separate one-shot `wl-helper trust` (a long-running
+  process can report a stale grant).
+- Build: `swiftc` with explicit `arm64-apple-macos11` /
+  `x86_64-apple-macos11` targets + `lipo`; ships in `Contents/Helpers`
+  (the layout C tested); `package:mac` fails if it's missing; missing at
+  runtime → reduced mode with an explicit error.
+
+### 2. Permission + onboarding
+
+- First-launch modal: why, "Open Accessibility settings", polls every
+  second, moves on when granted. Privacy-policy link hidden until that
+  page exists (separate task).
+- "Continue without" → reduced mode (today's app-level behavior) +
+  banner + Settings row. New `ER-PERM-01`.
+- One AX call at startup so macOS auto-lists the app.
+- Drag-to-add floating panel: later phase (fallback only).
+
+### 3. Ledger
+
+- New versioned store `resource-ledger`: `{id, kind, identityKey,
+owners[], createdByApp, handle, state}`. Migrations, never wipes (a
+  wipe orphans every window we opened).
+- The ledger is the single source of truth for "active" (retires the
+  intent flag). Invariant: an inactive workspace owns nothing — Switch
+  transfers shared resources, delete purges owners, revalidation drops
+  unknown owner ids.
+- Stable step ids: workspace config schema v2 gives every step a uuid
+  (auto-migrated). End-of-run reconcile releases (and, if ours and
+  ownerless, closes) resources matching none of the workspace's current
+  steps — edits don't orphan.
+- Identity keys: JSON-serialized, include the bundle id (VS Code vs
+  Cursor, Chrome vs Beta), lexical path (normalized, not realpath'd),
+  occurrence index for identical entries; Tilt step and a Terminal step
+  running `tilt up` in the same dir share a key.
+
+### 4. Safety guards
+
+- Ledger stores `kern.bootsessionuuid`; on mismatch every handle is
+  dropped (window ids and pids reset/reuse across reboot/logout).
+- A process is signalled only if pid + start time + tty all match.
+  Kill = descendants of the recorded shell, never "everything on a tty"
+  (ttys are recycled).
+- Window handles store owner pid + bundle id.
+- Write-ahead "opening" record before `open`, reconciled at startup —
+  crash, helper restart or a timed-out-then-finished step can't leave an
+  untracked window. Failed/timed-out steps still record their windows
+  (Retry needs exactly those).
+
+### 5. Concurrency
+
+Per-workspace lock (Restore/Close/Switch/Retry serialized per
+workspace), per-identity lock (lookup → check → open → record),
+per-app capture lock (before-snapshot → capture). Retry busy-wrapped.
+
+### 6. Operations
+
+- Open: live instance exists → reuse, add owner, `createdByApp=false` if
+  it existed before this app touched it (decision 1); else open + record
+  as ours.
+- Close X: drop X as owner; close only ownerless + ours. Per-resource
+  results with reasons: `still-used`, `not-ours`, `user-took-over`,
+  `modified`, `kept-running`, `failed`, `needs-permission`.
+- Switch to Y: transfer what Y also needs, close the rest.
+- Retry: close the step's own resources, reopen.
+- App-quit blocked while any owned resource of that app is in use
+  (also fixes today's latent bug: a link step pointing at Chrome quits
+  Chrome).
+
+### 7. Per kind
+
+- **Terminal**: generated script's first line sets a nonce title
+  (safe: non-interactive shell; oh-my-zsh only rewrites after
+  `exec $SHELL`); writes tty + pid + start time; captured by window diff
+  matched on the nonce. **Decision 2 kept**: after the commands finish,
+  the script records the exit code and waits in a loop — a re-run
+  request from the app re-runs the commands in the same window, any
+  keypress drops to the normal shell. Once the user has used the window,
+  it's `user-took-over`: never auto-closed. Exit 0 or zero commands =
+  alive. Close: SIGHUP (what a window close sends), SIGKILL leftovers
+  after 1.5s, then close the window; a dialog anyway → report, never
+  auto-confirm.
+- **Tilt**: `stopOnClose` on → SIGINT `tilt up`, wait, `tilt down`,
+  close the window. Off → window stays, `kept-running`.
+- **Compose**: identity = the compose project per `docker compose ls`;
+  a stack already running counts as not ours.
+- **VS Code**: heartbeat gets a per-window instance id; new
+  desktop→extension command channel (directory watch + 1–2s poll, ack
+  file, 10s TTL, stale commands ignored on activation, multi-root
+  windows excluded, refuses to close with unsaved files). Focus never
+  re-runs the step (today it re-stages terminals → duplicates). No
+  extension → fall back to quitting the whole app, only if every VS
+  Code window is ours.
+- **Chrome**: `--new-window` + all URLs in one `open` call; captured
+  only with exactly one candidate (else recorded handle-less, reason
+  shown); helper windows filtered by layer/size; user-added tabs →
+  `modified`, left open.
+- **Apps** (generic, Spotify, Clockify, link-with-app): app resources,
+  tracked by pid + launch time; native quit; keeps today's
+  quit-on-Close.
+- **Automation removed entirely**: AppleScript `quit` goes; detection
+  finds terminals via `ps` (iTerm2 via `iTermServer`) — also fixes
+  today's bug where `tee` is reported as the command.
+
+### 8. Behavior changes and upgrade
+
+- Workspaces active at upgrade time own nothing → their first Close
+  runs today's app-level close one last time.
+- "Save current workspace": detected things owned by the new workspace
+  but `not-ours`.
+- Close no longer quits VS Code (with the extension); Chrome-step
+  windows are now closed (Chrome itself never quit).
+- Hotkey restore and Shift-switch end with a focus pass (primary +
+  current-desktop windows, VS Code last); the hotkey path stops pinning
+  the launcher. Button restore keeps the pin; all-reused shows "Already
+  open — Focus".
+
+### 9. Tests
+
+Helper client against a real spawned fake child (scripted JSON);
+ledger migrations, boot guard, owner purge, upgrade path; orchestrator
+reuse/create, refcounts, close/switch matrices, shared-resource
+concurrency, failed/timed-out opens recording handles, reconcile after
+edit, app-quit blocked by a same-app resource, Tilt ordering; exact
+launcher script + Chrome argv; extension command channel as pure shared
+functions. Swift: manual macOS check script (spike-shaped); macOS CI
+building the helper — later, flagged.
+
+### 10. Phases (each verified on the Mac before the next)
+
+1. Helper + client + build + permission check + onboarding (no
+   behavior change).
+2. Stable step ids, ledger, plugin interface, operations, locks, safety
+   guards; app / Compose / VS Code kinds + extension channel; upgrade.
+3. Terminal + Tilt windows, re-run loop, Automation removed from
+   detection.
+4. Chrome dedicated windows.
+5. Focus button + hotkey focus pass, after a real-app spike on
+   background focus (also checks `--new-window` with Chrome running);
+   drag-to-add fallback.
+
+Known limitations: background Terminal tabs can't be closed, only their
+processes stopped (T); no Windows/Linux; the VS Code extension still
+isn't bundled/installed by the app.
+
 ## Status
 
-Idea approved (expanded scope), research and spike done. Next:
-`/judge` Stage 2 — the concrete technical plan — after the current
-end-to-end testing pass, starting with the background-focus spike.
+Idea approved, research + spike done, Stage 2 plan approved
+(2026-10-28). Next: build phase 1, in a session running on the Mac
+(the Swift helper needs `swiftc` and real macOS to verify).

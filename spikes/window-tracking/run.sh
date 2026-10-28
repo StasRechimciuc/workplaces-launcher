@@ -201,6 +201,76 @@ if want F; then
   fi
 fi
 
+# Opens a throwaway TextEdit document, sets TEXT_WINDOW to its window id.
+open_test_document() {
+  local before after
+  before=$("$PROBE" cgids com.apple.TextEdit 2>/dev/null | grep -v ERROR)
+  echo "window-tracking spike test document" >"$WORK/wt-$1.txt"
+  open -a TextEdit "$WORK/wt-$1.txt"
+  sleep 3
+  after=$("$PROBE" cgids com.apple.TextEdit)
+  TEXT_WINDOW=$(new_ids "$before" "$after" | awk '{print $1}')
+  echo "OPENED TextEdit window=${TEXT_WINDOW:-none} (title: wt-$1.txt)"
+}
+
+if want S1 || want S2; then
+  echo
+  echo "SETTING 'switch to a Space with open windows' = $(defaults read com.apple.dock workspaces-auto-swoosh 2>/dev/null || echo 'not set (default: on)')"
+fi
+
+if want S1; then
+  section "S1: window moved to another desktop — reachable through a reference held from before the move?"
+  open_test_document s1
+  [ -n "$TEXT_WINDOW" ] && "$PROBE" spaces-held com.apple.TextEdit "$TEXT_WINDOW" </dev/tty
+  ask "During FOCUS, did the screen switch to the other desktop and show the window?" S1_focus_switched_desktop
+fi
+
+if want S2; then
+  section "S2: window on another desktop, looked up fresh (as after an app restart)"
+  open_test_document s2
+  if [ -n "$TEXT_WINDOW" ]; then
+    pause "Open Mission Control (Ctrl+Up), drag the 'wt-s2.txt' window onto ANOTHER desktop, then click back onto THIS desktop."
+    "$PROBE" spaces-fresh com.apple.TextEdit "$TEXT_WINDOW" </dev/tty
+    ask "After activation, did the screen switch to the other desktop?" S2_activate_switched_desktop
+  fi
+fi
+
+if want T; then
+  section "T: how do Terminal tabs show up?"
+  open_test_terminal t
+  BEFORE_TAB=$("$PROBE" cgids com.apple.Terminal)
+  pause "Click the new test Terminal window (running sleep), press Cmd+T to add a tab, then click back here."
+  NEW_TAB=$(new_ids "$BEFORE_TAB" "$("$PROBE" cgids com.apple.Terminal)")
+  echo "TAB new_system_window_ids=${NEW_TAB:-none} (a tab with its own id = tabs are separate windows)"
+  PATTERN=$(echo "$TEST_WINDOW $NEW_TAB" | tr -s ' ' '|' | sed 's/^|//;s/|$//')
+  "$PROBE" windows com.apple.Terminal | grep -E "id=($PATTERN) "
+  kill_test_processes
+  pause "Close the test window and its tab yourself (Cmd+W on each; no dialog should appear)."
+fi
+
+if want H; then
+  section "H: Chrome — does 'open -n' with a profile create a new window, and can we catch its id?"
+  if open -Ra "Google Chrome" 2>/dev/null; then
+    echo "CHROME_RUNNING_BEFORE $(pgrep -xq 'Google Chrome' && echo yes || echo no)"
+    for variant in url profile_only; do
+      BEFORE_CH=$("$PROBE" cgids com.google.Chrome 2>/dev/null | grep -v ERROR)
+      if [ "$variant" = url ]; then
+        open -n -a "Google Chrome" --args --profile-directory=Default "https://example.com/?window-tracking-spike"
+      else
+        open -n -a "Google Chrome" --args --profile-directory=Default
+      fi
+      sleep 5
+      NEW_CH=$(new_ids "$BEFORE_CH" "$("$PROBE" cgids com.google.Chrome)")
+      echo "CHROME_$variant new_window_ids=${NEW_CH:-none}"
+      ask "($variant) Did Chrome open a NEW WINDOW (not just a new tab in an existing one)?" "H_${variant}_new_window"
+      for id in $NEW_CH; do "$PROBE" close com.google.Chrome "$id"; done
+      [ -z "$NEW_CH" ] && pause "Close the new Chrome tab yourself."
+    done
+  else
+    echo "SKIPPED Google Chrome not installed"
+  fi
+fi
+
 if want C; then
   section "C: does a helper launched by the app share its Accessibility grant?"
   echo "NOT TESTED here — only meaningful in a signed, packaged build. Deferred to the Stage 2 spike."

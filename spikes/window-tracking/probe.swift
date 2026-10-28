@@ -7,6 +7,11 @@
 //   windows <bundleId>           List AX windows + CGWindowList entries for the app
 //   ids <bundleId>               Space-separated CGWindowIDs of the app's AX windows
 //   exists <windowId>            Is the window in the system-wide window list?
+//   cgids <bundleId>             Space-separated ids of the app's windows in the system-wide list
+//   spaces-held <bundleId> <id>  Grab the AX window now, let the user move it to another Space,
+//                                then check visibility, focus and close via the held reference
+//   spaces-fresh <bundleId> <id> Look the window up from scratch (as after an app restart),
+//                                activate the app, check whether it became reachable, close it
 //   close <bundleId> <windowId>  Press the window's close button via AX, report outcome
 //   terminate <bundleId>         NSRunningApplication.terminate(), report outcome
 
@@ -58,10 +63,43 @@ func processAlive(_ pid: pid_t) -> Bool {
   kill(pid, 0) == 0
 }
 
+func cgWindows(_ pid: pid_t) -> [[String: Any]] {
+  let info = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
+  return info.filter {
+    ($0[kCGWindowOwnerPID as String] as? pid_t) == pid && ($0[kCGWindowLayer as String] as? Int) == 0
+  }
+}
+
+func axWindow(_ pid: pid_t, _ id: CGWindowID) -> AXUIElement? {
+  axWindows(pid).first { windowId($0) == id }
+}
+
+func activate(_ app: NSRunningApplication) {
+  if #available(macOS 14, *) {
+    app.activate()
+  } else {
+    app.activate(options: [])
+  }
+}
+
+func waitForEnter(_ prompt: String) {
+  print("\(prompt) (press Enter)")
+  _ = readLine()
+}
+
+func pressClose(_ window: AXUIElement) -> String {
+  guard let button: AXUIElement = attr(window, kAXCloseButtonAttribute) else { return "no_button" }
+  let result = AXUIElementPerformAction(button, kAXPressAction as CFString)
+  return result == .success ? "success" : "error \(result.rawValue)"
+}
+
 func hasSheet(_ window: AXUIElement) -> Bool {
   let children: [AXUIElement] = attr(window, kAXChildrenAttribute) ?? []
   return children.contains { (attr($0, kAXRoleAttribute) as String?) == "AXSheet" }
 }
+
+// run.sh pipes output through tee; unbuffered so prompts show before readLine blocks.
+setvbuf(stdout, nil, _IONBF, 0)
 
 let args = CommandLine.arguments
 guard args.count >= 2 else { fail("usage: probe <subcommand> [args]") }
@@ -89,7 +127,64 @@ case "windows":
     let number = entry[kCGWindowNumber as String] as? Int ?? -1
     let hasName = entry[kCGWindowName as String] != nil
     let hasOwnerName = entry[kCGWindowOwnerName as String] != nil
-    print("CG_WINDOW id=\(number) name_visible=\(hasName) owner_name_visible=\(hasOwnerName)")
+    let onscreen = entry[kCGWindowIsOnscreen as String] as? Bool ?? false
+    print(
+      "CG_WINDOW id=\(number) onscreen=\(onscreen) name_visible=\(hasName) owner_name_visible=\(hasOwnerName)"
+    )
+  }
+
+case "cgids":
+  guard args.count == 3 else { fail("usage: cgids <bundleId>") }
+  let ids = cgWindows(app(args[2]).processIdentifier).compactMap {
+    $0[kCGWindowNumber as String] as? Int
+  }
+  print(ids.map(String.init).joined(separator: " "))
+
+case "spaces-held":
+  guard args.count == 4, let id = CGWindowID(args[3]) else {
+    fail("usage: spaces-held <bundleId> <windowId>")
+  }
+  let target = app(args[2])
+  let pid = target.processIdentifier
+  guard let held = axWindow(pid, id) else { fail("window \(id) not visible to AX at start") }
+  print("HELD reference captured")
+  waitForEnter(
+    "Open Mission Control (Ctrl+Up), drag the test window onto ANOTHER desktop (add one with + if needed), then click back onto THIS desktop."
+  )
+  let title: String? = attr(held, kAXTitleAttribute)
+  print("AFTER_MOVE fresh_ax_listed=\(axWindow(pid, id) != nil) cg_exists=\(cgWindowExists(id))")
+  print("AFTER_MOVE held_reference_alive=\(title != nil)")
+  waitForEnter("Next: the probe will try to FOCUS the window via the held reference.")
+  let raise = AXUIElementPerformAction(held, kAXRaiseAction as CFString)
+  activate(target)
+  print("FOCUS raise_result=\(raise == .success ? "success" : "error \(raise.rawValue)")")
+  waitForEnter(
+    "Note whether the screen switched to the other desktop and showed the window. Then return to THIS desktop."
+  )
+  print("CLOSE press=\(pressClose(held))")
+  Thread.sleep(forTimeInterval: 1.5)
+  print("CLOSE_OUTCOME window_exists=\(cgWindowExists(id))")
+
+case "spaces-fresh":
+  guard args.count == 4, let id = CGWindowID(args[3]) else {
+    fail("usage: spaces-fresh <bundleId> <windowId>")
+  }
+  let target = app(args[2])
+  let pid = target.processIdentifier
+  print("FRESH before_activate ax_listed=\(axWindow(pid, id) != nil) cg_exists=\(cgWindowExists(id))")
+  activate(target)
+  Thread.sleep(forTimeInterval: 2)
+  let found = axWindow(pid, id)
+  print("FRESH after_activate ax_listed=\(found != nil)")
+  waitForEnter(
+    "Note whether the screen switched to the other desktop. Then return to THIS desktop."
+  )
+  if let found {
+    print("CLOSE press=\(pressClose(found))")
+    Thread.sleep(forTimeInterval: 1.5)
+    print("CLOSE_OUTCOME window_exists=\(cgWindowExists(id))")
+  } else {
+    print("CLOSE skipped — window still not reachable through AX")
   }
 
 case "ids":
@@ -109,11 +204,7 @@ case "close":
   guard let window = axWindows(pid).first(where: { windowId($0) == target }) else {
     fail("window \(target) not found")
   }
-  guard let button: AXUIElement = attr(window, kAXCloseButtonAttribute) else {
-    fail("window \(target) has no close button")
-  }
-  let pressed = AXUIElementPerformAction(button, kAXPressAction as CFString)
-  print("PRESS_RESULT \(pressed == .success ? "success" : "error \(pressed.rawValue)")")
+  print("PRESS_RESULT \(pressClose(window))")
   Thread.sleep(forTimeInterval: 2)
   let axListed = axWindows(pid).first(where: { windowId($0) == target })
   let sheet = axListed.map(hasSheet).map(String.init) ?? "unknown"

@@ -430,8 +430,9 @@ isn't bundled/installed by the app.
 ## Status
 
 Idea approved, research + spike done, Stage 2 plan approved
-(2026-10-28). **Phase 1 built (2026-10-29)**, not yet hand-checked in
-the running app:
+(2026-10-28). **Phase 1 built and hand-checked (2026-10-29)** in a
+packaged build — onboarding, grant detection, reduced-mode banner,
+Settings row and ER-PERM-01 all confirmed by the founder:
 
 - `apps/desktop/native/wl-helper/` (Swift) — `serve` / `trust`, built
   universal by `npm run build:helper`; `scripts/check-helper.mjs` is
@@ -449,9 +450,18 @@ Accessibility with "cannot complete" (capture now keeps polling), and
 the system window list keeps a just-closed TextEdit window too, not
 only Chrome (the helper remembers windows whose held reference died).
 
-Pre-existing, not fixed here: `package:mac` fails before packing
+Packaging (2026-10-29): `package:mac` was failing before packing
 ("Cannot compute electron version" — Electron is hoisted to the
-monorepo root). Verified instead with `electron-builder --mac --dir
--c.electronVersion=33.4.11 -c.mac.identity=null`.
+monorepo root); it now passes the installed version explicitly. Local
+test builds use `npm run package:mac:dev`, signed with a self-signed
+"Workspace Launcher Dev" identity (one-time per Mac:
+`scripts/create-dev-signing-cert.sh`), so the designated requirement —
+and with it the Accessibility grant and Keychain access — stays the
+same across rebuilds. Ad-hoc signed builds lose the grant on every
+rebuild ("Failed to match existing code requirement" in tccd's log);
+reset with `tccutil reset Accessibility com.workspacelauncher.app`.
 
-Next: hand-check phase 1 in a packaged build, then phase 2.
+tccd's own log confirmed finding C in the real Electron app: the
+helper's checks are attributed to `com.workspacelauncher.app`.
+
+Next: phase 2.

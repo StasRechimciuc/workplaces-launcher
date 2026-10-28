@@ -11,7 +11,8 @@
     "build:helper": "node scripts/build-helper.mjs",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "package:win": "electron-vite build && electron-builder --win",
-    "package:mac": "node scripts/build-helper.mjs --force && electron-vite build && electron-builder --mac"
+    "package:mac": "node scripts/build-helper.mjs --force && electron-vite build && electron-builder --mac -c.electronVersion=$(node -p \"require('electron/package.json').version\")",
+    "package:mac:dev": "node scripts/build-helper.mjs --force && electron-vite build && electron-builder --mac --dir -c.electronVersion=$(node -p \"require('electron/package.json').version\") -c.mac.identity=\"Workspace Launcher Dev\""
   },
   "dependencies": {
     "@electron-toolkit/utils": "^3.0.0",

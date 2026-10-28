@@ -27,6 +27,7 @@ ask() {
   local answer
   read -r -p "$1 [y/n] " answer </dev/tty
   echo "ANSWER $2: $answer"
+  LAST_ANSWER=$answer
 }
 pause() { read -r -p "$1 (press Enter) " _ </dev/tty; }
 
@@ -289,9 +290,66 @@ if want H || want H_url || want H_profile_only; then
   fi
 fi
 
+# Builds WTHost.app (ad-hoc signed) with the probe inside it twice: as a
+# plain child executable (Contents/Helpers/probe) and as its own helper
+# app (Contents/Helpers/WTHelper.app). Built once and kept — rebuilding
+# changes the signature, which invalidates an Accessibility grant.
+HOST_APP="$DIR/build/WTHost.app"
+HOST_ID=com.workspacelauncher.spike.host
+
+write_plist() {
+  cat >"$1" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleIdentifier</key><string>$2</string>
+  <key>CFBundleName</key><string>$3</string>
+  <key>CFBundleExecutable</key><string>$4</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>LSUIElement</key><true/>
+  <key>NSAppleEventsUsageDescription</key><string>Window-tracking spike test.</string>
+</dict></plist>
+EOF
+}
+
+build_host_app() {
+  [ -d "$HOST_APP" ] && { echo "HOST_APP reusing existing build"; return; }
+  local helper="$HOST_APP/Contents/Helpers/WTHelper.app"
+  mkdir -p "$HOST_APP/Contents/MacOS" "$helper/Contents/MacOS"
+  cp "$PROBE" "$HOST_APP/Contents/MacOS/host"
+  cp "$PROBE" "$HOST_APP/Contents/Helpers/probe"
+  cp "$PROBE" "$helper/Contents/MacOS/helper"
+  write_plist "$HOST_APP/Contents/Info.plist" "$HOST_ID" WTHost host
+  write_plist "$helper/Contents/Info.plist" com.workspacelauncher.spike.helper WTHelper helper
+  codesign --force -s - "$HOST_APP/Contents/Helpers/probe"
+  codesign --force -s - "$helper"
+  codesign --force -s - "$HOST_APP"
+  echo "HOST_APP built at $HOST_APP"
+}
+
+run_host() {
+  rm -f "$WORK/host-$1.txt"
+  open -W -n "$HOST_APP" --args host "$WORK/host-$1.txt"
+  cat "$WORK/host-$1.txt" 2>/dev/null || echo "HOST produced no output"
+}
+
 if want C; then
-  section "C: does a helper launched by the app share its Accessibility grant?"
-  echo "NOT TESTED here — only meaningful in a signed, packaged build. Deferred to the Stage 2 spike."
+  section "C + A-as-app: does a helper share the app's Accessibility grant? does quit stay prompt-free?"
+  build_host_app
+  echo "--- round 1: WTHost NOT granted (baseline, everything should say not trusted) ---"
+  tccutil reset Accessibility "$HOST_ID" >/dev/null 2>&1
+  run_host 1
+  open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+  open -R "$HOST_APP"
+  pause "In Accessibility settings, add WTHost (drag it from the Finder window that opened, or use +) and switch it ON. Do NOT add WTHelper."
+  echo "--- round 2: only WTHost granted ---"
+  start_tcc_log C
+  run_host 2
+  stop_tcc_log C
+  ask "Did any '... wants to control Calculator' dialog appear?" C_terminate_prompt_shown
+  ask "Remove WTHost from Accessibility now (recommended)?" C_cleanup
+  [ "$LAST_ANSWER" = y ] && tccutil reset Accessibility "$HOST_ID" && echo "CLEANUP done"
 fi
 
 rm -rf "$WORK"

@@ -14,6 +14,9 @@
 //                                activate the app, check whether it became reachable, close it
 //   close <bundleId> <windowId>  Press the window's close button via AX, report outcome
 //   terminate <bundleId>         NSRunningApplication.terminate(), report outcome
+//   selfcheck                    Trust flag AND a real AX call (the flag alone can be stale)
+//   host <outFile>               Run as the spike's test .app: self/child/helper-app trust
+//                                checks plus the terminate test, under the app's own identity
 
 import AppKit
 import ApplicationServices
@@ -114,6 +117,66 @@ func hasSheet(_ window: AXUIElement) -> Bool {
   return children.contains { (attr($0, kAXRoleAttribute) as String?) == "AXSheet" }
 }
 
+// A real AX call, not just the trust flag: kAXErrorAPIDisabled (-25211)
+// means this process is not trusted, whatever AXIsProcessTrusted says.
+func selfCheck() -> String {
+  var value: CFTypeRef?
+  let result = AXUIElementCopyAttributeValue(
+    AXUIElementCreateSystemWide(), kAXFocusedApplicationAttribute as CFString, &value)
+  let call = result == .success ? "success" : "error \(result.rawValue)"
+  return "trusted_flag=\(AXIsProcessTrusted()) ax_call=\(call)"
+}
+
+func run(_ executable: String, _ arguments: [String]) -> String {
+  let process = Process()
+  let pipe = Pipe()
+  process.executableURL = URL(fileURLWithPath: executable)
+  process.arguments = arguments
+  process.standardOutput = pipe
+  do { try process.run() } catch { return "launch failed: \(error)" }
+  process.waitUntilExit()
+  let data = pipe.fileHandleForReading.readDataToEndOfFile()
+  return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+// Runs inside WTHost.app, launched by Launch Services, so macOS treats
+// this app (not Terminal) as the responsible process.
+func runHost(outFile: String) {
+  var lines: [String] = []
+  let bundle = Bundle.main.bundleURL
+  let helpers = bundle.appendingPathComponent("Contents/Helpers")
+
+  lines.append("HOST bundle_id=\(Bundle.main.bundleIdentifier ?? "none") \(selfCheck())")
+
+  let child = helpers.appendingPathComponent("probe").path
+  lines.append("CHILD_HELPER \(run(child, ["selfcheck"]))")
+
+  let helperOut = NSTemporaryDirectory() + "wt-helper-\(getpid()).txt"
+  let helperApp = helpers.appendingPathComponent("WTHelper.app").path
+  _ = run("/usr/bin/open", ["-W", "-n", "--stdout", helperOut, helperApp, "--args", "selfcheck"])
+  let helperResult = (try? String(contentsOfFile: helperOut, encoding: .utf8)) ?? "no output"
+  lines.append("HELPER_APP \(helperResult.trimmingCharacters(in: .whitespacesAndNewlines))")
+
+  _ = run("/usr/bin/open", ["-a", "Calculator"])
+  Thread.sleep(forTimeInterval: 2)
+  if let calculator = NSRunningApplication.runningApplications(
+    withBundleIdentifier: "com.apple.calculator"
+  ).first {
+    let pid = calculator.processIdentifier
+    let returned = calculator.terminate()
+    for _ in 0..<50 where processAlive(pid) {
+      Thread.sleep(forTimeInterval: 0.1)
+    }
+    lines.append(
+      "HOST_TERMINATE returned=\(returned) outcome=\(processAlive(pid) ? "still_running" : "quit")")
+  } else {
+    lines.append("HOST_TERMINATE skipped — Calculator did not start")
+  }
+
+  try? lines.joined(separator: "\n").appending("\n").write(
+    toFile: outFile, atomically: true, encoding: .utf8)
+}
+
 // run.sh pipes output through tee; unbuffered so prompts show before readLine blocks.
 setvbuf(stdout, nil, _IONBF, 0)
 
@@ -123,6 +186,13 @@ guard args.count >= 2 else { fail("usage: probe <subcommand> [args]") }
 switch args[1] {
 case "trusted":
   print(AXIsProcessTrusted() ? "TRUSTED yes" : "TRUSTED no")
+
+case "selfcheck":
+  print(selfCheck())
+
+case "host":
+  guard args.count == 3 else { fail("usage: host <outFile>") }
+  runHost(outFile: args[2])
 
 case "windows":
   guard args.count == 3 else { fail("usage: windows <bundleId>") }

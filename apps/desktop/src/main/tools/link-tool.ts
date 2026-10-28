@@ -1,10 +1,16 @@
 import { stat } from 'node:fs/promises';
 import { z } from 'zod';
-import type { StepResult, StepDisplayRow, ToolPlugin, ValidationResult } from '@workspace-launcher/shared';
+import type {
+  StepResult,
+  StepDisplayRow,
+  ToolPlugin,
+  ValidationResult,
+} from '@workspace-launcher/shared';
 import { appDisplayName, ERROR_CODES, zodValidate } from '@workspace-launcher/shared';
 import { getPlatformLauncher } from '../platform';
 import type { PlatformResult } from '../platform/types';
 import { expandHome, isAcceptableToolPath } from '../lib/paths';
+import { appResourceFor } from '../resources/kinds/app-kind';
 
 const ALLOWED_URL_PROTOCOLS = new Set(['http:', 'https:']);
 
@@ -149,6 +155,12 @@ export const linkTool: ToolPlugin<LinkStepParams> = {
   async teardown(): Promise<StepResult> {
     // Tier 2 (docs/build-shell.md) — no-op for now.
     return { success: true, message: 'No teardown for File or Link steps yet.', durationMs: 0 };
+  },
+
+  // Only with a chosen app: the system default handler for a file or
+  // URL isn't known up front, so a link without one isn't tracked.
+  async resources(params) {
+    return params.appPath ? appResourceFor(params.appPath, appDisplayName(params.appPath)) : [];
   },
 
   detail(params: Record<string, unknown>): string {

@@ -8,6 +8,7 @@ import type {
 import { CLOCKIFY_APP_NAME, ERROR_CODES, zodValidate } from '@workspace-launcher/shared';
 import { getPlatformLauncher } from '../platform';
 import { resolveAppLaunchTarget } from './resolve-app-path';
+import { appResourceFor } from '../resources/kinds/app-kind';
 
 // Clockify has no confirmed URI scheme and no target to launch into —
 // this step just opens the desktop app, same as Spotify's own
@@ -54,6 +55,13 @@ export const clockifyTool: ToolPlugin<ClockifyStepParams> = {
   async teardown(): Promise<StepResult> {
     // Tier 2 (docs/build-shell.md) — no-op for now.
     return { success: true, message: 'No teardown for Clockify steps yet.', durationMs: 0 };
+  },
+
+  // The same app run() resolves — tracked as an app resource, so Close
+  // quits Clockify only if this app opened it and nothing else uses it.
+  async resources(params) {
+    const resolved = await resolveAppLaunchTarget('clockify', CLOCKIFY_APP_NAME, params.appPath);
+    return resolved.ok ? appResourceFor(resolved.target, 'Clockify') : [];
   },
 
   // Nothing to read from params — there's exactly one thing this step

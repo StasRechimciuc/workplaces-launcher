@@ -8,6 +8,7 @@ import type {
 import { ERROR_CODES, SPOTIFY_APP_NAME, zodValidate } from '@workspace-launcher/shared';
 import { getPlatformLauncher } from '../platform';
 import { resolveAppLaunchTarget } from './resolve-app-path';
+import { appResourceFor } from '../resources/kinds/app-kind';
 
 // A `spotify:` URI (e.g. "spotify:playlist:37i9dQZF1DWZeKCadgRdKQ") or an
 // "https://open.spotify.com/..." link — the two link shapes Spotify's
@@ -91,6 +92,13 @@ export const spotifyTool: ToolPlugin<SpotifyStepParams> = {
     return { success: true, message: 'No teardown for Spotify steps yet.', durationMs: 0 };
   },
 
+  // The same app run() resolves — tracked as an app resource, so Close
+  // quits Spotify only if this app opened it and nothing else uses it.
+  async resources(params) {
+    const resolved = await resolveAppLaunchTarget('spotify', SPOTIFY_APP_NAME, params.appPath);
+    return resolved.ok ? appResourceFor(resolved.target, 'Spotify') : [];
+  },
+
   // Raw-params contract (ToolPlugin.detail/expand's own doc comment) —
   // relocated verbatim from config/workspace-display.ts's old
   // detailForStep/expandForStep 'spotify' branches, not new logic.
@@ -121,6 +129,8 @@ export const spotifyTool: ToolPlugin<SpotifyStepParams> = {
       typeof params['playlistName'] === 'string' && params['playlistName'].length > 0
         ? params['playlistName']
         : undefined;
-    return playlist ? [{ i: 'music', label: 'Playlist', mono: playlistName ?? playlist }] : undefined;
+    return playlist
+      ? [{ i: 'music', label: 'Playlist', mono: playlistName ?? playlist }]
+      : undefined;
   },
 };

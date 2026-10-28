@@ -59,7 +59,15 @@ export interface HelperMethods {
     params: { pid: number; windowId: number };
     result: { activated: true; via: 'activate' | 'launch-services' } | { activated: false };
   };
-  isRunning: { params: { bundleId: string }; result: { running: boolean; pids: number[] } };
+  isRunning: {
+    params: { bundleId: string };
+    result: {
+      running: boolean;
+      pids: number[];
+      /** Kernel process start time (ms since epoch) per instance; null if unreadable. */
+      apps: { pid: number; startedAt: number | null }[];
+    };
+  };
   quitApp: {
     params: { pid: number; waitMs?: number };
     result: { outcome: 'quit' | 'not-running' | 'still-running' };

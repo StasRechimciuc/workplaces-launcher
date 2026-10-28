@@ -171,10 +171,34 @@ export interface RunContext {
  * tool type means adding a new module implementing this interface, not
  * editing a growing if/else or switch statement in the orchestrator.
  */
+/**
+ * One thing a step opens that per-resource tracking follows (see
+ * WCs/WC__window-tracking.md, "The model"): which resource kind
+ * handles it, and the identity that makes two of them "the same" — a
+ * step whose spec matches a live resource reuses it rather than
+ * opening a second copy.
+ */
+export interface ResourceSpec {
+  /** A registered resource kind ('app', …) — main/resources/kind-registry.ts. */
+  kind: string;
+  /** Kind-specific identity fields, e.g. `{ bundleId }`; serialized into the ledger's identity key. */
+  identity: Record<string, string | number | boolean>;
+  /** Shown in Close/Switch results, e.g. "Spotify". */
+  label: string;
+}
+
 export interface ToolPlugin<TParams = unknown> {
   readonly type: string;
   validate(params: unknown): ValidationResult<TParams>;
   run(params: TParams, ctx: RunContext): Promise<StepResult>;
+  /**
+   * The resources this step opens, for per-resource tracking. Optional:
+   * a step type without it isn't tracked and keeps the app-level
+   * Close/Switch behavior. Never throws — a spec that can't be worked
+   * out (e.g. an app whose bundle can't be read) is left out and the
+   * reason logged, so the step still runs, just untracked.
+   */
+  resources?(params: TParams): Promise<ResourceSpec[]>;
   /** Reserved for Tier 2 (docs/build-shell.md) — a no-op today. */
   teardown(params: TParams): Promise<StepResult>;
   /**

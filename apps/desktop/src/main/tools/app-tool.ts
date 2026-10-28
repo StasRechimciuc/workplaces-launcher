@@ -7,6 +7,7 @@ import type {
 } from '@workspace-launcher/shared';
 import { appDisplayName, ERROR_CODES, zodValidate } from '@workspace-launcher/shared';
 import { getPlatformLauncher } from '../platform';
+import { appResourceFor } from '../resources/kinds/app-kind';
 
 // A full `.app` bundle path, picked via the native file dialog
 // (dialog:selectApp) rather than typed — same "no manual typing"
@@ -54,6 +55,10 @@ export const appTool: ToolPlugin<AppStepParams> = {
   async teardown(): Promise<StepResult> {
     // Tier 2 (docs/build-shell.md) — no-op for now.
     return { success: true, message: 'No teardown for App steps yet.', durationMs: 0 };
+  },
+
+  async resources(params) {
+    return appResourceFor(params.path, appDisplayName(params.path));
   },
 
   detail(params: Record<string, unknown>): string {

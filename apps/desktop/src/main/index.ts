@@ -8,6 +8,7 @@ import { registerShowMainWindow, syncHotkeys } from './orchestrator/hotkey-servi
 import { settingsStore } from './settings/store';
 import { buildAppMenu } from './menu';
 import { registerBuiltInTools } from './tools';
+import { disposeWlHelper } from './platform/macos/wl-helper';
 
 // Must stay in sync with electron-builder.yml's productName — see
 // vscode-restore.ts's own doc comment on PRODUCT_NAME for why this
@@ -211,55 +212,58 @@ if (gotSingleInstanceLock) {
     ]);
   }
 
-  void app.whenReady().then(() => {
-    electronApp.setAppUserModelId('com.workspacelauncher.app');
-    Menu.setApplicationMenu(buildAppMenu());
+  void app
+    .whenReady()
+    .then(() => {
+      electronApp.setAppUserModelId('com.workspacelauncher.app');
+      Menu.setApplicationMenu(buildAppMenu());
 
-    app.on('browser-window-created', (_event, window) => {
-      optimizer.watchWindowShortcuts(window);
+      app.on('browser-window-created', (_event, window) => {
+        optimizer.watchWindowShortcuts(window);
+      });
+
+      registerBuiltInTools();
+      registerIpcHandlers();
+      createMainWindow();
+
+      tray = new Tray(getTrayIconPath());
+      tray.setToolTip(PRODUCT_NAME);
+      tray.setContextMenu(buildTrayMenu());
+      // Context-menu-on-left-click is already macOS's own default once
+      // setContextMenu is called (this platform's actual scope right
+      // now) — this handler only matters for a future Windows/Linux
+      // build, where left-click doesn't auto-show the context menu.
+      if (process.platform !== 'darwin') {
+        tray.on('click', () => showOrCreateMainWindow());
+      }
+
+      // Lets hotkey-service.ts show/focus/create the main window when the
+      // "Save current workspace" hotkey fires with no window open —
+      // registered before syncHotkeys() below so it's available the
+      // moment that hotkey could first fire.
+      registerShowMainWindow(showOrCreateMainWindow);
+
+      // Registers every stored workspace hotkey as a live global
+      // shortcut — see hotkey-service.ts. Deliberately not awaited: a
+      // registration failure is reported per-workspace via the Settings
+      // UI's "needs to be re-picked" indicator, never a startup-blocking
+      // error, and syncHotkeys() itself never throws (each registration
+      // attempt is individually try/caught).
+      syncHotkeys();
+
+      app.on('activate', () => {
+        showOrCreateMainWindow();
+      });
+    })
+    .catch((err: unknown) => {
+      // Mirrors createMainWindow()'s own loadPromise.catch below — an
+      // uncaught rejection here (e.g. a future addition to this chain
+      // that can throw) would otherwise be a silent, unreported failure
+      // with no window and no indication why.
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`Failed to start Workspace Launcher: ${message}`);
+      dialog.showErrorBox('Workspace Launcher failed to start', message);
     });
-
-    registerBuiltInTools();
-    registerIpcHandlers();
-    createMainWindow();
-
-    tray = new Tray(getTrayIconPath());
-    tray.setToolTip(PRODUCT_NAME);
-    tray.setContextMenu(buildTrayMenu());
-    // Context-menu-on-left-click is already macOS's own default once
-    // setContextMenu is called (this platform's actual scope right
-    // now) — this handler only matters for a future Windows/Linux
-    // build, where left-click doesn't auto-show the context menu.
-    if (process.platform !== 'darwin') {
-      tray.on('click', () => showOrCreateMainWindow());
-    }
-
-    // Lets hotkey-service.ts show/focus/create the main window when the
-    // "Save current workspace" hotkey fires with no window open —
-    // registered before syncHotkeys() below so it's available the
-    // moment that hotkey could first fire.
-    registerShowMainWindow(showOrCreateMainWindow);
-
-    // Registers every stored workspace hotkey as a live global
-    // shortcut — see hotkey-service.ts. Deliberately not awaited: a
-    // registration failure is reported per-workspace via the Settings
-    // UI's "needs to be re-picked" indicator, never a startup-blocking
-    // error, and syncHotkeys() itself never throws (each registration
-    // attempt is individually try/caught).
-    syncHotkeys();
-
-    app.on('activate', () => {
-      showOrCreateMainWindow();
-    });
-  }).catch((err: unknown) => {
-    // Mirrors createMainWindow()'s own loadPromise.catch below — an
-    // uncaught rejection here (e.g. a future addition to this chain
-    // that can throw) would otherwise be a silent, unreported failure
-    // with no window and no indication why.
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`Failed to start Workspace Launcher: ${message}`);
-    dialog.showErrorBox('Workspace Launcher failed to start', message);
-  });
 
   app.on('window-all-closed', () => {
     // Windows are destroyed, not hidden, on close (createMainWindow has
@@ -304,6 +308,13 @@ if (gotSingleInstanceLock) {
   // this during this feature's own build. Production packaging never
   // sends this kind of external restart signal, so this gate only
   // matters for `npm run dev`.
+  // Only on a real exit (will-quit doesn't fire when before-quit backs
+  // the app off into the tray): the helper exits on its own once its
+  // stdin closes, so it never outlives the app.
+  app.on('will-quit', () => {
+    disposeWlHelper();
+  });
+
   if (!is.dev) {
     app.on('before-quit', (event) => {
       if (isQuittingFromTray) return; // let the real quit proceed

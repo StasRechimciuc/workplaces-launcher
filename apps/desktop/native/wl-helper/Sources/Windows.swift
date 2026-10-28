@@ -260,6 +260,15 @@ func runningApps(_ bundleId: String) -> [NSRunningApplication] {
     .filter { processAlive($0.processIdentifier) }
 }
 
+/// When the process started, in milliseconds since the epoch — with
+/// the pid, what identifies one process instance across pid reuse.
+func processStartTime(_ pid: pid_t) -> Int64? {
+  var info = proc_bsdinfo()
+  let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+  guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+  return Int64(info.pbi_start_tvsec) * 1000 + Int64(info.pbi_start_tvusec) / 1000
+}
+
 /// The kernel's answer, not NSRunningApplication.isTerminated — that
 /// only refreshes via the run loop, which doesn't spin mid-request.
 func processAlive(_ pid: pid_t) -> Bool {

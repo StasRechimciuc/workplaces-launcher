@@ -271,6 +271,30 @@ export const ERROR_CODES = {
     explanation:
       "This shortcut (or its Shift variant, used for Switch) is already claimed by another app or by macOS itself. There's no way for Workspace Launcher to know which one — try a different key combination.",
   },
+  ACCESSIBILITY_NOT_GRANTED: {
+    code: 'ER-PERM-01',
+    title: 'Accessibility access is off',
+    headline: "Workspace Launcher doesn't have Accessibility access yet.",
+    fixSteps: [
+      'Open System Settings → Privacy & Security → Accessibility',
+      'Turn on Workspace Launcher (if it isn’t listed, add it with the + button)',
+    ],
+    explanation:
+      "Workspace Launcher uses macOS Accessibility to find, focus and close exactly the windows each workspace opened — and nothing else. Without it, the app runs in a reduced mode: restoring still works, but closing and switching workspaces work per app, not per window. It's one switch that covers every app; Workspace Launcher never asks for per-app Automation access.",
+  },
+  WINDOW_HELPER_UNAVAILABLE: {
+    code: 'ER-SYS-03',
+    title: 'Window helper unavailable',
+    // Not a permission problem — granting Accessibility wouldn't help,
+    // so this is kept apart from ACCESSIBILITY_NOT_GRANTED rather than
+    // folded into it. A packaged build can't ship without the helper
+    // (package:mac fails), so in practice this means a damaged install
+    // or a dev build where `npm run build:helper` hasn't been run.
+    headline: "Workspace Launcher's window helper couldn't start.",
+    fixSteps: ['Reinstall Workspace Launcher'],
+    explanation:
+      "Workspace Launcher includes a small native helper (wl-helper) for working with windows. It's missing or failed to run, so the app is in a reduced mode: restoring still works, but closing and switching workspaces work per app, not per window. The technical detail shows what went wrong.",
+  },
   LAUNCH_ON_LOGIN_FAILED: {
     code: 'ER-SYS-02',
     title: "Couldn't update launch-at-login",

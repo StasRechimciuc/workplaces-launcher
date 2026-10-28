@@ -10,12 +10,19 @@ export interface AppSettings {
    * already been shown — see main/index.ts's window-all-closed
    * handler. Shown at most once, ever, not once per launch. */
   hasShownBackgroundNotice: boolean;
+  /** Whether the first-launch Accessibility explanation has been
+   * completed or skipped ("Continue without") — see
+   * AccessibilityStatus in @workspace-launcher/shared. Never reset: a
+   * later revoke is handled by the banner and Settings row, not by
+   * forcing the modal again. */
+  hasCompletedAccessibilityOnboarding: boolean;
 }
 
 const defaults: AppSettings = {
   defaultTerminalApp: 'Terminal',
   launchOnLogin: false,
   hasShownBackgroundNotice: false,
+  hasCompletedAccessibilityOnboarding: false,
 };
 
 /**

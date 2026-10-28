@@ -14,6 +14,14 @@ files:
 extraResources:
   - from: resources/tray
     to: tray
+# The native window helper (native/wl-helper, built by `npm run
+# build:helper`) ships in Contents/Helpers — the layout the window-
+# tracking spike verified inherits the app's Accessibility grant
+# (WCs/WC__window-tracking.md, finding C). `extraFiles` is relative to
+# Contents/ on macOS; main/platform/macos/wl-helper-path.ts resolves it
+# from there. electron-builder only warns on a missing source, so
+# afterPack (scripts/verify-helper.cjs) fails the build instead.
+afterPack: scripts/verify-helper.cjs
 win:
   target:
     - nsis
@@ -29,6 +37,9 @@ mac:
     - dmg
     - zip
   category: public.app-category.developer-tools
+  extraFiles:
+    - from: native/build/wl-helper
+      to: Helpers/wl-helper
   hardenedRuntime: true
   gatekeeperAssess: false
   # entitlements/notarization (Apple Developer account + signing

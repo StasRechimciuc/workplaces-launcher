@@ -36,6 +36,14 @@ export default tseslint.config(
     },
   },
   {
+    // CommonJS is require() by definition — electron-builder's hooks
+    // (apps/desktop/scripts/verify-helper.cjs) load as CommonJS.
+    files: ['**/*.cjs'],
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off',
+    },
+  },
+  {
     // Plain browser scripts referenced directly from renderer/index.html
     // (not bundled/imported by any TS module) — theme-bootstrap.js is
     // the one example: it has to run before React/Vite's module graph

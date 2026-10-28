@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ERROR_CODES, RESTORE_PROGRESS_CHANNEL } from '@workspace-launcher/shared';
-import { app, dialog, ipcMain } from 'electron';
+import { app, dialog, ipcMain, shell } from 'electron';
 import {
   clearAppHotkey,
   clearWorkspaceHotkey,
@@ -12,10 +12,12 @@ import {
   deleteWorkspace,
   detectCurrentWorkspace,
   detectProjectFiles,
+  getAccessibilityStatus,
   getAppHotkey,
   getLaunchOnLogin,
   listWorkspaces,
   markWorkspaceActive,
+  openAccessibilitySettings,
   registerIpcHandlers,
   restoreWorkspace,
   retryWorkspaceStep,
@@ -31,6 +33,7 @@ import * as hotkeyService from '../orchestrator/hotkey-service';
 import * as hotkeysStore from '../orchestrator/workspace-hotkeys-store';
 import * as appHotkeysStore from '../orchestrator/app-hotkeys-store';
 import { settingsStore } from '../settings/store';
+import { checkAccessibilityTrust } from '../platform/macos/accessibility-permission';
 import { registerBuiltInTools } from '../tools';
 import { getPlatformLauncher } from '../platform';
 import * as spotifyAuth from '../spotify/auth';
@@ -214,6 +217,17 @@ vi.mock('electron', () => ({
   dialog: {
     showOpenDialog: vi.fn(),
   },
+  shell: {
+    openExternal: vi.fn(),
+  },
+}));
+
+vi.mock('../platform/macos/accessibility-permission', () => ({
+  checkAccessibilityTrust: vi.fn(),
+}));
+
+vi.mock('../platform/macos/wl-helper-path', () => ({
+  getWlHelperPath: () => '/test/wl-helper',
 }));
 
 // `app.isPackaged` is typed readonly in Electron's real .d.ts (which
@@ -1599,5 +1613,65 @@ describe('detectProjectFiles', () => {
     // as a literal, nonexistent path segment.
     const result = await detectProjectFiles('~');
     expect(result.success).toBe(true);
+  });
+});
+
+// Runs on the macOS CI/dev machine this suite targets — the darwin gate
+// in handlers.ts (SUPPORTS_ACCESSIBILITY) is what's exercised here.
+describe.runIf(process.platform === 'darwin')('getAccessibilityStatus', () => {
+  beforeEach(() => {
+    vi.mocked(checkAccessibilityTrust).mockReset();
+  });
+
+  it('reports granted, checked through the helper, and completes onboarding', async () => {
+    vi.mocked(checkAccessibilityTrust).mockResolvedValue({ ok: true, trusted: true });
+    await expect(getAccessibilityStatus()).resolves.toEqual({ state: 'granted' });
+    expect(checkAccessibilityTrust).toHaveBeenCalledWith('/test/wl-helper');
+    expect(settingsStore.set).toHaveBeenCalledWith('hasCompletedAccessibilityOnboarding', true);
+  });
+
+  it('reports not-granted with ER-PERM-01 and whether onboarding was already done', async () => {
+    vi.mocked(checkAccessibilityTrust).mockResolvedValue({ ok: true, trusted: false });
+    vi.mocked(settingsStore.get).mockReturnValue(false);
+    await expect(getAccessibilityStatus()).resolves.toEqual({
+      state: 'not-granted',
+      onboardingCompleted: false,
+      code: ERROR_CODES.ACCESSIBILITY_NOT_GRANTED.code,
+    });
+    expect(settingsStore.get).toHaveBeenCalledWith('hasCompletedAccessibilityOnboarding');
+    expect(settingsStore.set).not.toHaveBeenCalled();
+  });
+
+  it('reports a broken helper as helper-unavailable, never as a permission problem', async () => {
+    vi.mocked(checkAccessibilityTrust).mockResolvedValue({ ok: false, error: 'missing' });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(getAccessibilityStatus()).resolves.toEqual({
+      state: 'helper-unavailable',
+      error: 'missing',
+      code: ERROR_CODES.WINDOW_HELPER_UNAVAILABLE.code,
+    });
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+});
+
+describe.runIf(process.platform === 'darwin')('openAccessibilitySettings', () => {
+  beforeEach(() => {
+    vi.mocked(shell.openExternal).mockReset();
+  });
+
+  it('opens System Settings at Privacy & Security → Accessibility', async () => {
+    vi.mocked(shell.openExternal).mockResolvedValue();
+    await expect(openAccessibilitySettings()).resolves.toEqual({ success: true });
+    expect(shell.openExternal).toHaveBeenCalledWith(
+      'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility',
+    );
+  });
+
+  it('reports a failure to open it instead of throwing', async () => {
+    vi.mocked(shell.openExternal).mockRejectedValue(new Error('no handler'));
+    const result = await openAccessibilitySettings();
+    expect(result.success).toBe(false);
+    expect(!result.success && result.error).toContain('no handler');
   });
 });

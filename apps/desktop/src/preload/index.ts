@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type {
+  AccessibilityStatus,
   ChromeListProfilesResult,
   CloseResult,
   CreateWorkspaceInput,
@@ -9,6 +10,7 @@ import type {
   DetectProjectFilesResult,
   DetectWorkspaceDraftResult,
   GetLaunchOnLoginResult,
+  OpenAccessibilitySettingsResult,
   SetHotkeyBindingResult,
   SetLaunchOnLoginResult,
   SpotifyConnectResult,
@@ -219,6 +221,18 @@ const api = {
     ipcRenderer.invoke('settings:getLaunchOnLogin'),
   setLaunchOnLogin: (value: boolean): Promise<SetLaunchOnLoginResult> =>
     ipcRenderer.invoke('settings:setLaunchOnLogin', value),
+  // A fresh `wl-helper trust` on every call — never cached, see
+  // AccessibilityStatus in @workspace-launcher/shared. The onboarding
+  // modal polls this once a second while it's open.
+  getAccessibilityStatus: (): Promise<AccessibilityStatus> =>
+    ipcRenderer.invoke('accessibility:getStatus'),
+  // System Settings at Privacy & Security → Accessibility.
+  openAccessibilitySettings: (): Promise<OpenAccessibilitySettingsResult> =>
+    ipcRenderer.invoke('accessibility:openSettings'),
+  // "Continue without" on the first-launch modal — it's never forced
+  // again; the banner and Settings row offer the same flow from then on.
+  completeAccessibilityOnboarding: (): Promise<void> =>
+    ipcRenderer.invoke('accessibility:completeOnboarding'),
   // The single, app-wide "Save current workspace" accelerator — no
   // workspace id (there's only ever one), no Shift-derived variant
   // (no Restore/Switch duality for this action) — see

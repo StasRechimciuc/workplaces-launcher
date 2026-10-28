@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { access } from 'node:fs/promises';
 import { join } from 'node:path';
-import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import type {
+  AccessibilityStatus,
   ChromeListProfilesResult,
   CloseResult,
   CreateWorkspaceResult,
@@ -11,6 +12,7 @@ import type {
   DetectProjectFilesResult,
   DetectWorkspaceDraftResult,
   GetLaunchOnLoginResult,
+  OpenAccessibilitySettingsResult,
   RestoreProgressEvent,
   SetHotkeyBindingResult,
   SetLaunchOnLoginResult,
@@ -72,6 +74,8 @@ import { listPlaylists as listSpotifyPlaylists } from '../spotify/playlists';
 import { listChromeProfiles } from '../platform/chrome-profiles';
 import { getAppIconDataUrl } from '../platform/app-icon';
 import { rescanAndCache } from '../platform/app-detection-cache';
+import { checkAccessibilityTrust } from '../platform/macos/accessibility-permission';
+import { getWlHelperPath } from '../platform/macos/wl-helper-path';
 import type { WorkspaceDisplay } from '../../preload';
 
 // Real app-install detection shells out to macOS-only tools (plutil,
@@ -789,6 +793,69 @@ export async function detectProjectFiles(directory: string): Promise<DetectProje
  * This is the single place that decides what the renderer can ask the
  * main process to do — keep it a short, explicit list.
  */
+// Per-window tracking needs macOS Accessibility (see
+// WCs/WC__window-tracking.md) — same feature-level platform gate as
+// SUPPORTS_WORKSPACE_ACTIVITY above: elsewhere the status is
+// 'unsupported' and the renderer shows nothing.
+const SUPPORTS_ACCESSIBILITY = process.platform === 'darwin';
+
+// Opens System Settings straight at Privacy & Security → Accessibility.
+// The documented deep link for every macOS this app supports (11+);
+// the newer System Settings app still honors it.
+const ACCESSIBILITY_SETTINGS_URL =
+  'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility';
+
+/**
+ * A fresh trust check on every call (see accessibility-permission.ts
+ * for why never a cached answer) — the onboarding modal polls this
+ * once a second while it's open. Seeing the grant also completes
+ * onboarding, so a user who granted access straight from System
+ * Settings is never shown the first-launch explanation afterwards.
+ */
+export async function getAccessibilityStatus(): Promise<AccessibilityStatus> {
+  if (!SUPPORTS_ACCESSIBILITY) {
+    return { state: 'unsupported' };
+  }
+  const check = await checkAccessibilityTrust(getWlHelperPath());
+  if (!check.ok) {
+    console.error(`Accessibility check failed: ${check.error}`);
+    return {
+      state: 'helper-unavailable',
+      error: check.error,
+      code: ERROR_CODES.WINDOW_HELPER_UNAVAILABLE.code,
+    };
+  }
+  if (check.trusted) {
+    settingsStore.set('hasCompletedAccessibilityOnboarding', true);
+    return { state: 'granted' };
+  }
+  return {
+    state: 'not-granted',
+    onboardingCompleted: settingsStore.get('hasCompletedAccessibilityOnboarding'),
+    code: ERROR_CODES.ACCESSIBILITY_NOT_GRANTED.code,
+  };
+}
+
+export async function openAccessibilitySettings(): Promise<OpenAccessibilitySettingsResult> {
+  if (!SUPPORTS_ACCESSIBILITY) {
+    return {
+      success: false,
+      error: 'Accessibility settings only exist on macOS.',
+      code: ERROR_CODES.SYSTEM_UNEXPECTED.code,
+    };
+  }
+  try {
+    await shell.openExternal(ACCESSIBILITY_SETTINGS_URL);
+    return { success: true };
+  } catch (err) {
+    return {
+      success: false,
+      error: `Couldn't open System Settings: ${err instanceof Error ? err.message : String(err)}`,
+      code: ERROR_CODES.SYSTEM_UNEXPECTED.code,
+    };
+  }
+}
+
 export function registerIpcHandlers(): void {
   ipcMain.handle('workspaces:list', async () => {
     return listWorkspaces();
@@ -1015,5 +1082,17 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('settings:setLaunchOnLogin', async (_event, value: unknown) => {
     return setLaunchOnLogin(value);
+  });
+
+  ipcMain.handle('accessibility:getStatus', async () => {
+    return getAccessibilityStatus();
+  });
+
+  ipcMain.handle('accessibility:openSettings', async () => {
+    return openAccessibilitySettings();
+  });
+
+  ipcMain.handle('accessibility:completeOnboarding', async () => {
+    settingsStore.set('hasCompletedAccessibilityOnboarding', true);
   });
 }

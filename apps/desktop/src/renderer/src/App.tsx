@@ -9,9 +9,12 @@ import { SaveCurrentWorkspaceModal } from './components/SaveCurrentWorkspaceModa
 import { DeleteWorkspaceConfirm } from './components/DeleteWorkspaceConfirm';
 import { SettingsModal } from './components/SettingsModal';
 import { ErrorsModal } from './components/ErrorsModal';
+import { ErrorCode } from './components/ErrorCode';
+import { AccessibilityOnboardingModal } from './components/AccessibilityOnboardingModal';
 import { resolveActiveWorkspaceId } from './lib/workspace-selection';
 import { SHORTCUTS, formatCombo, getEffectiveShortcuts, getStoredOverrides } from './lib/shortcuts';
 import { useGlobalShortcuts } from './lib/useGlobalShortcuts';
+import { useAccessibilityStatus } from './lib/useAccessibilityStatus';
 import {
   DEFAULT_RESTORE_STATE,
   getWorkspaceRestoreOutcome,
@@ -47,6 +50,13 @@ export function App(): JSX.Element {
   // Detail/TimelineStep/WorkspaceFormModal) — never from Settings or the
   // Sidebar, per the founder's explicit "hidden from settings" design.
   const [errorsModalCode, setErrorsModalCode] = useState<string | null>(null);
+  const { status: accessibilityStatus, refresh: refreshAccessibilityStatus } =
+    useAccessibilityStatus();
+  const [isAccessibilityModalOpen, setAccessibilityModalOpen] = useState(false);
+  // The first-launch auto-open fires at most once per session: a plain
+  // dismiss (Escape/overlay/X) doesn't complete onboarding, so without
+  // this every later focus-driven status refresh would pop it again.
+  const hasAutoOpenedAccessibilityRef = useRef(false);
   const [searchQuery, setSearchQuery] = useState('');
   const searchInputRef = useRef<HTMLInputElement>(null);
   // The pill shown next to the search box — reflects the EFFECTIVE
@@ -176,6 +186,21 @@ export function App(): JSX.Element {
     return () => window.removeEventListener('focus', handleFocus);
   }, [refreshWorkspaces]);
 
+  // First launch (or every launch until the user explicitly completes
+  // or skips it) — see AccessibilityOnboardingModal.tsx. Never for
+  // 'helper-unavailable': granting access wouldn't help there, so the
+  // banner below shows the real error instead.
+  useEffect(() => {
+    if (
+      accessibilityStatus?.state === 'not-granted' &&
+      !accessibilityStatus.onboardingCompleted &&
+      !hasAutoOpenedAccessibilityRef.current
+    ) {
+      hasAutoOpenedAccessibilityRef.current = true;
+      setAccessibilityModalOpen(true);
+    }
+  }, [accessibilityStatus]);
+
   const activeWorkspace = workspaces.find((ws) => ws.id === activeId);
 
   const filteredWorkspaces = useMemo(
@@ -248,6 +273,51 @@ export function App(): JSX.Element {
         <div className="m-4 flex shrink-0 items-center gap-2 rounded-sm border border-border bg-bg-elevated px-2.5 py-2 text-[12.5px] text-text-muted">
           <Icon name="x" size={13} className="text-danger" />
           <span>Failed to load workspaces: {loadError}</span>
+        </div>
+      )}
+
+      {/* Reduced mode (see WCs/WC__window-tracking.md, "Permissions") —
+          deliberately not dismissable: it's the only always-visible
+          sign that Close/Switch are working per app, not per window.
+          Shown only once onboarding was completed or skipped, never on
+          top of the first-launch modal itself. */}
+      {accessibilityStatus?.state === 'not-granted' && accessibilityStatus.onboardingCompleted && (
+        <div className="mx-4 mt-3 flex shrink-0 items-center gap-2 rounded-sm border border-border bg-bg-elevated px-2.5 py-1.5 text-[12px] text-text-muted">
+          <Icon name="info" size={13} className="shrink-0 text-text-faint" />
+          {/* ER-PERM-01 has a headline, so ErrorCode shows that (not
+              `message`) — the "Reduced mode" lead-in is what says what
+              it means for the app right now. */}
+          <span className="shrink-0 font-medium text-text">Reduced mode:</span>
+          <span className="min-w-0 flex-1">
+            <ErrorCode
+              message="Accessibility access is off, so Close and Switch act on whole apps instead of individual windows."
+              code={accessibilityStatus.code}
+              onLearnMore={setErrorsModalCode}
+              hideTechnicalDetail
+            />
+          </span>
+          <button
+            type="button"
+            className="h-6.5 shrink-0 rounded-md border border-border-strong px-2.5 text-[11.5px] font-medium text-text-muted hover:bg-bg-hover hover:text-text"
+            onClick={() => {
+              setAccessibilityModalOpen(true);
+            }}
+          >
+            Set up
+          </button>
+        </div>
+      )}
+
+      {accessibilityStatus?.state === 'helper-unavailable' && (
+        <div className="mx-4 mt-3 flex shrink-0 items-center gap-2 rounded-sm border border-border bg-bg-elevated px-2.5 py-1.5 text-[12px] text-text-muted">
+          <Icon name="x" size={13} className="shrink-0 text-danger" />
+          <span className="min-w-0 flex-1">
+            <ErrorCode
+              message={accessibilityStatus.error}
+              code={accessibilityStatus.code}
+              onLearnMore={setErrorsModalCode}
+            />
+          </span>
         </div>
       )}
 
@@ -352,6 +422,18 @@ export function App(): JSX.Element {
           // Settings is the only place a shortcut can be rebound — pick
           // up anything that changed while it was open.
           setSearchCombo(currentSearchCombo());
+        }}
+        accessibilityStatus={accessibilityStatus}
+        onOpenAccessibilityOnboarding={() => {
+          setAccessibilityModalOpen(true);
+        }}
+      />
+
+      <AccessibilityOnboardingModal
+        open={isAccessibilityModalOpen}
+        onClose={() => {
+          setAccessibilityModalOpen(false);
+          void refreshAccessibilityStatus();
         }}
       />
 

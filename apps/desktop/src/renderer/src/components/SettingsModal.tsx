@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { AccessibilityStatus } from '@workspace-launcher/shared';
 import { Icon } from '../icons';
 import { getStoredTheme, setStoredTheme, type Theme } from '../lib/theme';
 import {
@@ -20,6 +21,12 @@ import { Dialog, DialogClose, DialogContent, DialogHeader, DialogTitle } from '.
 interface SettingsModalProps {
   open: boolean;
   onClose: () => void;
+  /** Owned by App.tsx (useAccessibilityStatus) — the same status the
+   * reduced-mode banner reads, so the two can never disagree. */
+  accessibilityStatus: AccessibilityStatus | null;
+  /** Opens App.tsx's AccessibilityOnboardingModal — the same flow the
+   * banner's "Set up" starts, not a second copy of it. */
+  onOpenAccessibilityOnboarding: () => void;
 }
 
 /**
@@ -30,7 +37,12 @@ interface SettingsModalProps {
  * control later") and Primary color are simple single-row preferences;
  * Shortcuts is the one titled sub-section, with its own `border-t`.
  */
-export function SettingsModal({ open, onClose }: SettingsModalProps): JSX.Element {
+export function SettingsModal({
+  open,
+  onClose,
+  accessibilityStatus,
+  onOpenAccessibilityOnboarding,
+}: SettingsModalProps): JSX.Element {
   const [theme, setTheme] = useState<Theme>(() => getStoredTheme());
   const [accentColor, setAccentColor] = useState<string>(
     () => getStoredAccentColor() ?? DEFAULT_ACCENT_COLOR,
@@ -218,6 +230,40 @@ export function SettingsModal({ open, onClose }: SettingsModalProps): JSX.Elemen
               />
             </button>
           </div>
+
+          {/* macOS only — hidden while unknown (null) or 'unsupported'.
+              See WCs/WC__window-tracking.md, "Permissions". */}
+          {accessibilityStatus && accessibilityStatus.state !== 'unsupported' && (
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex min-w-0 flex-col">
+                <span className="text-[12.5px] text-text">Accessibility</span>
+                <span
+                  className={`text-[11px] ${
+                    accessibilityStatus.state === 'granted'
+                      ? 'text-text-faint'
+                      : accessibilityStatus.state === 'helper-unavailable'
+                        ? 'text-danger'
+                        : 'text-text-muted'
+                  }`}
+                >
+                  {accessibilityStatus.state === 'granted'
+                    ? 'Granted.'
+                    : accessibilityStatus.state === 'not-granted'
+                      ? 'Off — reduced mode: Close and Switch act on whole apps.'
+                      : 'Window helper unavailable — reduced mode.'}
+                </span>
+              </div>
+              {accessibilityStatus.state === 'not-granted' && (
+                <button
+                  type="button"
+                  className="h-7 shrink-0 rounded-md border border-border-strong px-2.5 text-[11.5px] font-medium text-text-muted hover:bg-bg-hover hover:text-text"
+                  onClick={onOpenAccessibilityOnboarding}
+                >
+                  Set up
+                </button>
+              )}
+            </div>
+          )}
 
           <div className="border-t border-border pt-4">
             <AppHotkeyControl isMac={isMac} />

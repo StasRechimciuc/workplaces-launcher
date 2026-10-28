@@ -430,5 +430,28 @@ isn't bundled/installed by the app.
 ## Status
 
 Idea approved, research + spike done, Stage 2 plan approved
-(2026-10-28). Next: build phase 1, in a session running on the Mac
-(the Swift helper needs `swiftc` and real macOS to verify).
+(2026-10-28). **Phase 1 built (2026-10-29)**, not yet hand-checked in
+the running app:
+
+- `apps/desktop/native/wl-helper/` (Swift) — `serve` / `trust`, built
+  universal by `npm run build:helper`; `scripts/check-helper.mjs` is
+  the manual real-Mac check (passes on macOS 26.6: trust, listing,
+  capture → state → focus → close → gone → quit on TextEdit).
+- `main/platform/macos/wl-helper-client.ts` — not wired to any caller
+  yet (phase 2's first user).
+- Accessibility check, onboarding modal, reduced-mode banner, Settings
+  row, ER-PERM-01 + ER-SYS-03 (helper unavailable).
+- Ships in `Contents/Helpers`; `afterPack` fails the package without a
+  universal helper.
+
+Found on the real Mac while building: an app still launching answers
+Accessibility with "cannot complete" (capture now keeps polling), and
+the system window list keeps a just-closed TextEdit window too, not
+only Chrome (the helper remembers windows whose held reference died).
+
+Pre-existing, not fixed here: `package:mac` fails before packing
+("Cannot compute electron version" — Electron is hoisted to the
+monorepo root). Verified instead with `electron-builder --mac --dir
+-c.electronVersion=33.4.11 -c.mac.identity=null`.
+
+Next: hand-check phase 1 in a packaged build, then phase 2.

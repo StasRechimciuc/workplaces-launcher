@@ -218,6 +218,33 @@ export type SetLaunchOnLoginResult =
   { success: true } | { success: false; error: string; code: string };
 
 /**
+ * Whether this app can use macOS Accessibility — the one permission
+ * per-window tracking needs (see WCs/WC__window-tracking.md,
+ * "Permissions"). Always a fresh read through a newly spawned
+ * `wl-helper trust`, never a cached flag: a long-running process can
+ * keep reporting a stale grant after the app is removed from the list.
+ *
+ * - 'unsupported': not macOS — nothing to ask for, no UI shown.
+ * - 'granted': full mode.
+ * - 'not-granted': reduced mode. `onboardingCompleted` is true once the
+ *   first-launch explanation was either completed or skipped with
+ *   "Continue without", so it's never forced on the user twice — from
+ *   then on the banner and the Settings row offer the same flow.
+ * - 'helper-unavailable': the native helper is missing or broken, so
+ *   granting the permission wouldn't help — reduced mode with the
+ *   explicit error, not a misleading "grant access" prompt.
+ */
+export type AccessibilityStatus =
+  | { state: 'unsupported' }
+  | { state: 'granted' }
+  | { state: 'not-granted'; onboardingCompleted: boolean; code: string }
+  | { state: 'helper-unavailable'; error: string; code: string };
+
+/** Result of opening System Settings at Privacy & Security → Accessibility. */
+export type OpenAccessibilitySettingsResult =
+  { success: true } | { success: false; error: string; code: string };
+
+/**
  * One detected step proposed for "Save my current workspace" (see
  * WCs/WC__save-current-workspace.md) — `type`/`params` are already the
  * exact WorkspaceStep shape this would save as if accepted unedited.

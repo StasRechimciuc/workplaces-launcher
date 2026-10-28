@@ -5,12 +5,13 @@
   "description": "Workspace Launcher desktop app (Electron).",
   "main": "./out/main/index.js",
   "scripts": {
-    "dev": "electron-vite dev",
+    "dev": "npm run build:helper && electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
+    "build:helper": "node scripts/build-helper.mjs",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "package:win": "electron-vite build && electron-builder --win",
-    "package:mac": "electron-vite build && electron-builder --mac"
+    "package:mac": "node scripts/build-helper.mjs --force && electron-vite build && electron-builder --mac"
   },
   "dependencies": {
     "@electron-toolkit/utils": "^3.0.0",

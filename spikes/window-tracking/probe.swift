@@ -82,6 +82,22 @@ func activate(_ app: NSRunningApplication) {
   }
 }
 
+// Launch Services activation (what `open -b` / a Dock click does) — the
+// path the product itself uses, and not subject to the activate()
+// refusal a non-app CLI process can get.
+func openApp(_ bundleId: String) {
+  let process = Process()
+  process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+  process.arguments = ["-b", bundleId]
+  try? process.run()
+  process.waitUntilExit()
+}
+
+func askYesNo(_ question: String, _ key: String) {
+  print("\(question) [y/n]")
+  print("ANSWER \(key): \(readLine() ?? "")")
+}
+
 func waitForEnter(_ prompt: String) {
   print("\(prompt) (press Enter)")
   _ = readLine()
@@ -156,13 +172,12 @@ case "spaces-held":
   print("AFTER_MOVE held_reference_alive=\(title != nil)")
   waitForEnter("Next: the probe will try to FOCUS the window via the held reference.")
   let raise = AXUIElementPerformAction(held, kAXRaiseAction as CFString)
-  activate(target)
-  print("FOCUS raise_result=\(raise == .success ? "success" : "error \(raise.rawValue)")")
-  waitForEnter(
-    "Note whether the screen switched to the other desktop and showed the window. Then return to THIS desktop."
-  )
+  openApp(args[2])
+  print("FOCUS raise_result=\(raise == .success ? "success" : "error \(raise.rawValue)") then open -b")
+  askYesNo("Did the screen switch to the other desktop and show the window?", "S1_focus_switched_desktop")
+  waitForEnter("Return to THIS desktop if you were moved.")
   print("CLOSE press=\(pressClose(held))")
-  Thread.sleep(forTimeInterval: 1.5)
+  Thread.sleep(forTimeInterval: 3)
   print("CLOSE_OUTCOME window_exists=\(cgWindowExists(id))")
 
 case "spaces-fresh":
@@ -174,14 +189,21 @@ case "spaces-fresh":
   print("FRESH before_activate ax_listed=\(axWindow(pid, id) != nil) cg_exists=\(cgWindowExists(id))")
   activate(target)
   Thread.sleep(forTimeInterval: 2)
-  let found = axWindow(pid, id)
-  print("FRESH after_activate ax_listed=\(found != nil)")
-  waitForEnter(
-    "Note whether the screen switched to the other desktop. Then return to THIS desktop."
-  )
+  var found = axWindow(pid, id)
+  print("FRESH after_activate_api ax_listed=\(found != nil)")
+  askYesNo("Did the screen switch desktops just now?", "S2_activate_api_switched")
+  waitForEnter("Return to THIS desktop if you were moved.")
+  if found == nil {
+    openApp(args[2])
+    Thread.sleep(forTimeInterval: 2)
+    found = axWindow(pid, id)
+    print("FRESH after_open_b ax_listed=\(found != nil)")
+    askYesNo("Did the screen switch desktops this time?", "S2_open_b_switched")
+    waitForEnter("Return to THIS desktop if you were moved.")
+  }
   if let found {
     print("CLOSE press=\(pressClose(found))")
-    Thread.sleep(forTimeInterval: 1.5)
+    Thread.sleep(forTimeInterval: 3)
     print("CLOSE_OUTCOME window_exists=\(cgWindowExists(id))")
   } else {
     print("CLOSE skipped — window still not reachable through AX")

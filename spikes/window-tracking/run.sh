@@ -5,6 +5,7 @@
 #
 # Run from Terminal.app (not VS Code's terminal):  bash spikes/window-tracking/run.sh
 # Run only some sections by naming them:           bash spikes/window-tracking/run.sh A D1
+# Sections: B A G E D1 D2 F S1 S2 T H (or H_url / H_profile_only) C
 # Needs: Xcode command-line tools (swiftc), Accessibility granted to the
 # terminal app you run it from. Opens/closes Calculator, a few Terminal
 # windows running `sleep`, and one VS Code test window. Results are
@@ -201,19 +202,31 @@ if want F; then
   fi
 fi
 
+# First id that is new in the system-wide list AND visible to AX — apps
+# create invisible helper windows (Chrome makes several per window), so
+# a bare "new id" can be the wrong one.
+new_real_window() {
+  local bundle=$1 before=$2 fresh ax id
+  fresh=$(new_ids "$before" "$("$PROBE" cgids "$bundle")")
+  ax=$("$PROBE" ids "$bundle")
+  for id in $fresh; do
+    case " $ax " in *" $id "*) echo "$id"; return ;; esac
+  done
+}
+
 # Opens a throwaway TextEdit document, sets TEXT_WINDOW to its window id.
 open_test_document() {
-  local before after
+  local before
   before=$("$PROBE" cgids com.apple.TextEdit 2>/dev/null | grep -v ERROR)
   echo "window-tracking spike test document" >"$WORK/wt-$1.txt"
   open -a TextEdit "$WORK/wt-$1.txt"
   sleep 3
-  after=$("$PROBE" cgids com.apple.TextEdit)
-  TEXT_WINDOW=$(new_ids "$before" "$after" | awk '{print $1}')
+  TEXT_WINDOW=$(new_real_window com.apple.TextEdit "$before")
   echo "OPENED TextEdit window=${TEXT_WINDOW:-none} (title: wt-$1.txt)"
 }
 
 if want S1 || want S2; then
+  pause "Quit TextEdit if it's open (Cmd+Q), so no leftover windows affect the test."
   echo
   echo "SETTING 'switch to a Space with open windows' = $(defaults read com.apple.dock workspaces-auto-swoosh 2>/dev/null || echo 'not set (default: on)')"
 fi
@@ -222,7 +235,6 @@ if want S1; then
   section "S1: window moved to another desktop — reachable through a reference held from before the move?"
   open_test_document s1
   [ -n "$TEXT_WINDOW" ] && "$PROBE" spaces-held com.apple.TextEdit "$TEXT_WINDOW" </dev/tty
-  ask "During FOCUS, did the screen switch to the other desktop and show the window?" S1_focus_switched_desktop
 fi
 
 if want S2; then
@@ -231,7 +243,6 @@ if want S2; then
   if [ -n "$TEXT_WINDOW" ]; then
     pause "Open Mission Control (Ctrl+Up), drag the 'wt-s2.txt' window onto ANOTHER desktop, then click back onto THIS desktop."
     "$PROBE" spaces-fresh com.apple.TextEdit "$TEXT_WINDOW" </dev/tty
-    ask "After activation, did the screen switch to the other desktop?" S2_activate_switched_desktop
   fi
 fi
 
@@ -248,11 +259,12 @@ if want T; then
   pause "Close the test window and its tab yourself (Cmd+W on each; no dialog should appear)."
 fi
 
-if want H; then
+if want H || want H_url || want H_profile_only; then
   section "H: Chrome — does 'open -n' with a profile create a new window, and can we catch its id?"
   if open -Ra "Google Chrome" 2>/dev/null; then
     echo "CHROME_RUNNING_BEFORE $(pgrep -xq 'Google Chrome' && echo yes || echo no)"
     for variant in url profile_only; do
+      want H || want "H_$variant" || continue
       BEFORE_CH=$("$PROBE" cgids com.google.Chrome 2>/dev/null | grep -v ERROR)
       if [ "$variant" = url ]; then
         open -n -a "Google Chrome" --args --profile-directory=Default "https://example.com/?window-tracking-spike"
@@ -260,11 +272,17 @@ if want H; then
         open -n -a "Google Chrome" --args --profile-directory=Default
       fi
       sleep 5
-      NEW_CH=$(new_ids "$BEFORE_CH" "$("$PROBE" cgids com.google.Chrome)")
-      echo "CHROME_$variant new_window_ids=${NEW_CH:-none}"
+      NEW_CH=$(new_real_window com.google.Chrome "$BEFORE_CH")
+      echo "CHROME_$variant new_real_window=${NEW_CH:-none}"
       ask "($variant) Did Chrome open a NEW WINDOW (not just a new tab in an existing one)?" "H_${variant}_new_window"
-      for id in $NEW_CH; do "$PROBE" close com.google.Chrome "$id"; done
-      [ -z "$NEW_CH" ] && pause "Close the new Chrome tab yourself."
+      if [ -n "$NEW_CH" ]; then
+        "$PROBE" close com.google.Chrome "$NEW_CH"
+        sleep 1
+        echo "AFTER_CLOSE window_exists=$(window_exists "$NEW_CH")"
+        ask "Did that Chrome window actually close?" "H_${variant}_closed"
+      else
+        pause "Close the new Chrome tab/window yourself."
+      fi
     done
   else
     echo "SKIPPED Google Chrome not installed"

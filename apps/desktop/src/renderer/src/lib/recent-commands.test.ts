@@ -4,6 +4,7 @@ import { getRecentCommands } from './recent-commands';
 
 function makeTool(type: string, params: Record<string, unknown>): WorkspaceToolStepDisplay {
   return {
+    id: `${type}-step`,
     icon: 'box',
     color: 'blue',
     name: type,

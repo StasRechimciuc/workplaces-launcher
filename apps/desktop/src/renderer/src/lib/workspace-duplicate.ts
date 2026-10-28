@@ -1,4 +1,4 @@
-import type { WorkspaceStep } from '@workspace-launcher/shared';
+import type { WorkspaceStepInput } from '@workspace-launcher/shared';
 import type { WorkspaceDisplay } from '../../../preload';
 
 /**
@@ -30,11 +30,16 @@ function deepEqual(a: unknown, b: unknown): boolean {
  * position. Order matters here (unlike params' own key order): two
  * workspaces that run the same tools in a different sequence are a
  * real, meaningful difference (restore order), not a duplicate. */
-function stepsEqual(a: WorkspaceStep[], b: WorkspaceStep[]): boolean {
-  return a.length === b.length && a.every((step, i) => {
-    const other = b[i];
-    return other !== undefined && step.type === other.type && deepEqual(step.params, other.params);
-  });
+function stepsEqual(a: readonly WorkspaceStepInput[], b: readonly WorkspaceStepInput[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((step, i) => {
+      const other = b[i];
+      return (
+        other !== undefined && step.type === other.type && deepEqual(step.params, other.params)
+      );
+    })
+  );
 }
 
 /**
@@ -54,7 +59,7 @@ function stepsEqual(a: WorkspaceStep[], b: WorkspaceStep[]): boolean {
  * state is never a meaningful "duplicate").
  */
 export function findDuplicateWorkspace(
-  candidate: { name: string; steps: WorkspaceStep[] },
+  candidate: { name: string; steps: WorkspaceStepInput[] },
   existing: WorkspaceDisplay[],
   excludeId?: string,
 ): WorkspaceDisplay | undefined {

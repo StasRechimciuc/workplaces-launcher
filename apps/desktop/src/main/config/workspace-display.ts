@@ -147,6 +147,7 @@ function toWorkspaceToolStepDisplay(step: WorkspaceStep): WorkspaceToolStepDispl
   const def = getStepTypeDefinition(step.type);
   const { detail, expand } = describeStep(step, def);
   return {
+    id: step.id,
     icon: def?.icon ?? 'box',
     color: def?.color ?? 'zinc',
     name: stepDisplayName(step, def),

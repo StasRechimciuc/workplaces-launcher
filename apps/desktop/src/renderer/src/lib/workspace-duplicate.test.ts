@@ -4,6 +4,7 @@ import { findDuplicateWorkspace } from './workspace-duplicate';
 
 function makeTool(type: string, params: Record<string, unknown>): WorkspaceToolStepDisplay {
   return {
+    id: `${type}-step`,
     icon: 'box',
     color: 'blue',
     name: type,
@@ -14,7 +15,11 @@ function makeTool(type: string, params: Record<string, unknown>): WorkspaceToolS
   };
 }
 
-function makeWorkspace(name: string, tools: WorkspaceToolStepDisplay[], id = name): WorkspaceDisplay {
+function makeWorkspace(
+  name: string,
+  tools: WorkspaceToolStepDisplay[],
+  id = name,
+): WorkspaceDisplay {
   return {
     id,
     name,

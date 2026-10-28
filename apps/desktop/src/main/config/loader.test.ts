@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -38,17 +38,80 @@ describe('loadAllWorkspaceConfigs', () => {
     await rm(testUserDataDir, { recursive: true, force: true });
   });
 
+  describe('migrating a v1 config', () => {
+    const v1 = {
+      version: 1,
+      id: 'ws-old',
+      name: 'Old',
+      steps: [
+        { type: 'vscode', params: { path: '~/a' } },
+        { type: 'chrome', params: { profile: 'Default', urls: [] } },
+      ],
+    };
+
+    it('gives every step a unique id and writes the upgraded file back', async () => {
+      await writeConfig('ws-old.json', v1);
+
+      const { configs, errors } = await loadAllWorkspaceConfigs();
+      expect(errors).toEqual({});
+      const [config] = configs;
+      expect(config?.version).toBe(2);
+      const ids = config?.steps.map((s) => s.id) ?? [];
+      expect(ids).toHaveLength(2);
+      expect(new Set(ids).size).toBe(2);
+      expect(config?.steps.map(({ type, params }) => ({ type, params }))).toEqual(v1.steps);
+
+      const onDisk = JSON.parse(await readFile(join(workspacesDir(), 'ws-old.json'), 'utf-8'));
+      expect(onDisk).toEqual(config);
+      const backup = JSON.parse(
+        await readFile(join(workspacesDir(), 'ws-old.json.v1.bak'), 'utf-8'),
+      );
+      expect(backup).toEqual(v1);
+    });
+
+    it('keeps the same step ids on every later load', async () => {
+      await writeConfig('ws-old.json', v1);
+      const first = await loadAllWorkspaceConfigs();
+      const second = await loadAllWorkspaceConfigs();
+      expect(second.configs[0]?.steps.map((s) => s.id)).toEqual(
+        first.configs[0]?.steps.map((s) => s.id),
+      );
+    });
+
+    it('skips the workspace loudly when the upgraded file can’t be saved', async () => {
+      await writeConfig('ws-old.json', v1);
+      // A read-only directory: the atomic write's temp file can't be created.
+      await chmod(workspacesDir(), 0o555);
+      try {
+        const { configs, errors } = await loadAllWorkspaceConfigs();
+        expect(configs).toEqual([]);
+        expect(errors['ws-old.json']).toContain("couldn't save it");
+      } finally {
+        await chmod(workspacesDir(), 0o755);
+      }
+      const onDisk = JSON.parse(await readFile(join(workspacesDir(), 'ws-old.json'), 'utf-8'));
+      expect(onDisk.version).toBe(1);
+    });
+
+    it('rejects a config from a newer version instead of guessing', async () => {
+      await writeConfig('ws-new.json', { version: 3, id: 'ws-new', name: 'New', steps: [] });
+      const { configs, errors } = await loadAllWorkspaceConfigs();
+      expect(configs).toEqual([]);
+      expect(errors['ws-new.json']).toBeDefined();
+    });
+  });
+
   it('returns an empty result (and creates the directory) when none exists yet', async () => {
     const result = await loadAllWorkspaceConfigs();
     expect(result).toEqual({ configs: [], errors: {} });
   });
 
   it('loads a valid config file', async () => {
-    await writeConfig('a.json', { version: 1, id: 'ws-a', name: 'A', steps: [] });
+    await writeConfig('a.json', { version: 2, id: 'ws-a', name: 'A', steps: [] });
 
     const result = await loadAllWorkspaceConfigs();
 
-    expect(result.configs).toEqual([{ version: 1, id: 'ws-a', name: 'A', steps: [] }]);
+    expect(result.configs).toEqual([{ version: 2, id: 'ws-a', name: 'A', steps: [] }]);
     expect(result.errors).toEqual({});
   });
 
@@ -72,8 +135,8 @@ describe('loadAllWorkspaceConfigs', () => {
   });
 
   it('skips and reports a duplicate id, keeping only the first file loaded', async () => {
-    await writeConfig('a-first.json', { version: 1, id: 'dup', name: 'First', steps: [] });
-    await writeConfig('b-second.json', { version: 1, id: 'dup', name: 'Second', steps: [] });
+    await writeConfig('a-first.json', { version: 2, id: 'dup', name: 'First', steps: [] });
+    await writeConfig('b-second.json', { version: 2, id: 'dup', name: 'Second', steps: [] });
 
     const result = await loadAllWorkspaceConfigs();
 
@@ -83,9 +146,9 @@ describe('loadAllWorkspaceConfigs', () => {
   });
 
   it('returns configs in a stable, sorted order regardless of write order', async () => {
-    await writeConfig('c.json', { version: 1, id: 'c', name: 'C', steps: [] });
-    await writeConfig('a.json', { version: 1, id: 'a', name: 'A', steps: [] });
-    await writeConfig('b.json', { version: 1, id: 'b', name: 'B', steps: [] });
+    await writeConfig('c.json', { version: 2, id: 'c', name: 'C', steps: [] });
+    await writeConfig('a.json', { version: 2, id: 'a', name: 'A', steps: [] });
+    await writeConfig('b.json', { version: 2, id: 'b', name: 'B', steps: [] });
 
     const result = await loadAllWorkspaceConfigs();
 
@@ -116,7 +179,7 @@ describe('saveWorkspaceConfig', () => {
   });
 
   it('writes a config file named after its id, loadable afterward', async () => {
-    const config = { version: 1 as const, id: 'ws-new', name: 'New workspace', steps: [] };
+    const config = { version: 2 as const, id: 'ws-new', name: 'New workspace', steps: [] };
     await saveWorkspaceConfig(config);
 
     const written = await readFile(join(workspacesDir(), 'ws-new.json'), 'utf-8');
@@ -127,14 +190,14 @@ describe('saveWorkspaceConfig', () => {
   });
 
   it('creates the workspaces directory if it does not exist yet', async () => {
-    const config = { version: 1 as const, id: 'ws-first', name: 'First', steps: [] };
+    const config = { version: 2 as const, id: 'ws-first', name: 'First', steps: [] };
     await saveWorkspaceConfig(config);
     expect(await readFile(join(workspacesDir(), 'ws-first.json'), 'utf-8')).toContain('ws-first');
   });
 
   it('overwrites an existing file for the same id', async () => {
-    const first = { version: 1 as const, id: 'ws-dup', name: 'First name', steps: [] };
-    const second = { version: 1 as const, id: 'ws-dup', name: 'Second name', steps: [] };
+    const first = { version: 2 as const, id: 'ws-dup', name: 'First name', steps: [] };
+    const second = { version: 2 as const, id: 'ws-dup', name: 'Second name', steps: [] };
     await saveWorkspaceConfig(first);
     await saveWorkspaceConfig(second);
 
@@ -153,7 +216,7 @@ describe('deleteWorkspaceConfig', () => {
   });
 
   it('removes an existing config file', async () => {
-    const config = { version: 1 as const, id: 'ws-del', name: 'To delete', steps: [] };
+    const config = { version: 2 as const, id: 'ws-del', name: 'To delete', steps: [] };
     await saveWorkspaceConfig(config);
 
     await deleteWorkspaceConfig('ws-del');

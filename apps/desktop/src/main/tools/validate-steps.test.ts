@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ToolPlugin, WorkspaceStep } from '@workspace-launcher/shared';
+import type { ToolPlugin, WorkspaceStepInput } from '@workspace-launcher/shared';
 
 // registry.ts holds module-level state — re-import fresh per test via
 // vi.resetModules(), same precedent as tools/registry.test.ts.
@@ -22,7 +22,7 @@ describe('validateStepsWithRegisteredTools', () => {
     const { validateStepsWithRegisteredTools } = await import('./validate-steps');
     registerTool(makeTool('good', () => ({ valid: true, data: {} })));
 
-    const steps: WorkspaceStep[] = [
+    const steps: WorkspaceStepInput[] = [
       { type: 'good', params: {} },
       { type: 'nonexistent', params: {} }, // no registered tool — allowed through
     ];
@@ -35,7 +35,7 @@ describe('validateStepsWithRegisteredTools', () => {
     registerTool(makeTool('good', () => ({ valid: true, data: {} })));
     registerTool(makeTool('bad', () => ({ valid: false, errors: ['Required'] })));
 
-    const steps: WorkspaceStep[] = [
+    const steps: WorkspaceStepInput[] = [
       { type: 'good', params: {} },
       { type: 'good', params: {} },
       { type: 'bad', params: {} },
@@ -52,7 +52,7 @@ describe('validateStepsWithRegisteredTools', () => {
     const { validateStepsWithRegisteredTools } = await import('./validate-steps');
     registerTool(makeTool('bad', () => ({ valid: false, errors: ['first error'] })));
 
-    const steps: WorkspaceStep[] = [
+    const steps: WorkspaceStepInput[] = [
       { type: 'bad', params: {} },
       { type: 'bad', params: {} },
     ];

@@ -1,7 +1,11 @@
 import { app } from 'electron';
-import { mkdir, readdir, readFile, unlink } from 'node:fs/promises';
+import { mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { parseWorkspaceConfig, type WorkspaceConfig } from '@workspace-launcher/shared';
+import {
+  migrateWorkspaceConfig,
+  parseWorkspaceConfig,
+  type WorkspaceConfig,
+} from '@workspace-launcher/shared';
 import { writeFileAtomic } from '@workspace-launcher/shared/write-file-atomic';
 
 /**
@@ -49,10 +53,33 @@ export async function loadAllWorkspaceConfigs(): Promise<LoadWorkspacesResult> {
   for (const file of jsonFiles) {
     try {
       const raw = await readFile(join(dir, file), 'utf-8');
-      const parsed = parseWorkspaceConfig(JSON.parse(raw));
+      const { migrated, value } = migrateWorkspaceConfig(JSON.parse(raw));
+      const parsed = parseWorkspaceConfig(value);
       if (!parsed.success) {
         errors[file] = parsed.error;
         continue;
+      }
+      // Persisted before the config is used at all: a migration adds
+      // freshly generated step ids, which have to be the same on the
+      // next load or every tracked resource loses its step. A config
+      // that can't be written back is skipped with a loud error rather
+      // than run with ids that would change under it. The original is
+      // kept alongside first (`<file>.v1.bak`, never overwritten, and
+      // ignored by the *.json scan above), so an upgrade can always be
+      // undone by hand — an older build can't read the new format.
+      if (migrated) {
+        try {
+          await writeFile(join(dir, `${file}.v1.bak`), raw, { flag: 'wx' }).catch(
+            (err: NodeJS.ErrnoException) => {
+              if (err.code !== 'EEXIST') throw err;
+            },
+          );
+          await writeFileAtomic(join(dir, file), JSON.stringify(parsed.config, null, 2));
+        } catch (err) {
+          errors[file] =
+            `Upgraded this workspace's file format but couldn't save it: ${err instanceof Error ? err.message : String(err)}`;
+          continue;
+        }
       }
 
       const existingFile = fileById.get(parsed.config.id);

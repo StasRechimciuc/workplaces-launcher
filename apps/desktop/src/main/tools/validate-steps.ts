@@ -1,4 +1,4 @@
-import type { WorkspaceStep } from '@workspace-launcher/shared';
+import type { WorkspaceStepInput } from '@workspace-launcher/shared';
 import { getTool } from './registry';
 
 /**
@@ -33,7 +33,7 @@ export interface StepValidationFailure {
  * sees and fixes first, not a combined report across all of them.
  */
 export function validateStepsWithRegisteredTools(
-  steps: WorkspaceStep[],
+  steps: readonly WorkspaceStepInput[],
 ): StepValidationFailure | null {
   for (const [stepIndex, step] of steps.entries()) {
     const tool = getTool(step.type);

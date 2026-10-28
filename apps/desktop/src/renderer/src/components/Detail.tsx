@@ -174,7 +174,7 @@ export function Detail({
     setIsSavingStep(true);
     setSaveStepError(null);
     const steps = replaceStepParams(
-      workspace.tools.map((t) => ({ type: t.type, params: t.params })),
+      workspace.tools.map((t) => ({ id: t.id, type: t.type, params: t.params })),
       i,
       draftParams,
     );
@@ -225,7 +225,7 @@ export function Detail({
     setRemovingIndex(i);
     setRemoveStepError(null);
     const steps = workspace.tools
-      .map((t) => ({ type: t.type, params: t.params }))
+      .map((t) => ({ id: t.id, type: t.type, params: t.params }))
       .filter((_, index) => index !== i);
     try {
       const result = await window.api.updateWorkspace({

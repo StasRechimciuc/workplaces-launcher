@@ -4,7 +4,7 @@ import type {
   CreateWorkspaceResult,
   UpdateWorkspaceResult,
   WorkspaceConfig,
-  WorkspaceStep,
+  WorkspaceStepInput,
 } from '@workspace-launcher/shared';
 import type { WorkspaceDisplay, WorkspaceToolStepDisplay } from '../../../preload';
 import { Icon } from '../icons';
@@ -72,6 +72,9 @@ interface WorkspaceFormModalProps {
  */
 interface CreateStepDraft {
   key: number;
+  /** The saved step's id when editing one that exists; absent for a
+   * row added in this form — the main process assigns it on save. */
+  id?: string;
   preset: CreateToolPreset;
   params: Record<string, unknown>;
 }
@@ -127,6 +130,7 @@ function draftsFromWorkspace(
 ): CreateStepDraft[] {
   return workspace.tools.map((tool) => ({
     key: nextKeyRef.current++,
+    id: tool.id,
     preset: presetForTool(tool),
     params: { ...tool.params },
   }));
@@ -488,8 +492,13 @@ export function WorkspaceFormModal({
     );
   }
 
-  const steps: WorkspaceStep[] = useMemo(
-    () => createSteps.map((draft) => ({ type: draft.preset.type, params: draft.params })),
+  const steps: WorkspaceStepInput[] = useMemo(
+    () =>
+      createSteps.map((draft) => ({
+        ...(draft.id === undefined ? {} : { id: draft.id }),
+        type: draft.preset.type,
+        params: draft.params,
+      })),
     [createSteps],
   );
 

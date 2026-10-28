@@ -4,6 +4,7 @@ import { getRecentProjectPaths } from './recent-project-paths';
 
 function makeTool(type: string, params: Record<string, unknown>): WorkspaceToolStepDisplay {
   return {
+    id: `${type}-step`,
     icon: 'box',
     color: 'blue',
     name: type,
@@ -51,13 +52,7 @@ describe('getRecentProjectPaths', () => {
   it('caps results at the default limit of 5', () => {
     const tools = Array.from({ length: 8 }, (_, i) => makeTool('vscode', { path: `~/p${i}` }));
     const workspaces = [makeWorkspace(tools)];
-    expect(getRecentProjectPaths(workspaces)).toEqual([
-      '~/p0',
-      '~/p1',
-      '~/p2',
-      '~/p3',
-      '~/p4',
-    ]);
+    expect(getRecentProjectPaths(workspaces)).toEqual(['~/p0', '~/p1', '~/p2', '~/p3', '~/p4']);
   });
 
   it('respects a custom limit', () => {

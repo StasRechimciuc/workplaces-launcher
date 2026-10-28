@@ -64,6 +64,9 @@ export interface TimingDisplay {
  * src/main/config/workspace-display.ts's toWorkspaceDisplay.
  */
 export interface WorkspaceToolStepDisplay {
+  /** The step's stable id (WorkspaceStep.id) — echoed back on save so
+   * an edit keeps it; see StepIdSchema in @workspace-launcher/shared. */
+  id: string;
   icon: string;
   color: string;
   name: string;

@@ -6,7 +6,7 @@ import type {
   DetectWorkspaceDraftResult,
   UpdateWorkspaceResult,
   WorkspaceConfig,
-  WorkspaceStep,
+  WorkspaceStepInput,
 } from '@workspace-launcher/shared';
 import type { WorkspaceDisplay } from '../../../preload';
 import { Icon } from '../icons';
@@ -172,7 +172,7 @@ export function SaveCurrentWorkspaceModal({
     );
   }
 
-  const steps: WorkspaceStep[] = useMemo(() => {
+  const steps: WorkspaceStepInput[] = useMemo(() => {
     if (!draft || draft.status !== 'ready') return [];
     return draft.steps
       .map((s, i) => ({ type: s.type, params: stepParams[i] ?? s.params }))

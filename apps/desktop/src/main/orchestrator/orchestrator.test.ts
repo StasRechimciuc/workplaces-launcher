@@ -1,10 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ToolPlugin, WorkspaceConfig } from '@workspace-launcher/shared';
+import type { ToolPlugin, WorkspaceConfig, WorkspaceStepInput } from '@workspace-launcher/shared';
 import { ERROR_CODES } from '@workspace-launcher/shared';
 import { closeWorkspace, runWorkspace, switchToWorkspace } from './orchestrator';
 import * as processControl from '../platform/macos/process-control';
 import * as activityStore from './workspace-activity-store';
 import { registerTool } from '../tools/registry';
+
+/** Test fixtures list steps without ids; give them deterministic ones. */
+function withIds(steps: WorkspaceStepInput[]): WorkspaceConfig['steps'] {
+  return steps.map((step, i) => ({ ...step, id: step.id ?? `step-${i}` }));
+}
 
 // step-timing-history.ts is backed by electron-store, which needs a
 // real Electron `app` to resolve its storage path — unavailable under
@@ -49,8 +54,8 @@ describe('runWorkspace', () => {
     recordSuccessfulStepDuration.mockClear();
   });
 
-  function baseConfig(steps: WorkspaceConfig['steps']): WorkspaceConfig {
-    return { version: 1, id: 'ws-1', name: 'Test workspace', steps };
+  function baseConfig(steps: WorkspaceStepInput[]): WorkspaceConfig {
+    return { version: 2, id: 'ws-1', name: 'Test workspace', steps: withIds(steps) };
   }
 
   it('reports a failed step for an unregistered tool type, without throwing', async () => {
@@ -402,8 +407,8 @@ describe('retryStep', () => {
     recordSuccessfulStepDuration.mockClear();
   });
 
-  function baseConfig(steps: WorkspaceConfig['steps']): WorkspaceConfig {
-    return { version: 1, id: 'ws-1', name: 'Test workspace', steps };
+  function baseConfig(steps: WorkspaceStepInput[]): WorkspaceConfig {
+    return { version: 2, id: 'ws-1', name: 'Test workspace', steps: withIds(steps) };
   }
 
   it('re-runs exactly the step at the given index', async () => {
@@ -485,8 +490,8 @@ describe('switchToWorkspace', () => {
     isIntentActiveMock.mockReset().mockReturnValue(false);
   });
 
-  function workspace(id: string, steps: WorkspaceConfig['steps']): WorkspaceConfig {
-    return { version: 1, id, name: id, steps };
+  function workspace(id: string, steps: WorkspaceStepInput[]): WorkspaceConfig {
+    return { version: 2, id, name: id, steps: withIds(steps) };
   }
 
   it("closes a running app an ACTIVE other workspace opened, runs the target's own steps, and updates intent for both sides", async () => {
@@ -625,8 +630,8 @@ describe('closeWorkspace', () => {
     setIntentActiveMock.mockReset();
   });
 
-  function workspace(id: string, steps: WorkspaceConfig['steps']): WorkspaceConfig {
-    return { version: 1, id, name: id, steps };
+  function workspace(id: string, steps: WorkspaceStepInput[]): WorkspaceConfig {
+    return { version: 2, id, name: id, steps: withIds(steps) };
   }
 
   it('closes its own running app and clears only its own intent', async () => {
@@ -726,8 +731,8 @@ describe('Docker step teardown (Close/Switch)', () => {
     dockerTeardown.mockReset();
   });
 
-  function workspace(id: string, steps: WorkspaceConfig['steps']): WorkspaceConfig {
-    return { version: 1, id, name: id, steps };
+  function workspace(id: string, steps: WorkspaceStepInput[]): WorkspaceConfig {
+    return { version: 2, id, name: id, steps: withIds(steps) };
   }
 
   describe('closeWorkspace', () => {

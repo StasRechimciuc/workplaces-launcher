@@ -1,7 +1,12 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { WorkspaceConfig } from '@workspace-launcher/shared';
+import type { WorkspaceConfig, WorkspaceStepInput } from '@workspace-launcher/shared';
 import { toWorkspaceDisplay } from './workspace-display';
 import { registerBuiltInTools } from '../tools';
+
+/** Test fixtures list steps without ids; give them deterministic ones. */
+function withIds(steps: WorkspaceStepInput[]): WorkspaceConfig['steps'] {
+  return steps.map((step, i) => ({ ...step, id: step.id ?? `step-${i}` }));
+}
 
 // step-timing-history.ts is backed by electron-store, which needs a
 // real Electron `app` to resolve its storage path — unavailable under
@@ -25,8 +30,8 @@ beforeEach(() => {
   getTypicalStepDurationMs.mockReset().mockReturnValue(undefined);
 });
 
-function baseConfig(steps: WorkspaceConfig['steps']): WorkspaceConfig {
-  return { version: 1, id: 'ws-1', name: 'Test workspace', steps };
+function baseConfig(steps: WorkspaceStepInput[]): WorkspaceConfig {
+  return { version: 2, id: 'ws-1', name: 'Test workspace', steps: withIds(steps) };
 }
 
 describe('toWorkspaceDisplay', () => {

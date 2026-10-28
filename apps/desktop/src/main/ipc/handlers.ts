@@ -23,6 +23,7 @@ import type {
   WorkspaceConfig,
 } from '@workspace-launcher/shared';
 import {
+  assignStepIds,
   CURRENT_WORKSPACE_CONFIG_VERSION,
   ERROR_CODES,
   isToolAppKey,
@@ -307,7 +308,7 @@ export async function createWorkspace(input: unknown): Promise<CreateWorkspaceRe
     version: CURRENT_WORKSPACE_CONFIG_VERSION,
     id: randomUUID(),
     name,
-    steps,
+    steps: assignStepIds(steps),
   });
   if (!parsed.success) {
     return { success: false, error: parsed.error, code: ERROR_CODES.WORKSPACE_INVALID.code };
@@ -356,7 +357,7 @@ export async function updateWorkspace(input: unknown): Promise<UpdateWorkspaceRe
     version: CURRENT_WORKSPACE_CONFIG_VERSION,
     id,
     name,
-    steps,
+    steps: assignStepIds(steps),
   });
   if (!parsed.success) {
     return { success: false, error: parsed.error, code: ERROR_CODES.WORKSPACE_INVALID.code };

@@ -265,7 +265,12 @@ function isActive(
 ): boolean {
   if (store && ownsResources(store, part.config.id)) return true;
   if (!isIntentActive(part.config.id)) return false;
-  return appNamesOf(appLevelSteps(store, part)).some((name) => runningAppNames.get(name) === true);
+  // Untracked steps only: a tracked step's activity comes from the
+  // ledger alone. Counting it by app name too would keep a workspace
+  // activated before tracking existed "active" forever whenever the app
+  // happens to be running (a link opened in VS Code, with VS Code open
+  // for something else).
+  return appNamesOf(part.untracked).some((name) => runningAppNames.get(name) === true);
 }
 
 /** App names the untracked steps of the given (active) workspaces use. */

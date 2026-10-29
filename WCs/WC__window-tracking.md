@@ -575,6 +575,26 @@ null }`; the first check that sees a heartbeat for that folder with
   (both sides), the kind against a fake heartbeat/command directory,
   the extension's command handling with a mocked `vscode` API.
 
+## Phase 2, slice 7: upgrade path (2026-10-29, scoped down)
+
+The intent flag can only be retired once every step kind is tracked —
+Terminal, Tilt and Chrome stay untracked until phases 3–4, and they
+still need intent + app-level liveness. So this slice only does what's
+possible now:
+
+- **Activity:** a tracked step counts towards "active" only through the
+  ledger, never by app name — a workspace made active before tracking
+  existed no longer shows active just because its app (VS Code, for a
+  link step) is open for something else. Fixes the stale green badges.
+- **Upgrade close:** unchanged — a tracked step of a workspace still
+  active through its untracked steps, owning nothing, gets the
+  app-level close once (never for VS Code). A workspace with only
+  tracked steps and nothing owned is simply inactive: there's nothing
+  this app provably opened to close.
+- **Still to do (after phases 3–4):** retire `workspace-activity-store`
+  entirely once no step is untracked; make the ledger the only source of
+  "active".
+
 ## Status
 
 Idea approved, research + spike done, Stage 2 plan approved

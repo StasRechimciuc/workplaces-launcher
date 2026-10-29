@@ -431,6 +431,15 @@ describe('activity, delete, save-current', () => {
     expect(store.get().resources).toEqual([]);
   });
 
+  it('never counts a tracked step by app name — a stale pre-tracking workspace isn’t active', async () => {
+    // Made active before tracking existed: intent set, nothing owned,
+    // and the app its tracked step uses happens to be running.
+    const a = ws('A', [{ type: 'spotify', params: { name: 'Spotify' } }]);
+    vi.mocked(activityStore.setIntentActive)('A', true);
+    vi.mocked(processControl.isAppRunning).mockResolvedValue(true);
+    expect(await getActiveWorkspaceIds([a])).toEqual(new Set());
+  });
+
   it('deleting a workspace drops its claims without closing anything', async () => {
     const a = ws('A', [{ type: 't-window', params: { name: 'term' } }]);
     await runWorkspace(a);

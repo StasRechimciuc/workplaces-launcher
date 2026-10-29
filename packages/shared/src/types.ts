@@ -124,9 +124,22 @@ export type ValidationResult<TParams = unknown> =
  * rule.
  */
 export interface LeftOpenEntry {
+  /** What was left open — an app name, or a tracked resource's label. */
   appName: string;
-  reason: 'excluded' | 'still-used' | 'failed';
+  /**
+   * - 'excluded': never auto-closed (Chrome, today).
+   * - 'still-used': another active workspace still needs it.
+   * - 'not-ours': it was already open before this app touched it —
+   *   reused, never closed (WCs/WC__window-tracking.md, decision 1).
+   * - 'kept-running': it was asked to quit and chose to stay open
+   *   (unsaved changes, a dialog) — left to the user, never forced.
+   * - 'needs-permission': closing it needs Accessibility access.
+   * - 'failed': closing it failed; `detail` says why.
+   */
+  reason: 'excluded' | 'still-used' | 'not-ours' | 'kept-running' | 'needs-permission' | 'failed';
   detail?: string;
+  /** 'still-used' only, when known: the names of the workspaces still using it. */
+  usedBy?: string[];
 }
 
 /**

@@ -35,9 +35,12 @@ import {
 import { startRestoreFocusSession } from './restore-focus';
 import { expandHome } from '../lib/paths';
 import {
-  buildRunningAppNameMap,
   closeWorkspace,
-  isConfigActive,
+  getActiveWorkspaceIds,
+  closeRemovedSteps,
+  markWorkspaceDetectedActive,
+  previewWorkspaceStepRemoval,
+  releaseDeletedWorkspace,
   retryStep,
   runWorkspace,
   switchToWorkspace,
@@ -60,7 +63,6 @@ import {
   setSaveCurrentWorkspaceHotkey,
 } from '../orchestrator/app-hotkeys-store';
 import { detectCurrentWorkspaceDraft } from '../orchestrator/workspace-detection';
-import { setIntentActive } from '../orchestrator/workspace-activity-store';
 import { settingsStore } from '../settings/store';
 import { validateStepsWithRegisteredTools } from '../tools/validate-steps';
 import {
@@ -145,8 +147,15 @@ export async function restoreWorkspace(
   // be true for as long as a restore is actually in progress, not just
   // at the instant it began (see orchestrator-busy.ts's own doc comment).
   return withOrchestratorBusy(async () => {
-    const config = await resolveWorkspaceConfig(workspaceId);
-    return runWorkspace(config, onProgress ? { onStepProgress: onProgress } : {});
+    const allConfigs = await resolveAllWorkspaceConfigs();
+    const config = allConfigs.find((c) => c.id === workspaceId);
+    if (!config) {
+      throw new Error(`No workspace found with id "${workspaceId}".`);
+    }
+    return runWorkspace(config, {
+      allConfigs,
+      ...(onProgress ? { onStepProgress: onProgress } : {}),
+    });
   });
 }
 
@@ -233,8 +242,63 @@ export async function retryWorkspaceStep(
     throw new Error('workspaces:retryStep expects a non-negative integer step index.');
   }
 
-  const config = await resolveWorkspaceConfig(workspaceId);
-  return retryStep(config, stepIndex);
+  // Busy like every other entry point that opens or closes something —
+  // a retried step can close and reopen a resource, which "Save my
+  // current workspace" detection must never scan mid-way through.
+  return withOrchestratorBusy(async () => {
+    const allConfigs = await resolveAllWorkspaceConfigs();
+    const config = allConfigs.find((c) => c.id === workspaceId);
+    if (!config) {
+      throw new Error(`No workspace found with id "${workspaceId}".`);
+    }
+    return retryStep(config, stepIndex, allConfigs);
+  });
+}
+
+/**
+ * The apps removing this step would close — the Detail view's
+ * remove-step confirmation (see orchestrator.ts's
+ * previewWorkspaceStepRemoval). Both ids come from the renderer, so
+ * both are validated; an unknown step simply closes nothing.
+ */
+export async function previewStepRemoval(workspaceId: unknown, stepId: unknown): Promise<string[]> {
+  if (typeof workspaceId !== 'string' || typeof stepId !== 'string') {
+    throw new Error(
+      'workspaces:previewStepRemoval expects a workspace id and a step id (strings).',
+    );
+  }
+  if (!SUPPORTS_WORKSPACE_ACTIVITY) return [];
+  const allConfigs = await resolveAllWorkspaceConfigs();
+  const config = allConfigs.find((c) => c.id === workspaceId);
+  if (!config) {
+    throw new Error(`No workspace found with id "${workspaceId}".`);
+  }
+  return previewWorkspaceStepRemoval(config, stepId, allConfigs);
+}
+
+/**
+ * Releases (and, with `close`, closes) what steps just removed from a
+ * workspace left behind — called by the Detail view right after a
+ * remove-step save; `close` is true only when the user confirmed.
+ */
+export async function closeRemovedWorkspaceSteps(
+  workspaceId: unknown,
+  close: unknown,
+): Promise<CloseResult> {
+  if (typeof workspaceId !== 'string' || typeof close !== 'boolean') {
+    throw new Error(
+      'workspaces:closeRemovedSteps expects a workspace id (string) and close (boolean).',
+    );
+  }
+  return withOrchestratorBusy(async () => {
+    if (!SUPPORTS_WORKSPACE_ACTIVITY) return { closed: [], leftOpen: [] };
+    const allConfigs = await resolveAllWorkspaceConfigs();
+    const config = allConfigs.find((c) => c.id === workspaceId);
+    if (!config) {
+      throw new Error(`No workspace found with id "${workspaceId}".`);
+    }
+    return closeRemovedSteps(config, allConfigs, close);
+  });
 }
 
 /**
@@ -402,6 +466,9 @@ export async function deleteWorkspace(workspaceId: unknown): Promise<DeleteWorks
   }
 
   await deleteWorkspaceConfig(workspaceId);
+  // Its claims go with it, so it can never keep a shared resource open
+  // — but deleting a workspace never closes anything itself.
+  releaseDeletedWorkspace(workspaceId);
   // A hotkey bound to a now-gone workspace would otherwise sit
   // orphaned in the store forever — syncHotkeys() would just try to
   // register a hotkey whose callback resolves to a workspace that no
@@ -637,14 +704,16 @@ export async function detectCurrentWorkspace(): Promise<DetectWorkspaceDraftResu
  * where a hand-built, never-run config is correctly NOT active. Setting
  * intent here is safe even if some detected process has already exited
  * by the time the save completes — the displayed "Active" state always
- * ANDs intent with real liveness (isConfigActive), never trusts intent
- * alone.
+ * ANDs intent with real liveness, never trusts intent alone. Tracked
+ * steps' running apps are recorded as the workspace's resources, but
+ * as not opened by this app, so Close never quits them (see
+ * orchestrator.ts's markWorkspaceDetectedActive).
  */
-export function markWorkspaceActive(workspaceId: unknown): void {
+export async function markWorkspaceActive(workspaceId: unknown): Promise<void> {
   if (typeof workspaceId !== 'string' || workspaceId.length === 0) {
     throw new Error('workspaces:markActive expects a non-empty workspace id (string).');
   }
-  setIntentActive(workspaceId, true);
+  await markWorkspaceDetectedActive(await resolveWorkspaceConfig(workspaceId));
 }
 
 /**
@@ -721,14 +790,14 @@ export async function listWorkspaces(): Promise<WorkspaceDisplay[]> {
   // WCs/WC__workspace-activity.md) is macOS-only v1 — skip every
   // osascript call on any other platform rather than attempt one that
   // could never work.
-  const runningAppNames = SUPPORTS_WORKSPACE_ACTIVITY
-    ? await buildRunningAppNameMap(configs)
-    : new Map<string, boolean>();
-  function activeFor(config: WorkspaceConfig): boolean {
-    return SUPPORTS_WORKSPACE_ACTIVITY && isConfigActive(config, runningAppNames);
-  }
+  const activeIds = SUPPORTS_WORKSPACE_ACTIVITY
+    ? await getActiveWorkspaceIds(configs)
+    : new Set<string>();
 
-  return configs.map((config) => ({ ...toWorkspaceDisplay(config), active: activeFor(config) }));
+  return configs.map((config) => ({
+    ...toWorkspaceDisplay(config),
+    active: activeIds.has(config.id),
+  }));
 }
 
 // Compose's own real discovery priority with no explicit `-f` given —
@@ -896,6 +965,18 @@ export function registerIpcHandlers(): void {
     return switchWorkspace(workspaceId);
   });
 
+  ipcMain.handle(
+    'workspaces:previewStepRemoval',
+    async (_event, workspaceId: unknown, stepId: unknown) => {
+      return previewStepRemoval(workspaceId, stepId);
+    },
+  );
+  ipcMain.handle(
+    'workspaces:closeRemovedSteps',
+    async (_event, workspaceId: unknown, close: unknown) => {
+      return closeRemovedWorkspaceSteps(workspaceId, close);
+    },
+  );
   ipcMain.handle('workspaces:close', async (_event, workspaceId: unknown) => {
     return closeWorkspaceStep(workspaceId);
   });
@@ -1074,7 +1155,7 @@ export function registerIpcHandlers(): void {
   });
 
   ipcMain.handle('workspaces:markActive', async (_event, workspaceId: unknown) => {
-    markWorkspaceActive(workspaceId);
+    await markWorkspaceActive(workspaceId);
   });
 
   ipcMain.handle('settings:getLaunchOnLogin', async () => {

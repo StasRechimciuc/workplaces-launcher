@@ -149,6 +149,16 @@ const api = {
   // the renderer never shows this button there).
   switchToWorkspace: (workspaceId: string): Promise<SwitchResult> =>
     ipcRenderer.invoke('workspaces:switchTo', workspaceId),
+  // What removing one step would close right now (apps this app opened
+  // that nothing else uses) — empty means remove without asking. See
+  // orchestrator.ts's previewWorkspaceStepRemoval.
+  previewStepRemoval: (workspaceId: string, stepId: string): Promise<string[]> =>
+    ipcRenderer.invoke('workspaces:previewStepRemoval', workspaceId, stepId),
+  // Called right after a remove-step save: releases the removed step's
+  // claims, and with `close` (the user confirmed) closes what it left
+  // behind, now rather than on the next restore.
+  closeRemovedSteps: (workspaceId: string, close: boolean): Promise<CloseResult> =>
+    ipcRenderer.invoke('workspaces:closeRemovedSteps', workspaceId, close),
   // Closes only this workspace's own apps — see orchestrator.ts's
   // closeWorkspace. macOS-only v1.
   closeWorkspace: (workspaceId: string): Promise<CloseResult> =>

@@ -36,6 +36,12 @@ const ResourceSchema = z.object({
    * key matches a live resource reuses it instead of opening another.
    */
   identityKey: z.string().min(1),
+  /**
+   * Shown in Close/Switch results. For an app it's the same name
+   * tool-identity.ts's getMacAppName gives, which is how the ledger and
+   * the untracked, app-name-based path tell they mean the same app.
+   */
+  label: z.string(),
   owners: z.array(OwnerSchema),
   /**
    * True only when this app opened it. Decision 1: something the user
@@ -119,6 +125,7 @@ export function applyBootSession(ledger: Ledger, current: string | null): Ledger
 export interface NewResource {
   kind: string;
   identityKey: string;
+  label: string;
   owner: ResourceOwner;
   createdByApp: boolean;
   handle: Record<string, unknown> | null;
@@ -134,6 +141,7 @@ export function addResource(
     id: randomUUID(),
     kind: input.kind,
     identityKey: input.identityKey,
+    label: input.label,
     owners: [input.owner],
     createdByApp: input.createdByApp,
     handle: input.handle,

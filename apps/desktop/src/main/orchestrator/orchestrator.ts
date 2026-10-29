@@ -6,6 +6,7 @@ import type {
   StepResult,
   SwitchResult,
   WorkspaceConfig,
+  WorkspaceStep,
 } from '@workspace-launcher/shared';
 import { ERROR_CODES } from '@workspace-launcher/shared';
 import { getTool } from '../tools/registry';
@@ -14,6 +15,48 @@ import { getStepTimeoutMs, recordSuccessfulStepDuration } from './step-timing-hi
 import { getMacAppName, isExcludedFromAutoClose } from './tool-identity';
 import { isAppRunning, quitApp, waitForAppRunning } from '../platform/macos/process-control';
 import { isIntentActive, setIntentActive } from './workspace-activity-store';
+import { identityKeyFor } from '../resources/kind-registry';
+import { releaseWorkspace, resourcesOwnedBy } from '../resources/ledger';
+import type { ResourceLedgerStore } from '../resources/ledger-store';
+import { getLedgerStore } from '../resources/runtime';
+import {
+  adoptRunning,
+  isLabelOwned,
+  locks,
+  openTrackedStep,
+  ownsResources,
+  previewStepRemoval,
+  reconcileRemovedSteps,
+  releaseAndClose,
+  removedStepIds,
+  releaseStepForRetry,
+  resolveTrackedSteps,
+  revalidateOwned,
+  workspaceLockKey,
+  type CloseReport,
+  type TrackedStep,
+} from '../resources/tracking';
+
+/*
+ * Two kinds of step live side by side here (WCs/WC__window-tracking.md,
+ * "Phase 2, slice 4 technical plan"):
+ *
+ * - TRACKED steps (their tool declares resources — resources/
+ *   tracking.ts) are opened, reused and closed through the resource
+ *   ledger: per resource, only what this app opened and nothing else
+ *   still claims is ever closed.
+ * - UNTRACKED steps keep the original app-level model: intent (this
+ *   workspace was Restored and not yet Closed) AND liveness (an app it
+ *   needs, by name, is running) — see WCs/WC__workspace-activity.md.
+ *
+ * Neither quits what the other still uses: the untracked path never
+ * quits an app a ledger resource is owned for, and the ledger never
+ * closes an app an active workspace's untracked step uses by name.
+ *
+ * Every public operation holds its workspace's lock for its whole
+ * duration (tracking.ts's `locks`), so Restore/Close/Switch/Retry on
+ * one workspace never interleave.
+ */
 
 export interface RunWorkspaceOptions {
   /** Optional live per-step signal — see restore-progress.ts's own doc
@@ -22,30 +65,59 @@ export interface RunWorkspaceOptions {
    * unit-testable, so the caller (handlers.ts) is what actually wires
    * this into an IPC push, not anything in here. */
   onStepProgress?: (event: RestoreProgressEvent) => void;
+  /**
+   * Every workspace config, for the end-of-run cleanup of resources
+   * claimed by steps since edited out of this one (it has to know what
+   * the other workspaces still use before closing anything). Without
+   * it, that cleanup is skipped — it runs again on the next restore.
+   */
+  allConfigs?: WorkspaceConfig[];
+}
+
+/** A config with its steps split into tracked and untracked ones. */
+interface PartitionedConfig {
+  config: WorkspaceConfig;
+  tracked: TrackedStep[];
+  untracked: WorkspaceStep[];
+}
+
+async function partition(configs: readonly WorkspaceConfig[]): Promise<PartitionedConfig[]> {
+  return Promise.all(
+    configs.map(async (config) => ({ config, ...(await resolveTrackedSteps(config)) })),
+  );
 }
 
 /**
  * Runs every step of a workspace config in order, via whatever tool
- * module is registered for its `type`. Sequencing details beyond plain
- * in-order execution — waiting on a prior step, per-step retry — are
- * Tier 1 feature work (docs/build-shell.md "Orchestrator logic"), not
- * boilerplate. This stub exists to prove the shape end-to-end: look up
- * each step's tool in the registry, validate its params, run it, and
- * fail loudly (never silently) when a tool type isn't registered or
- * params are invalid — per claude.md's no-silent-failure rule.
+ * module is registered for its `type` — tracked steps through the
+ * ledger (reuse what's live, record what's opened), untracked ones
+ * directly. Fails loudly (never silently) when a tool type isn't
+ * registered or params are invalid — per claude.md's no-silent-failure
+ * rule.
  */
 export async function runWorkspace(
   config: WorkspaceConfig,
   options: RunWorkspaceOptions = {},
 ): Promise<StepResult[]> {
+  return locks.withLocks([workspaceLockKey(config.id)], () =>
+    runWorkspaceHoldingLock(config, options),
+  );
+}
+
+async function runWorkspaceHoldingLock(
+  config: WorkspaceConfig,
+  options: RunWorkspaceOptions,
+): Promise<StepResult[]> {
   // Restoring (via this function, whether directly or as Switch's own
-  // open phase) is what "Active" means by definition — see
-  // WCs/WC__workspace-activity.md's "intent AND liveness" rule. Set
-  // unconditionally, regardless of per-step outcomes: liveness still
-  // independently gates the DISPLAYED active state, so setting intent
-  // here can never make a workspace show active unless something it
-  // needs actually ends up running.
+  // open phase) is what "Active" means by definition for untracked
+  // steps — see WCs/WC__workspace-activity.md's "intent AND liveness"
+  // rule. Set unconditionally, regardless of per-step outcomes:
+  // liveness still independently gates the DISPLAYED active state.
   setIntentActive(config.id, true);
+
+  const store = getLedgerStore();
+  const { tracked } = await resolveTrackedSteps(config);
+  const trackedById = new Map(tracked.map((t) => [t.step.id, t]));
 
   const results: StepResult[] = [];
 
@@ -56,7 +128,11 @@ export async function runWorkspace(
       total: config.steps.length,
       status: 'running',
     });
-    const result = await runStep(step, config.id);
+    const trackedStep = trackedById.get(step.id);
+    const result =
+      store && trackedStep
+        ? await openTrackedStep(store, config.id, trackedStep, () => runStep(step, config.id))
+        : await runStep(step, config.id);
     results.push(result);
     options.onStepProgress?.({
       workspaceId: config.id,
@@ -67,22 +143,34 @@ export async function runWorkspace(
     });
   }
 
+  const allConfigs = options.allConfigs;
+  if (store && allConfigs) {
+    const report = await reconcileRemovedSteps(store, config, async () => ({
+      untrackedAppNamesInUse: await untrackedAppNamesInUse(
+        await partition(allConfigs.filter((c) => c.id !== config.id)),
+      ),
+    }));
+    logReport(`cleaning up steps removed from "${config.name}"`, report);
+  }
+
   return results;
 }
 
 /**
  * Re-runs exactly one step by index and returns its fresh result — the
  * orchestrator half of the Detail view's per-failed-step Retry button
- * (handlers.ts's retryWorkspaceStep/workspaces:retryStep). Deliberately
- * has no onStepProgress callback and no focus-session involvement the
- * way runWorkspace has: those exist to keep the user oriented through a
- * multi-step run, which a single retried step — only ever triggered
- * after the whole restore has already finished — doesn't need. Mirrors
- * runStep's own never-throws contract: an out-of-range index is
- * reported as a failed StepResult, not a thrown error, so every caller
- * can treat every outcome of a retry attempt uniformly.
+ * (handlers.ts's retryWorkspaceStep/workspaces:retryStep). A tracked
+ * step first has its own duplicate-prone resources closed (the
+ * motivating bug: Retry opening a second window next to the failed
+ * one), then opens like a Restore. Never throws: an out-of-range index
+ * is a failed StepResult, so every caller can treat every outcome of a
+ * retry attempt uniformly.
  */
-export async function retryStep(config: WorkspaceConfig, stepIndex: number): Promise<StepResult> {
+export async function retryStep(
+  config: WorkspaceConfig,
+  stepIndex: number,
+  allConfigs: WorkspaceConfig[] = [config],
+): Promise<StepResult> {
   const step = config.steps[stepIndex];
   if (!step) {
     return {
@@ -92,17 +180,31 @@ export async function retryStep(config: WorkspaceConfig, stepIndex: number): Pro
       code: ERROR_CODES.RETRY_STEP_NOT_FOUND.code,
     };
   }
-  return runStep(step, config.id);
+  return locks.withLocks([workspaceLockKey(config.id)], async () => {
+    const store = getLedgerStore();
+    const trackedStep = (await resolveTrackedSteps(config)).tracked.find(
+      (t) => t.step.id === step.id,
+    );
+    if (!store || !trackedStep) return runStep(step, config.id);
+
+    const report = await releaseStepForRetry(store, config.id, step.id, {
+      untrackedAppNamesInUse: await untrackedAppNamesInUse(
+        await partition(allConfigs.filter((c) => c.id !== config.id)),
+      ),
+    });
+    logReport(`clearing "${step.type}" before retrying it`, report);
+    return openTrackedStep(store, config.id, trackedStep, () => runStep(step, config.id));
+  });
 }
 
 /**
- * Every distinct macOS app name a config's steps map to (tool-identity.ts),
- * deduplicated — a config with two VS Code steps still contributes
- * "Visual Studio Code" once.
+ * Every distinct macOS app name the given steps map to (tool-identity.ts),
+ * deduplicated — two VS Code steps still contribute "Visual Studio
+ * Code" once.
  */
-function getConfigAppNames(config: WorkspaceConfig): string[] {
+function appNamesOf(steps: readonly WorkspaceStep[]): string[] {
   const names = new Set<string>();
-  for (const step of config.steps) {
+  for (const step of steps) {
     const name = getMacAppName(step.type, step.params);
     if (name) names.add(name);
   }
@@ -110,52 +212,150 @@ function getConfigAppNames(config: WorkspaceConfig): string[] {
 }
 
 /**
- * Checks liveness for every distinct app name across every given
- * config in one batch (deduped, parallelized) — avoids re-checking the
- * same app name once per config/step when several workspaces share it.
+ * The steps that take the app-level path for this config: its
+ * untracked steps, plus — the upgrade case — tracked steps of a
+ * workspace that was made active before tracking existed and so owns
+ * nothing for them. Those get the app-level close one last time
+ * instead of being silently left open.
  */
-export async function buildRunningAppNameMap(
-  configs: WorkspaceConfig[],
-): Promise<Map<string, boolean>> {
-  const distinctNames = new Set<string>();
-  for (const config of configs) {
-    for (const name of getConfigAppNames(config)) {
-      distinctNames.add(name);
-    }
-  }
-  const names = [...distinctNames];
+function appLevelSteps(
+  store: ResourceLedgerStore | null,
+  part: PartitionedConfig,
+): WorkspaceStep[] {
+  if (!store || !isIntentActive(part.config.id)) return part.untracked;
+  const unowned = part.tracked
+    .filter((t) => resourcesOwnedBy(store.get(), part.config.id, t.step.id).length === 0)
+    .map((t) => t.step);
+  return [...part.untracked, ...unowned];
+}
+
+/**
+ * Checks liveness for every distinct app name the given steps map to,
+ * in one batch (deduped, parallelized) — avoids re-checking the same
+ * app name once per config/step when several workspaces share it.
+ */
+async function runningAppNameMap(steps: readonly WorkspaceStep[]): Promise<Map<string, boolean>> {
+  const names = appNamesOf(steps);
   const liveness = await Promise.all(names.map((name) => isAppRunning(name)));
   return new Map(names.map((name, i) => [name, liveness[i]!]));
 }
 
-/** Every app name, across all given configs, that maps from a step
- * type excluded from auto-close (today: only 'chrome'). */
-function getExcludedAppNames(configs: WorkspaceConfig[]): Set<string> {
+/** Every app name that maps from a step type excluded from auto-close (today: only 'chrome'). */
+function excludedAppNames(steps: readonly WorkspaceStep[]): Set<string> {
+  return new Set(appNamesOf(steps.filter((step) => isExcludedFromAutoClose(step.type))));
+}
+
+/**
+ * Active = it owns a ledger resource, OR (app-level steps) it was
+ * explicitly Restored/Switched-to and not yet Closed (intent) AND
+ * something it needs is still running (liveness). Liveness alone can
+ * only turn the app-level half false, never true for a workspace nobody
+ * touched — see WCs/WC__workspace-activity.md for why.
+ */
+function isActive(
+  store: ResourceLedgerStore | null,
+  part: PartitionedConfig,
+  runningAppNames: Map<string, boolean>,
+): boolean {
+  if (store && ownsResources(store, part.config.id)) return true;
+  if (!isIntentActive(part.config.id)) return false;
+  return appNamesOf(appLevelSteps(store, part)).some((name) => runningAppNames.get(name) === true);
+}
+
+/** App names the untracked steps of the given (active) workspaces use. */
+async function untrackedAppNamesInUse(parts: readonly PartitionedConfig[]): Promise<Set<string>> {
+  const store = getLedgerStore();
+  const running = await runningAppNameMap(parts.flatMap((p) => appLevelSteps(store, p)));
   const names = new Set<string>();
-  for (const config of configs) {
-    for (const step of config.steps) {
-      if (!isExcludedFromAutoClose(step.type)) continue;
-      const name = getMacAppName(step.type, step.params);
-      if (name) names.add(name);
-    }
+  for (const part of parts) {
+    if (!isActive(store, part, running)) continue;
+    for (const name of appNamesOf(appLevelSteps(store, part))) names.add(name);
   }
   return names;
 }
 
 /**
- * Active = this workspace was explicitly Restored/Switched-to and not
- * yet Closed (intent), AND something it needs is actually still
- * running (liveness). Liveness alone can only turn this false, never
- * true for a workspace nobody touched — see WCs/WC__workspace-activity.md
- * for why (a shared no-target tool like Spotify would otherwise show
- * every workspace that merely references it as falsely active).
+ * The ids of every currently active workspace — what the sidebar's
+ * "Active" badge shows (handlers.ts's listWorkspaces). Ledger entries
+ * whose resource has provably gone (quit outside this app) are dropped
+ * first, so they stop counting.
  */
-export function isConfigActive(
+export async function getActiveWorkspaceIds(configs: WorkspaceConfig[]): Promise<Set<string>> {
+  const store = getLedgerStore();
+  if (store) await revalidateOwned(store);
+  const parts = await partition(configs);
+  const running = await runningAppNameMap(parts.flatMap((p) => appLevelSteps(store, p)));
+  return new Set(parts.filter((p) => isActive(store, p, running)).map((p) => p.config.id));
+}
+
+/**
+ * "Save current workspace" just saved a workspace from what's running:
+ * everything in it was, by construction, already open — so it's active
+ * (intent), and its tracked steps' running apps are recorded as its
+ * resources, but never as opened by this app (decision 1).
+ */
+export async function markWorkspaceDetectedActive(config: WorkspaceConfig): Promise<void> {
+  setIntentActive(config.id, true);
+  const store = getLedgerStore();
+  if (!store) return;
+  await locks.withLocks([workspaceLockKey(config.id)], async () => {
+    await adoptRunning(store, config.id, (await resolveTrackedSteps(config)).tracked);
+  });
+}
+
+/**
+ * The apps removing `stepId` from this workspace would close — see
+ * tracking.ts's previewStepRemoval. Empty with tracking off.
+ */
+export async function previewWorkspaceStepRemoval(
   config: WorkspaceConfig,
-  runningAppNames: Map<string, boolean>,
-): boolean {
-  if (!isIntentActive(config.id)) return false;
-  return getConfigAppNames(config).some((name) => runningAppNames.get(name) === true);
+  stepId: string,
+  allConfigs: WorkspaceConfig[],
+): Promise<string[]> {
+  const store = getLedgerStore();
+  if (!store) return [];
+  return locks.withLocks([workspaceLockKey(config.id)], async () =>
+    previewStepRemoval(store, config.id, stepId, {
+      untrackedAppNamesInUse: await untrackedAppNamesInUse(
+        await partition(allConfigs.filter((c) => c.id !== config.id)),
+      ),
+    }),
+  );
+}
+
+/**
+ * Right after steps were removed from a saved workspace: releases
+ * their claims, so the workspace no longer owns (and isn't kept active
+ * by) anything for them. With `close` — the user just confirmed it —
+ * also closes what that leaves ownerless and ours, the same cleanup a
+ * restore would do later. Without it nothing is closed, even if
+ * something became ownerless since the confirmation was decided.
+ */
+export async function closeRemovedSteps(
+  config: WorkspaceConfig,
+  allConfigs: WorkspaceConfig[],
+  close: boolean,
+): Promise<CloseResult> {
+  const store = getLedgerStore();
+  if (!store) return { closed: [], leftOpen: [] };
+  return locks.withLocks([workspaceLockKey(config.id)], async () => {
+    if (!close) {
+      const removed = removedStepIds(store, config);
+      store.update((ledger) => releaseWorkspace(ledger, config.id, removed));
+      return { closed: [], leftOpen: [] };
+    }
+    const report = await reconcileRemovedSteps(store, config, async () => ({
+      untrackedAppNamesInUse: await untrackedAppNamesInUse(
+        await partition(allConfigs.filter((c) => c.id !== config.id)),
+      ),
+    }));
+    return { closed: report.closed, leftOpen: report.leftOpen };
+  });
+}
+
+/** A deleted workspace owns nothing from then on; deleting never closes anything. */
+export function releaseDeletedWorkspace(workspaceId: string): void {
+  getLedgerStore()?.update((ledger) => releaseWorkspace(ledger, workspaceId));
 }
 
 /**
@@ -192,153 +392,223 @@ async function teardownDockerStepIfEnabled(
 }
 
 /**
- * Full context change: closes whatever's running that another
- * currently-ACTIVE workspace opened (never just because some config
- * happens to mention a matching app name) and that this target doesn't
- * need, then runs the target's own steps unchanged. `open -a` is already
- * idempotent for anything already running, so the "open" half needs
- * no new logic at all.
+ * Full context change: closes whatever another currently-ACTIVE
+ * workspace opened that this target doesn't need, then restores the
+ * target.
  *
- * The "currently running" set is intentionally NOT "every app name in
- * every known config" — that would mean a real app you have open for
- * unrelated work gets closed just because an unrelated (possibly
- * never-restored) workspace's config happens to reference the same
- * app name. Only an app belonging to a workspace this app itself has
- * actually made active (intent + liveness) is ever a candidate.
+ * Tracked: every other workspace's claims are released; whatever that
+ * leaves ownerless is closed, except resources the target is about to
+ * reuse (same identity) — those transfer to it instead of being closed
+ * and reopened.
+ *
+ * App-level: the "currently running" set is intentionally NOT "every
+ * app name in every known config" — only an app belonging to a
+ * workspace this app itself made active is ever a candidate, so a real
+ * app you have open for unrelated work is never closed just because
+ * some config mentions the same name.
  */
 export async function switchToWorkspace(
   target: WorkspaceConfig,
   allConfigs: WorkspaceConfig[],
 ): Promise<SwitchResult> {
-  const targetAppNames = new Set(getConfigAppNames(target));
-  const runningAppNames = await buildRunningAppNameMap(allConfigs);
-  const excludedAppNames = getExcludedAppNames(allConfigs);
+  return locks.withLocks([workspaceLockKey(target.id)], async () => {
+    const store = getLedgerStore();
+    const parts = await partition(allConfigs);
+    const targetPart =
+      parts.find((p) => p.config.id === target.id) ?? (await partition([target]))[0]!;
+    const others = parts.filter((p) => p.config.id !== target.id);
 
-  const candidateAppNames = new Set<string>();
-  for (const other of allConfigs) {
-    if (other.id === target.id) continue;
-    if (!isConfigActive(other, runningAppNames)) continue;
-    for (const name of getConfigAppNames(other)) {
-      candidateAppNames.add(name);
-    }
-  }
+    const targetSpecs = targetPart.tracked.flatMap((t) => t.specs);
+    const targetAppNames = new Set([
+      ...appNamesOf(targetPart.untracked),
+      ...targetSpecs.map((spec) => spec.label),
+    ]);
+    const runningAppNames = await runningAppNameMap(parts.flatMap((p) => appLevelSteps(store, p)));
+    // Decided before anything is released: owning resources is part of
+    // what "active" means.
+    const activeOthers = others.filter((p) => isActive(store, p, runningAppNames));
 
-  const closed: string[] = [];
-  const leftOpen: LeftOpenEntry[] = [];
-  const failedAppNames = new Set<string>();
+    const closed: string[] = [];
+    const leftOpen: LeftOpenEntry[] = [];
+    const failedWorkspaceIds = new Set<string>();
 
-  for (const [appName, running] of runningAppNames) {
-    if (!running || targetAppNames.has(appName)) continue;
-    if (!candidateAppNames.has(appName)) continue;
-    if (excludedAppNames.has(appName)) {
-      leftOpen.push({ appName, reason: 'excluded' });
-      continue;
-    }
-    const result = await quitApp(appName);
-    if (result.success) {
-      closed.push(appName);
-    } else {
-      console.error(`Failed to quit "${appName}" while switching workspaces: ${result.message}`);
-      failedAppNames.add(appName);
-      leftOpen.push({ appName, reason: 'failed', detail: result.message });
-    }
-  }
-
-  // Full context change — but never claim another workspace went
-  // inactive if something it needed failed to actually quit (app or
-  // Docker); leave its intent untouched so liveness keeps reflecting
-  // reality for it.
-  for (const other of allConfigs) {
-    if (other.id === target.id) continue;
-    const hasUnresolvedFailure = getConfigAppNames(other).some((name) => failedAppNames.has(name));
-    let dockerOk = true;
-    // Intent alone, NOT isConfigActive — a Docker step has no macOS app
-    // name (getMacAppName returns undefined for it), so a workspace
-    // made up only of Docker steps can never satisfy isConfigActive's
-    // liveness half regardless of whether its containers are actually
-    // running. Intent (was this config explicitly Restored/Switched-to
-    // and not yet Closed) is the correct, and only available, signal
-    // for "does this config's own Docker teardown need to run."
-    if (!hasUnresolvedFailure && isIntentActive(other.id)) {
-      for (const step of other.steps) {
-        const ok = await teardownDockerStepIfEnabled(step, closed, leftOpen);
-        if (!ok) dockerOk = false;
+    if (store) {
+      const keepIdentityKeys = new Set(targetSpecs.map((spec) => identityKeyFor(spec)));
+      for (const other of others) {
+        const report = await releaseAndClose(store, other.config.id, {
+          untrackedAppNamesInUse: targetAppNames,
+          keepIdentityKeys,
+        });
+        mergeReport(report, closed, leftOpen);
+        if (report.hadFailure) failedWorkspaceIds.add(other.config.id);
       }
     }
-    if (!hasUnresolvedFailure && dockerOk) {
-      setIntentActive(other.id, false);
+
+    const candidateAppNames = new Set(
+      activeOthers.flatMap((p) => appNamesOf(appLevelSteps(store, p))),
+    );
+    const excluded = excludedAppNames(parts.flatMap((p) => appLevelSteps(store, p)));
+    const failedAppNames = new Set<string>();
+
+    for (const [appName, running] of runningAppNames) {
+      if (!running || targetAppNames.has(appName)) continue;
+      if (!candidateAppNames.has(appName)) continue;
+      if (excluded.has(appName)) {
+        leftOpen.push({ appName, reason: 'excluded' });
+        continue;
+      }
+      if (store && isLabelOwned(store, appName)) {
+        leftOpen.push({ appName, reason: 'still-used' });
+        continue;
+      }
+      const result = await quitApp(appName);
+      if (result.success) {
+        closed.push(appName);
+      } else {
+        console.error(`Failed to quit "${appName}" while switching workspaces: ${result.message}`);
+        failedAppNames.add(appName);
+        leftOpen.push({ appName, reason: 'failed', detail: result.message });
+      }
     }
-  }
 
-  // runWorkspace itself sets the target's own intent — no separate call
-  // needed here.
-  const stepResults = await runWorkspace(target);
+    // Full context change — but never claim another workspace went
+    // inactive if something it needed failed to actually close (app,
+    // tracked resource or Docker); leave its intent untouched so
+    // liveness keeps reflecting reality for it.
+    for (const other of others) {
+      const hasUnresolvedFailure =
+        failedWorkspaceIds.has(other.config.id) ||
+        appNamesOf(appLevelSteps(store, other)).some((name) => failedAppNames.has(name));
+      let dockerOk = true;
+      // Intent alone, NOT isActive — a Docker step has no macOS app
+      // name (getMacAppName returns undefined for it), so a workspace
+      // made up only of Docker steps can never satisfy the liveness
+      // half regardless of whether its containers are actually
+      // running. Intent is the correct, and only available, signal for
+      // "does this config's own Docker teardown need to run."
+      if (!hasUnresolvedFailure && isIntentActive(other.config.id)) {
+        for (const step of other.config.steps) {
+          const ok = await teardownDockerStepIfEnabled(step, closed, leftOpen);
+          if (!ok) dockerOk = false;
+        }
+      }
+      if (!hasUnresolvedFailure && dockerOk) {
+        setIntentActive(other.config.id, false);
+      }
+    }
 
-  return { stepResults, closed, leftOpen };
+    // runWorkspaceHoldingLock sets the target's own intent and reuses
+    // the transferred resources, adding the target as their owner.
+    const stepResults = await runWorkspaceHoldingLock(target, { allConfigs });
+
+    return { stepResults, closed, leftOpen };
+  });
 }
 
 /**
- * Closes only this workspace's own apps — never opens anything, never
- * touches another workspace. Skips anything excluded (Chrome) or still
- * needed by another currently-active workspace.
+ * Closes only this workspace's own apps and resources — never opens
+ * anything, never touches another workspace. Tracked: releases its
+ * claims and closes what that leaves ownerless and this app opened.
+ * App-level: skips anything excluded (Chrome) or still needed by
+ * another currently-active workspace.
  */
 export async function closeWorkspace(
   target: WorkspaceConfig,
   allConfigs: WorkspaceConfig[],
 ): Promise<CloseResult> {
-  const others = allConfigs.filter((c) => c.id !== target.id);
-  const runningAppNames = await buildRunningAppNameMap(allConfigs);
+  return locks.withLocks([workspaceLockKey(target.id)], async () => {
+    const store = getLedgerStore();
+    const parts = await partition(allConfigs);
+    const targetPart =
+      parts.find((p) => p.config.id === target.id) ?? (await partition([target]))[0]!;
+    const others = parts.filter((p) => p.config.id !== target.id);
+    // Worked out before releasing anything, while the target's own
+    // claims still decide which of its steps take the app-level path.
+    const targetAppLevelSteps = appLevelSteps(store, targetPart);
+    const runningAppNames = await runningAppNameMap([
+      ...targetAppLevelSteps,
+      ...others.flatMap((p) => appLevelSteps(store, p)),
+    ]);
 
-  const otherNeeds = new Set<string>();
-  for (const other of others) {
-    if (!isConfigActive(other, runningAppNames)) continue;
-    for (const name of getConfigAppNames(other)) {
-      otherNeeds.add(name);
+    const otherNeeds = new Set<string>();
+    for (const other of others) {
+      if (!isActive(store, other, runningAppNames)) continue;
+      for (const name of appNamesOf(appLevelSteps(store, other))) {
+        otherNeeds.add(name);
+      }
+    }
+
+    const closed: string[] = [];
+    const leftOpen: LeftOpenEntry[] = [];
+    let hadFailure = false;
+
+    if (store) {
+      const report = await releaseAndClose(store, target.id, {
+        untrackedAppNamesInUse: otherNeeds,
+        reportStillClaimed: true,
+      });
+      // Ledger owners are workspace ids; the result shows their names.
+      const nameOf = new Map(allConfigs.map((c) => [c.id, c.name]));
+      for (const entry of report.leftOpen) {
+        if (entry.usedBy) entry.usedBy = entry.usedBy.map((id) => nameOf.get(id) ?? id);
+      }
+      mergeReport(report, closed, leftOpen);
+      hadFailure = report.hadFailure;
+    }
+
+    for (const step of targetAppLevelSteps) {
+      if (step.type === 'docker') {
+        const ok = await teardownDockerStepIfEnabled(step, closed, leftOpen);
+        if (!ok) hadFailure = true;
+        continue;
+      }
+      const appName = getMacAppName(step.type, step.params);
+      if (!appName) continue;
+      // Liveness first: an app that was never running shouldn't produce
+      // a "left running" report at all, excluded/still-used or not.
+      if (runningAppNames.get(appName) !== true) continue;
+      if (isExcludedFromAutoClose(step.type)) {
+        leftOpen.push({ appName, reason: 'excluded' });
+        continue;
+      }
+      if (otherNeeds.has(appName) || (store && isLabelOwned(store, appName))) {
+        leftOpen.push({ appName, reason: 'still-used' });
+        continue;
+      }
+      const result = await quitApp(appName);
+      if (result.success) {
+        closed.push(appName);
+      } else {
+        console.error(
+          `Failed to quit "${appName}" while closing workspace "${target.id}": ${result.message}`,
+        );
+        hadFailure = true;
+        leftOpen.push({ appName, reason: 'failed', detail: result.message });
+      }
+    }
+
+    // Never claim this workspace is inactive if something it needed
+    // failed to actually close — liveness would otherwise be overridden
+    // by a false "not active" the next time it's checked.
+    if (!hadFailure) {
+      setIntentActive(target.id, false);
+    }
+    return { closed, leftOpen };
+  });
+}
+
+function mergeReport(report: CloseReport, closed: string[], leftOpen: LeftOpenEntry[]): void {
+  closed.push(...report.closed);
+  leftOpen.push(...report.leftOpen);
+}
+
+/** Housekeeping closes (reconcile, retry) have no result screen — failures are logged. */
+function logReport(context: string, report: CloseReport): void {
+  for (const entry of report.leftOpen) {
+    if (entry.reason === 'failed' || entry.reason === 'needs-permission') {
+      console.error(`While ${context}: couldn't close ${entry.appName}: ${entry.detail ?? ''}`);
     }
   }
-
-  const closed: string[] = [];
-  const leftOpen: LeftOpenEntry[] = [];
-  let hadFailure = false;
-
-  for (const step of target.steps) {
-    if (step.type === 'docker') {
-      const ok = await teardownDockerStepIfEnabled(step, closed, leftOpen);
-      if (!ok) hadFailure = true;
-      continue;
-    }
-    const appName = getMacAppName(step.type, step.params);
-    if (!appName) continue;
-    // Liveness first: an app that was never running shouldn't produce
-    // a "left running" report at all, excluded/still-used or not.
-    if (runningAppNames.get(appName) !== true) continue;
-    if (isExcludedFromAutoClose(step.type)) {
-      leftOpen.push({ appName, reason: 'excluded' });
-      continue;
-    }
-    if (otherNeeds.has(appName)) {
-      leftOpen.push({ appName, reason: 'still-used' });
-      continue;
-    }
-    const result = await quitApp(appName);
-    if (result.success) {
-      closed.push(appName);
-    } else {
-      console.error(
-        `Failed to quit "${appName}" while closing workspace "${target.id}": ${result.message}`,
-      );
-      hadFailure = true;
-      leftOpen.push({ appName, reason: 'failed', detail: result.message });
-    }
-  }
-
-  // Never claim this workspace is inactive if something it needed
-  // failed to actually quit — liveness would otherwise be overridden
-  // by a false "not active" the next time it's checked.
-  if (!hadFailure) {
-    setIntentActive(target.id, false);
-  }
-  return { closed, leftOpen };
 }
 
 /**

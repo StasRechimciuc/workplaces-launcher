@@ -44,6 +44,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
+import { RemoveStepConfirm } from './RemoveStepConfirm';
+import { withStepIdsOf } from '../lib/workspace-duplicate';
 
 interface WorkspaceFormModalProps {
   open: boolean;
@@ -269,6 +271,13 @@ export function WorkspaceFormModal({
     stepKey?: number;
     fieldErrors?: Record<string, string>;
   } | null>(null);
+  // The remove-step confirmation (RemoveStepConfirm), and whether a
+  // confirmed removal should close its app once the form is saved.
+  const [pendingRemoval, setPendingRemoval] = useState<{
+    key: number;
+    closes: string[];
+  } | null>(null);
+  const [closeRemovedOnSave, setCloseRemovedOnSave] = useState(false);
   // Which rows show their fields expanded, keyed by CreateStepDraft.key
   // (stable across reorders/removals, unlike an array index). Collapsed
   // by default — both fresh defaults and an existing workspace's saved
@@ -385,6 +394,8 @@ export function WorkspaceFormModal({
     setOpenKeys(new Set());
     setSaveError(null);
     setIsSaving(false);
+    setPendingRemoval(null);
+    setCloseRemovedOnSave(false);
     resetAppPathDetections();
     resetProjectFilesDetection();
   }, [resetAppPathDetections, resetProjectFilesDetection]);
@@ -454,6 +465,40 @@ export function WorkspaceFormModal({
     pendingFocusKeyRef.current = null;
     inputRefs.current.get(key)?.focus();
   }, [createSteps]);
+
+  /**
+   * A row's ✕. Removing a saved step whose app this workspace opened and
+   * nothing else uses would close that app, so that's confirmed first
+   * (RemoveStepConfirm) — same rule as the Detail view's inline remove.
+   * The close itself only happens on Save; cancelling the form undoes
+   * everything.
+   */
+  async function requestRemoveTool(key: number): Promise<void> {
+    const draft = createSteps.find((s) => s.key === key);
+    if (!editingWorkspace || draft?.id === undefined) {
+      removeTool(key);
+      return;
+    }
+    const stepId = draft.id;
+    let closes: string[];
+    try {
+      closes = await window.api.previewStepRemoval(editingWorkspace.id, stepId);
+    } catch (err) {
+      if (isMountedRef.current) {
+        setSaveError({
+          message: err instanceof Error ? err.message : String(err),
+          code: ERROR_CODES.SYSTEM_UNEXPECTED.code,
+        });
+      }
+      return;
+    }
+    if (!isMountedRef.current) return;
+    if (closes.length === 0) {
+      removeTool(key);
+      return;
+    }
+    setPendingRemoval({ key, closes });
+  }
 
   function removeTool(key: number): void {
     setCreateSteps((steps) => steps.filter((s) => s.key !== key));
@@ -566,6 +611,9 @@ export function WorkspaceFormModal({
         applySaveFailure(result);
         return;
       }
+      if (editingWorkspace) {
+        await releaseRemovedSteps(editingWorkspace.id, closeRemovedOnSave);
+      }
       onSaved(result.config);
       closeAndReset();
     } catch (err) {
@@ -582,6 +630,22 @@ export function WorkspaceFormModal({
     }
   }
 
+  /**
+   * After a successful save: removed steps drop their claims, and with
+   * `close` (a removal was confirmed) what they left behind is closed.
+   * The workspace is already saved by then, so a failure here is logged
+   * rather than shown as a save failure.
+   */
+  async function releaseRemovedSteps(workspaceId: string, close: boolean): Promise<void> {
+    try {
+      await window.api.closeRemovedSteps(workspaceId, close);
+    } catch (err) {
+      console.error(
+        `Couldn't release removed steps: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
   /** The duplicate banner's offered alternative — see
    * SaveCurrentWorkspaceModal's identical handleUpdateExisting for the
    * full reasoning. Only reachable in create mode (duplicateOf is
@@ -591,7 +655,12 @@ export function WorkspaceFormModal({
     setIsSaving(true);
     setSaveError(null);
     try {
-      const result = await window.api.updateWorkspace({ id: duplicateOf.id, name, steps });
+      // Keeps the duplicate's step ids — see withStepIdsOf.
+      const result = await window.api.updateWorkspace({
+        id: duplicateOf.id,
+        name,
+        steps: withStepIdsOf(steps, duplicateOf.tools),
+      });
       if (!isMountedRef.current) return;
       if (!result.success) {
         applySaveFailure(result);
@@ -803,7 +872,7 @@ export function WorkspaceFormModal({
                           className="flex h-5.5 w-5.5 shrink-0 cursor-pointer items-center justify-center rounded-[5px] text-text-faint hover:bg-bg-active hover:text-text"
                           onClick={(e) => {
                             e.stopPropagation();
-                            removeTool(key);
+                            void requestRemoveTool(key);
                           }}
                         >
                           <Icon name="x" size={13} />
@@ -1023,6 +1092,19 @@ export function WorkspaceFormModal({
                   : 'Save workspace'}
           </button>
         </DialogFooter>
+        <RemoveStepConfirm
+          pending={pendingRemoval}
+          onCancel={() => {
+            setPendingRemoval(null);
+          }}
+          onConfirm={() => {
+            if (pendingRemoval) {
+              removeTool(pendingRemoval.key);
+              setCloseRemovedOnSave(true);
+            }
+            setPendingRemoval(null);
+          }}
+        />
       </DialogContent>
     </Dialog>
   );

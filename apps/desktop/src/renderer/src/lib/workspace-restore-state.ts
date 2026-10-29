@@ -14,14 +14,12 @@ import { getRestoreResultCounts } from './restore-result-treatment';
  * useful (it describes a machine state — Docker up, terminals running
  * — that's almost certainly no longer true by the next launch).
  *
- * `toolTypesAtRestore` is a parallel snapshot of `tool.type` for every
- * step, taken at the moment `restoreResults` was recorded — it lets a
- * later render detect "the step now at this index isn't the one this
- * result was actually about" (removed/reordered since), not just "the
- * array got longer." Doesn't catch two same-type steps swapped in
- * order — that would need a stable per-step id, which the schema
- * doesn't have (confirmed: `WorkspaceStepSchema` is just `{type,
- * params}`, no id) — an accepted, documented gap, not a silent one.
+ * `stepIdsAtRestore` is a parallel snapshot of each step's stable id
+ * (WorkspaceStep.id), taken when `restoreResults` was recorded — so a
+ * result is always shown against the step it was actually about, even
+ * after steps were added, removed or reordered since. A step added
+ * after the restore has no result; a removed step's result is dropped
+ * (see resultsForSteps).
  */
 export interface WorkspaceRestoreState {
   isRestoring: boolean;
@@ -29,7 +27,7 @@ export interface WorkspaceRestoreState {
   isClosing: boolean;
   restoreResults: StepResult[] | null;
   restoredAt: number | null;
-  toolTypesAtRestore: string[] | null;
+  stepIdsAtRestore: string[] | null;
   activityLog: { closed: string[]; leftOpen: LeftOpenEntry[] } | null;
   retryingIndex: number | null;
 }
@@ -44,7 +42,7 @@ export const DEFAULT_RESTORE_STATE: WorkspaceRestoreState = {
   isClosing: false,
   restoreResults: null,
   restoredAt: null,
-  toolTypesAtRestore: null,
+  stepIdsAtRestore: null,
   activityLog: null,
   retryingIndex: null,
 };
@@ -75,4 +73,23 @@ export function getWorkspaceRestoreOutcome(
   if (failureCount > 0) return 'failed';
   if (successCount > 0) return 'success';
   return 'none';
+}
+
+/**
+ * Each of the workspace's CURRENT steps paired with its result from the
+ * last restore, by step id — steps without one (added since) are left
+ * out, as are results for steps removed since. What the overview strip
+ * and its counts show, so a deleted step never leaves a stray bar.
+ */
+export function resultsForSteps<T extends { id: string }>(
+  state: Pick<WorkspaceRestoreState, 'restoreResults' | 'stepIdsAtRestore'>,
+  steps: readonly T[],
+): { step: T; result: StepResult; index: number }[] {
+  const { restoreResults, stepIdsAtRestore } = state;
+  if (!restoreResults || !stepIdsAtRestore) return [];
+  return steps.flatMap((step) => {
+    const index = stepIdsAtRestore.indexOf(step.id);
+    const result = index === -1 ? undefined : restoreResults[index];
+    return result ? [{ step, result, index }] : [];
+  });
 }

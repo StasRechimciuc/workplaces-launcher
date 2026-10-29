@@ -110,6 +110,19 @@ export function createAppKind(
       };
     },
 
+    async reconcileOpening(identity, since) {
+      const bundleId = bundleIdOf(identity);
+      if (!bundleId) return { found: false, reason: 'Not an app identity (no bundle id).' };
+      const running = await instances(bundleId);
+      if (!running.ok) return { found: false, reason: running.reason };
+      // Started after the record was written: the open it recorded is
+      // what started it. Anything older was already running — not ours.
+      const app = running.apps.find((a) => a.startedAt !== null && a.startedAt >= since);
+      return app
+        ? { found: true, handle: toHandle(bundleId, app), preexisting: false }
+        : { found: false, reason: `No ${bundleId} instance started after the open was recorded.` };
+    },
+
     async findLive(identity) {
       const bundleId = bundleIdOf(identity);
       if (!bundleId) return null;

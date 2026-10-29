@@ -427,6 +427,100 @@ Known limitations: background Terminal tabs can't be closed, only their
 processes stopped (T); no Windows/Linux; the VS Code extension still
 isn't bundled/installed by the app.
 
+## Phase 2, slice 4 technical plan: orchestrator on the ledger (2026-10-30)
+
+Written from a read of `orchestrator.ts`, `ipc/handlers.ts`,
+`hotkey-service.ts`, `workspace-detection.ts` and `Detail.tsx`'s
+close-result display.
+
+**Tracked vs untracked steps.** A step is _tracked_ when its tool
+declares resources and every spec resolves (today: Spotify, Clockify,
+App, File/Link-with-app, all with a saved `.app` path). Every other
+step — VS Code, Chrome, Terminal, Docker, steps saved without a path
+— stays _untracked_ and keeps today's app-level logic until its own
+kind lands. Both live side by side in one Restore/Close/Switch.
+
+**Coexistence rule (no cross-quitting).** An app kind's spec label is
+the same app name `getMacAppName` returns, so the two worlds can see
+each other: the legacy path never quits an app that has a ledger
+resource with owners; the ledger never closes an app resource whose
+name an active workspace's untracked step still uses
+(`still-used`).
+
+**"Active".** Owns a ledger resource, OR (untracked steps only)
+today's intent + liveness. The intent flag stays for untracked steps
+and is retired in the upgrade slice once every kind is tracked.
+`listWorkspaces` revalidates owned resources (`check`): `gone` is
+removed, `unknown` is kept.
+
+**Startup.** In `whenReady`, before IPC registration: read
+`kern.bootsessionuuid`, load the ledger, register the app kind,
+reconcile `opening` records (new optional kind method
+`reconcileOpening(identity, since)` — app kind: an instance whose
+process started after the record was written is ours, else the record
+is dropped), drop owners of workspaces that no longer exist. A ledger
+that fails to load → every step runs untracked, with the error logged.
+
+**Restore, per tracked step** (under its identity locks):
+
+1. Write-ahead: for each spec without a live resource, add an
+   `opening` record owned by (workspace, step); snapshot.
+2. All specs live and the kind isn't idempotent → skip the run, add
+   ownership. Otherwise run the step (unchanged `runStep`).
+3. Capture each opening spec — even when the step failed or timed out
+   (Retry needs exactly those): found → `open` + handle, `createdByApp
+= !preexisting`; not found → record removed, reason logged.
+4. A spec already live → add the owner; a pre-existing user-opened
+   instance (`findLive`) is recorded `createdByApp: false`.
+   End of run: release (and close if ours and ownerless) resources owned
+   by this workspace whose step id is no longer in its config — an edit
+   never orphans anything.
+
+**Close X.** Release X's claims; for each resource left ownerless:
+not ours → `not-ours`, still used by an untracked step elsewhere →
+`still-used`, else the kind's `close` (`closed` / `kept-running` /
+`needs-permission` / `failed`); closed or already gone → removed from
+the ledger; anything that couldn't close stays (ownerless, so it no
+longer makes X active). Untracked steps: today's logic. Upgrade case:
+a tracked step of an intent-active workspace with no ledger entry
+goes through today's app-level close one last time.
+
+**Switch to Y.** Y's specs → identity keys. Release every other
+workspace's claims; close ownerless resources except those Y needs
+(those are reused, so they transfer to Y); untracked: today's logic.
+Then Restore Y.
+
+**Retry a step.** Same lock + busy wrapper as Restore (today it has
+neither). Close the step's own resources of non-idempotent kinds,
+then run it as in Restore. Apps are idempotent, so retrying an app
+step never quits the app — the terminal fix arrives with its kind.
+
+**Delete.** Releases the workspace's claims; never closes anything.
+**Save current workspace (`markWorkspaceActive`).** For tracked
+steps, `findLive` each spec and record it owned, `createdByApp: false`.
+
+**Locks** (`lib/keyed-lock.ts`, a promise-chain mutex per key): one
+per workspace around Restore / Close / Switch (the target) / Retry,
+then the step's identity keys in sorted order — that covers both the
+per-identity and per-app (an app's identity is its bundle id) locks,
+and a fixed order rules out deadlock. Switch releases other
+workspaces' claims under identity locks only, never their workspace
+locks. `withOrchestratorBusy` and the hotkey `inFlight` set stay.
+
+**Results.** `LeftOpenEntry.reason` gains `not-ours`, `kept-running`,
+`needs-permission` (plus the plan's `user-took-over` / `modified`,
+used by the terminal and Chrome kinds later). `Detail.tsx` gets a
+message per reason.
+
+**Tests.** Orchestrator: reuse vs create, preexisting = not ours,
+failed step still captured, skip-when-live for a non-idempotent fake
+kind, reconcile after edit, close matrix (ours / not-ours /
+still-used by ledger owner / still-used by untracked step /
+kept-running / failed), switch transfer, retry closing only
+non-idempotent resources, the upgrade fallback, ledger-unavailable
+fallback. Keyed lock: serialization, order, release on throw. Startup
+reconcile of `opening` records.
+
 ## Status
 
 Idea approved, research + spike done, Stage 2 plan approved
@@ -463,5 +557,25 @@ reset with `tccutil reset Accessibility com.workspacelauncher.app`.
 
 tccd's own log confirmed finding C in the real Electron app: the
 helper's checks are attributed to `com.workspacelauncher.app`.
+
+Open UX question (founder, 2026-10-29, slice 4 hand-check): Close
+leaving an app the user had opened themselves running ("Left ProtonVPN
+running (it was already open before this workspace)") follows
+decision 1 but may not feel intuitive — revisit before release.
+
+Follow-up after window tracking is finished (founder, 2026-10-29):
+redesign the Detail view after Close / Switch. Today it stacks the
+close report ("Closed Figma.", "Left ProtonVPN running (still used by
+Proton).") as banner rows above the stale "Restored — 2 of 3" result
+and the "Runs in order on restore" list, which reads as if nothing
+changed. Decide what a closed/switched workspace shows instead — run
+it through /judge.
+
+Follow-up after window tracking (founder, 2026-10-29): adding a step
+takes too many clicks (⋯ → Edit → Add tool → App → Choose app). Idea:
+an "+ Add step" button at the end of the Detail view's step list —
+pick a tool, and for App open the macOS app picker straight away (~2
+clicks, no Edit form). Do it together with the Close/Switch view
+redesign above, through /judge.
 
 Next: phase 2.

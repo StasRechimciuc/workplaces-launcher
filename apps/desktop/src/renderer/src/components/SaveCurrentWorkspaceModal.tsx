@@ -30,6 +30,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from './ui/dialog';
+import { withStepIdsOf } from '../lib/workspace-duplicate';
 
 interface SaveCurrentWorkspaceModalProps {
   open: boolean;
@@ -267,10 +268,11 @@ export function SaveCurrentWorkspaceModal({
     setPhase('saving');
     setSaveError(null);
     try {
+      // Keeps the duplicate's step ids — see withStepIdsOf.
       const result: UpdateWorkspaceResult = await window.api.updateWorkspace({
         id: duplicateOf.id,
         name,
-        steps,
+        steps: withStepIdsOf(steps, duplicateOf.tools),
       });
       if (!isMountedRef.current) return;
       if (!result.success) {

@@ -72,3 +72,20 @@ export function findDuplicateWorkspace(
     return stepsEqual(wsSteps, candidate.steps);
   });
 }
+
+/**
+ * `steps` with the step ids of `existing` — for overwriting a duplicate
+ * found by findDuplicateWorkspace, whose steps are by definition the
+ * same ones in the same order. Keeping the ids matters: fresh ones
+ * would make every step look removed to resource tracking, and the
+ * next restore would close their apps.
+ */
+export function withStepIdsOf(
+  steps: readonly WorkspaceStepInput[],
+  existing: readonly { id: string }[],
+): WorkspaceStepInput[] {
+  return steps.map((step, i) => {
+    const id = existing[i]?.id;
+    return id === undefined ? step : { ...step, id };
+  });
+}

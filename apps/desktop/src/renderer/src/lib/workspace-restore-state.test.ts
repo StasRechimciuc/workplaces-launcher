@@ -4,6 +4,7 @@ import {
   DEFAULT_RESTORE_STATE,
   getWorkspaceRestoreOutcome,
   type WorkspaceRestoreState,
+  resultsForSteps,
 } from './workspace-restore-state';
 
 function withResults(results: WorkspaceRestoreState['restoreResults']): WorkspaceRestoreState {
@@ -69,5 +70,40 @@ describe('getWorkspaceRestoreOutcome', () => {
 
   it('(regression) returns "none" for an empty results array, not "success"', () => {
     expect(getWorkspaceRestoreOutcome(withResults([]))).toBe('none');
+  });
+});
+
+describe('resultsForSteps', () => {
+  const ok = (message: string) => ({ success: true, message, durationMs: 1 });
+  const state = {
+    restoreResults: [ok('a'), ok('b'), ok('c')],
+    stepIdsAtRestore: ['a', 'b', 'c'],
+  };
+
+  it('pairs each current step with its own result', () => {
+    const steps = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+    expect(resultsForSteps(state, steps).map((r) => r.result.message)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('drops a removed step’s result instead of leaving a stray entry', () => {
+    const steps = [{ id: 'a' }, { id: 'c' }];
+    expect(resultsForSteps(state, steps).map((r) => [r.step.id, r.result.message])).toEqual([
+      ['a', 'a'],
+      ['c', 'c'],
+    ]);
+  });
+
+  it('follows a reordered step, and leaves a newly added one without a result', () => {
+    const steps = [{ id: 'c' }, { id: 'new' }, { id: 'a' }];
+    expect(resultsForSteps(state, steps).map((r) => [r.step.id, r.result.message])).toEqual([
+      ['c', 'c'],
+      ['a', 'a'],
+    ]);
+  });
+
+  it('is empty with no restore yet', () => {
+    expect(
+      resultsForSteps({ restoreResults: null, stepIdsAtRestore: null }, [{ id: 'a' }]),
+    ).toEqual([]);
   });
 });

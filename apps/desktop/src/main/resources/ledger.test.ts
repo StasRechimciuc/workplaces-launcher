@@ -25,6 +25,7 @@ function newResource(overrides: Partial<NewResource> = {}): NewResource {
   return {
     kind: 'app',
     identityKey: '{"bundleId":"com.spotify.client"}',
+    label: 'Spotify',
     owner: A1,
     createdByApp: true,
     handle: { pid: 123 },

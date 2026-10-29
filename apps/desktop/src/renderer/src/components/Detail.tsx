@@ -1,5 +1,10 @@
 import { useMemo, useState } from 'react';
-import type { RestoreProgressEvent, StepResult, WorkspaceConfig } from '@workspace-launcher/shared';
+import type {
+  LeftOpenEntry,
+  RestoreProgressEvent,
+  StepResult,
+  WorkspaceConfig,
+} from '@workspace-launcher/shared';
 import { ERROR_CODES, isToolAppKey } from '@workspace-launcher/shared';
 import type { WorkspaceDisplay } from '../../../preload';
 import { Icon } from '../icons';
@@ -13,9 +18,10 @@ import { useSpotifyConnection } from '../lib/useSpotifyConnection';
 import { useAppPathDetections } from '../lib/useAppPathDetections';
 import { useProjectFilesDetection } from '../lib/useProjectFilesDetection';
 import { PROJECT_PATH_STEP_TYPES, getProjectPathSuggestion } from '../lib/project-path-suggestion';
-import type { WorkspaceRestoreState } from '../lib/workspace-restore-state';
+import { resultsForSteps, type WorkspaceRestoreState } from '../lib/workspace-restore-state';
 import { TimelineStep } from './TimelineStep';
 import { RestoreResults } from './RestoreResults';
+import { RemoveStepConfirm } from './RemoveStepConfirm';
 import { ErrorCode } from './ErrorCode';
 import { WorkspaceHotkeyControl } from './WorkspaceHotkeyControl';
 
@@ -82,6 +88,27 @@ interface DetailProps {
   ) => void;
 }
 
+/** One "left open" row of a Close/Switch result, in plain words per reason. */
+function describeLeftOpen(entry: LeftOpenEntry): string {
+  const detail = entry.detail ? `: ${entry.detail}` : '.';
+  switch (entry.reason) {
+    case 'failed':
+      return `Couldn't close ${entry.appName}${detail}`;
+    case 'needs-permission':
+      return `Couldn't close ${entry.appName} — it needs Accessibility access${detail}`;
+    case 'kept-running':
+      return `${entry.appName} asked to stay open${entry.detail ? ` (${entry.detail})` : ''}.`;
+    case 'not-ours':
+      return `Left ${entry.appName} running (it was already open before this workspace).`;
+    case 'excluded':
+      return `Left ${entry.appName} running (not auto-closed).`;
+    case 'still-used':
+      return entry.usedBy && entry.usedBy.length > 0
+        ? `Left ${entry.appName} running (still used by ${entry.usedBy.join(', ')}).`
+        : `Left ${entry.appName} running (still used by another active workspace).`;
+  }
+}
+
 /**
  * Render key is the workspace id (see App.tsx) — React remounts this
  * component on workspace switch, which naturally resets expandedIndex
@@ -107,10 +134,20 @@ export function Detail({
     isClosing,
     restoreResults,
     restoredAt,
-    toolTypesAtRestore,
+    stepIdsAtRestore,
     activityLog,
     retryingIndex,
   } = restoreState;
+  // Last restore's results for the steps that still exist, by step id —
+  // see resultsForSteps.
+  const currentResults = useMemo(
+    () => resultsForSteps({ restoreResults, stepIdsAtRestore }, workspace.tools),
+    [restoreResults, stepIdsAtRestore, workspace.tools],
+  );
+  const resultByStepId = useMemo(
+    () => new Map(currentResults.map((r) => [r.step.id, r.result])),
+    [currentResults],
+  );
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
   const [restoreError, setRestoreError] = useState<DisplayError | null>(null);
   const [progress, setProgress] = useState<RestoreProgressEvent | null>(null);
@@ -137,6 +174,11 @@ export function Detail({
   // (a step can be removed whether or not it's currently expanded).
   const [removingIndex, setRemovingIndex] = useState<number | null>(null);
   const [removeStepError, setRemoveStepError] = useState<DisplayError | null>(null);
+  // Set while the remove-step confirmation is open (RemoveStepConfirm).
+  const [pendingRemoval, setPendingRemoval] = useState<{
+    stepId: string;
+    closes: string[];
+  } | null>(null);
   const recentFolders = useMemo(() => getRecentProjectPaths(allWorkspaces), [allWorkspaces]);
   const recentCommands = useMemo(() => getRecentCommands(allWorkspaces), [allWorkspaces]);
   // Independently instantiated from WorkspaceFormModal's own instance —
@@ -221,12 +263,49 @@ export function Detail({
    * also the currently-expanded one, its quick-edit state is cleared
    * too — nothing left to save/cancel for a step that no longer exists.
    */
+  /**
+   * Remove-step button: asks first only when removing it would close an
+   * app right away — one this workspace opened that nothing else uses
+   * (previewStepRemoval). Otherwise (shared, already open before, not
+   * running) the step is simply removed.
+   */
   async function handleRemoveStep(i: number): Promise<void> {
+    const tool = workspace.tools[i];
+    if (!tool) return;
+    setRemoveStepError(null);
+    let closes: string[];
+    try {
+      closes = await window.api.previewStepRemoval(workspace.id, tool.id);
+    } catch (err) {
+      if (isMountedRef.current) {
+        setRemoveStepError({
+          message: err instanceof Error ? err.message : String(err),
+          code: ERROR_CODES.SYSTEM_UNEXPECTED.code,
+        });
+      }
+      return;
+    }
+    if (!isMountedRef.current) return;
+    if (closes.length > 0) {
+      setPendingRemoval({ stepId: tool.id, closes });
+      return;
+    }
+    await removeStep(tool.id, false);
+  }
+
+  /**
+   * Saves the workspace without the step (by id — the list may have
+   * changed while a confirmation was open), then releases its claims,
+   * closing what it left behind only when the user confirmed `close`.
+   */
+  async function removeStep(stepId: string, close: boolean): Promise<void> {
+    const i = workspace.tools.findIndex((t) => t.id === stepId);
+    if (i === -1) return;
     setRemovingIndex(i);
     setRemoveStepError(null);
     const steps = workspace.tools
-      .map((t) => ({ id: t.id, type: t.type, params: t.params }))
-      .filter((_, index) => index !== i);
+      .filter((t) => t.id !== stepId)
+      .map((t) => ({ id: t.id, type: t.type, params: t.params }));
     try {
       const result = await window.api.updateWorkspace({
         id: workspace.id,
@@ -238,11 +317,17 @@ export function Detail({
         setRemoveStepError({ message: result.error, code: result.code });
         return;
       }
+      const report = await window.api.closeRemovedSteps(workspace.id, close);
+      if (!isMountedRef.current) return;
+      if (report.closed.length > 0 || report.leftOpen.length > 0) {
+        onUpdateRestoreState({ activityLog: report });
+      }
       if (expandedIndex === i) {
         setExpandedIndex(null);
         setDraftParams(null);
         setSaveStepError(null);
       }
+      // Refreshes the workspace list too, active badges included.
       onQuickEditSaved(result.config);
     } catch (err) {
       if (isMountedRef.current) {
@@ -287,7 +372,7 @@ export function Detail({
       isRestoring: true,
       restoreResults: null,
       restoredAt: null,
-      toolTypesAtRestore: null,
+      stepIdsAtRestore: null,
       activityLog: null,
       retryingIndex: null,
     });
@@ -309,7 +394,7 @@ export function Detail({
       onUpdateRestoreState({
         restoreResults: results,
         restoredAt: Date.now(),
-        toolTypesAtRestore: workspace.tools.map((t) => t.type),
+        stepIdsAtRestore: workspace.tools.map((t) => t.id),
       });
     } catch (err) {
       if (isMountedRef.current) {
@@ -347,7 +432,7 @@ export function Detail({
       isSwitching: true,
       restoreResults: null,
       restoredAt: null,
-      toolTypesAtRestore: null,
+      stepIdsAtRestore: null,
       activityLog: null,
     });
     setRestoreError(null);
@@ -356,7 +441,7 @@ export function Detail({
       onUpdateRestoreState({
         restoreResults: result.stepResults,
         restoredAt: Date.now(),
-        toolTypesAtRestore: workspace.tools.map((t) => t.type),
+        stepIdsAtRestore: workspace.tools.map((t) => t.id),
         activityLog: { closed: result.closed, leftOpen: result.leftOpen },
       });
     } catch (err) {
@@ -426,9 +511,14 @@ export function Detail({
     // local-state version had, now resolved against App.tsx's actual
     // current value at the moment this update applies, not a stale one
     // captured back when the retry started.
+    // Replaced by step id, not position: steps may have been added or
+    // removed since the restore these results came from.
+    const stepId = workspace.tools[i]?.id;
     onUpdateRestoreState((prev) => ({
       restoreResults: prev.restoreResults
-        ? prev.restoreResults.map((r, idx) => (idx === i ? newResult : r))
+        ? prev.restoreResults.map((r, idx) =>
+            stepId !== undefined && prev.stepIdsAtRestore?.[idx] === stepId ? newResult : r,
+          )
         : prev.restoreResults,
       retryingIndex: null,
     }));
@@ -652,34 +742,29 @@ export function Detail({
               <span>Closed {appName}.</span>
             </div>
           ))}
-          {activityLog.leftOpen.map((entry) => (
-            <div
-              key={`left-open-${entry.appName}`}
-              className="flex items-center gap-2 rounded-sm border border-border bg-bg-elevated px-2.5 py-2 text-[12.5px] text-text-muted"
-            >
-              <Icon
-                name={entry.reason === 'failed' ? 'x' : 'check'}
-                size={13}
-                className={entry.reason === 'failed' ? 'text-danger' : 'text-text-faint'}
-              />
-              <span>
-                {entry.reason === 'failed'
-                  ? `Couldn't close ${entry.appName}${entry.detail ? `: ${entry.detail}` : '.'}`
-                  : `Left ${entry.appName} running (${
-                      entry.reason === 'excluded'
-                        ? 'not auto-closed'
-                        : 'still used by another active workspace'
-                    }).`}
-              </span>
-            </div>
-          ))}
+          {activityLog.leftOpen.map((entry) => {
+            const isProblem = entry.reason === 'failed' || entry.reason === 'needs-permission';
+            return (
+              <div
+                key={`left-open-${entry.appName}`}
+                className="flex items-center gap-2 rounded-sm border border-border bg-bg-elevated px-2.5 py-2 text-[12.5px] text-text-muted"
+              >
+                <Icon
+                  name={isProblem ? 'x' : 'check'}
+                  size={13}
+                  className={isProblem ? 'text-danger' : 'text-text-faint'}
+                />
+                <span>{describeLeftOpen(entry)}</span>
+              </div>
+            );
+          })}
         </div>
       )}
       {restoreResults && restoredAt !== null && (
         <>
           <RestoreResults
-            results={restoreResults}
-            tools={workspace.tools}
+            results={currentResults.map((r) => r.result)}
+            tools={currentResults.map((r) => r.step)}
             restoredAt={restoredAt}
           />
           <div className="mt-6.5 mb-5.5 h-px bg-border" />
@@ -764,9 +849,7 @@ export function Detail({
                 void handleRemoveStep(i);
               }}
               isRemoving={removingIndex === i}
-              {...(restoreResults && toolTypesAtRestore?.[i] === tool.type
-                ? { result: restoreResults[i] }
-                : {})}
+              {...(resultByStepId.has(tool.id) ? { result: resultByStepId.get(tool.id)! } : {})}
               onRetryStep={(j) => {
                 void handleRetryStep(j);
               }}
@@ -778,6 +861,18 @@ export function Detail({
           );
         })}
       </div>
+
+      <RemoveStepConfirm
+        pending={pendingRemoval}
+        onCancel={() => {
+          setPendingRemoval(null);
+        }}
+        onConfirm={() => {
+          const removal = pendingRemoval;
+          setPendingRemoval(null);
+          if (removal) void removeStep(removal.stepId, true);
+        }}
+      />
     </main>
   );
 }

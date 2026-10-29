@@ -58,4 +58,11 @@ export interface ResourceKindPlugin {
   findLive(identity: ResourceSpec['identity']): Promise<ResourceHandle | null>;
   check(handle: ResourceHandle, identity: ResourceSpec['identity']): Promise<HandleState>;
   close(handle: ResourceHandle): Promise<CloseOutcome>;
+  /**
+   * At startup, for an 'opening' record left by a crash or a restart
+   * mid-open: the instance that record was opening, if one is running
+   * and provably started after `since` (the record's creation time).
+   * Optional — without it, such a record is simply dropped.
+   */
+  reconcileOpening?(identity: ResourceSpec['identity'], since: number): Promise<CaptureResult>;
 }

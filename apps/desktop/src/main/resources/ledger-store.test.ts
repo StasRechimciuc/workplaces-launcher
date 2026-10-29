@@ -23,6 +23,7 @@ function ledgerWithOneResource(boot: string): Ledger {
   return addResource(emptyLedger(boot), {
     kind: 'app',
     identityKey: 'k',
+    label: 'K',
     owner: { workspaceId: 'ws', stepId: 's' },
     createdByApp: true,
     handle: { pid: 1 },

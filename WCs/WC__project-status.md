@@ -331,6 +331,14 @@ matching the precedent `WC__vscode-terminal-restore.md` already set.
   `Detail.tsx`, `TimelineStep.tsx`); removed the now-dead
   `WORKSPACE_READONLY` error code. The app now only ever shows
   workspaces the user actually created.
+- **Deferred — real "ready" time (2026-10-29, founder).** A Proton
+  restore shows 0.0s (the `open -a` hand-off) while the app is only
+  idle after ~4s. Now unblocked by window-tracking phase 1
+  (`wl-helper` + Accessibility): a helper `waitForReady` (first
+  standard window up and answering AX) is ~half a day; "truly idle"
+  (CPU settled) is heuristic and flaky; showing it on the result row
+  needs an after-the-fact update event. Picked up after window
+  tracking.
 - **Real launch-time display**, replacing the old hardcoded `'0s'`/`'—'`
   placeholders. Went through a full `/judge` round (parallel research +
   an adversarial plan review) after the founder flagged the numbers as

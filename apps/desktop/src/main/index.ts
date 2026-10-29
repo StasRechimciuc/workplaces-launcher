@@ -9,6 +9,8 @@ import { settingsStore } from './settings/store';
 import { buildAppMenu } from './menu';
 import { registerBuiltInTools } from './tools';
 import { disposeWlHelper } from './platform/macos/wl-helper';
+import { initResourceTracking } from './resources/runtime';
+import { loadAllWorkspaceConfigs } from './config/loader';
 
 // Must stay in sync with electron-builder.yml's productName — see
 // vscode-restore.ts's own doc comment on PRODUCT_NAME for why this
@@ -214,7 +216,7 @@ if (gotSingleInstanceLock) {
 
   void app
     .whenReady()
-    .then(() => {
+    .then(async () => {
       electronApp.setAppUserModelId('com.workspacelauncher.app');
       Menu.setApplicationMenu(buildAppMenu());
 
@@ -223,6 +225,11 @@ if (gotSingleInstanceLock) {
       });
 
       registerBuiltInTools();
+      // Before IPC handlers exist, so no restore can run against a
+      // ledger that hasn't been loaded and reconciled yet. Never
+      // throws: any failure leaves tracking off (untracked, app-level
+      // behavior), logged.
+      await initResourceTracking((await loadAllWorkspaceConfigs()).configs);
       registerIpcHandlers();
       createMainWindow();
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { WorkspaceDisplay, WorkspaceToolStepDisplay } from '../../../preload';
-import { findDuplicateWorkspace } from './workspace-duplicate';
+import { findDuplicateWorkspace, withStepIdsOf } from './workspace-duplicate';
 
 function makeTool(type: string, params: Record<string, unknown>): WorkspaceToolStepDisplay {
   return {
@@ -116,5 +116,21 @@ describe('findDuplicateWorkspace', () => {
 
   it('returns undefined when nothing matches', () => {
     expect(findDuplicateWorkspace({ name: 'New', steps: [] }, [])).toBeUndefined();
+  });
+});
+
+describe('withStepIdsOf', () => {
+  it('gives each step the id of the duplicate’s step at the same position', () => {
+    const steps = [
+      { type: 'a', params: {} },
+      { type: 'b', params: {} },
+    ];
+    expect(withStepIdsOf(steps, [{ id: 'x' }, { id: 'y' }]).map((s) => s.id)).toEqual(['x', 'y']);
+  });
+
+  it('leaves a step without a counterpart id-less, for the main process to assign', () => {
+    const [step] = withStepIdsOf([{ type: 'a', params: {} }], []);
+    expect(step).toEqual({ type: 'a', params: {} });
+    expect(step && 'id' in step).toBe(false);
   });
 });

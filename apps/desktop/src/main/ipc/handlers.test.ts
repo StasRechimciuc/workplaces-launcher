@@ -1296,14 +1296,19 @@ describe('detectCurrentWorkspace', () => {
 });
 
 describe('markWorkspaceActive', () => {
-  it('throws for a non-string/empty workspace id', () => {
-    expect(() => markWorkspaceActive(123)).toThrow(/workspace id/);
-    expect(() => markWorkspaceActive('')).toThrow(/workspace id/);
+  it('throws for a non-string/empty workspace id', async () => {
+    await expect(markWorkspaceActive(123)).rejects.toThrow(/workspace id/);
+    await expect(markWorkspaceActive('')).rejects.toThrow(/workspace id/);
   });
 
-  it('sets intent active for the given id', () => {
-    markWorkspaceActive('ws-1');
-    expect(activityStore.setIntentActive).toHaveBeenCalledWith('ws-1', true);
+  it('sets intent active for the given workspace', async () => {
+    const id = await createMixedWorkspace();
+    await markWorkspaceActive(id);
+    expect(activityStore.setIntentActive).toHaveBeenCalledWith(id, true);
+  });
+
+  it('rejects an id with no saved workspace', async () => {
+    await expect(markWorkspaceActive('never-existed')).rejects.toThrow(/No workspace found/);
   });
 });
 
@@ -1544,9 +1549,10 @@ describe('registerIpcHandlers — app-level hotkey + detectCurrent channels', ()
   });
 
   it('wires workspaces:markActive to markWorkspaceActive', async () => {
+    const id = await createMixedWorkspace();
     const handler = getRegisteredHandler('workspaces:markActive');
-    await handler({}, 'ws-1');
-    expect(activityStore.setIntentActive).toHaveBeenCalledWith('ws-1', true);
+    await handler({}, id);
+    expect(activityStore.setIntentActive).toHaveBeenCalledWith(id, true);
   });
 });
 

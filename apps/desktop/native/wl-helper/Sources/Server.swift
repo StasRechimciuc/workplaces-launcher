@@ -71,6 +71,7 @@ final class Server {
       return try windows.captureNewWindow(
         bundleId: params.bundleId("bundleId"),
         before: params.windowIds("before"),
+        titleContains: params.optionalString("titleContains"),
         timeout: params.milliseconds("timeoutMs", default: 10_000)
       ).json
     case "windowState":
@@ -84,6 +85,11 @@ final class Server {
       return try windows.focusWindow(pid: params.pid("pid"), windowId: params.windowId("windowId"))
     case "isRunning":
       return Apps.isRunning(bundleId: try params.bundleId("bundleId"))
+    case "processStartTime":
+      // Any process, not only apps: a terminal's shell is identified by
+      // pid + start time, since pids are reused.
+      let pid = try params.pid("pid")
+      return ["startedAt": processStartTime(pid).map { $0 as Any } ?? NSNull()]
     case "quitApp":
       return try Apps.quit(pid: params.pid("pid"), wait: params.milliseconds("waitMs", default: 5_000))
     default:

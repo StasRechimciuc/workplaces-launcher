@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type {
   AccessibilityStatus,
+  ApplyStepsChangeResult,
   ChromeListProfilesResult,
   CloseResult,
   CreateWorkspaceInput,
@@ -21,6 +22,7 @@ import type {
   ToolAppKey,
   UpdateWorkspaceInput,
   UpdateWorkspaceResult,
+  WorkspaceStepInput,
 } from '@workspace-launcher/shared';
 // Deliberately NOT from the '@workspace-launcher/shared' barrel — see
 // that package's index.ts for why a value import through it would drag
@@ -149,16 +151,15 @@ const api = {
   // the renderer never shows this button there).
   switchToWorkspace: (workspaceId: string): Promise<SwitchResult> =>
     ipcRenderer.invoke('workspaces:switchTo', workspaceId),
-  // What removing one step would close right now (apps this app opened
-  // that nothing else uses) — empty means remove without asking. See
-  // orchestrator.ts's previewWorkspaceStepRemoval.
-  previewStepRemoval: (workspaceId: string, stepId: string): Promise<string[]> =>
-    ipcRenderer.invoke('workspaces:previewStepRemoval', workspaceId, stepId),
-  // Called right after a remove-step save: releases the removed step's
-  // claims, and with `close` (the user confirmed) closes what it left
-  // behind, now rather than on the next restore.
-  closeRemovedSteps: (workspaceId: string, close: boolean): Promise<CloseResult> =>
-    ipcRenderer.invoke('workspaces:closeRemovedSteps', workspaceId, close),
+  // What saving these (unsaved, draft) steps would close right now —
+  // empty means save without asking. See orchestrator.ts's
+  // previewStepsChange.
+  previewStepsChange: (workspaceId: string, steps: WorkspaceStepInput[]): Promise<string[]> =>
+    ipcRenderer.invoke('workspaces:previewStepsChange', workspaceId, steps),
+  // Called right after saving an edit: releases what removed/changed
+  // steps held (closing it with `close`) and re-runs changed steps.
+  applyStepsChange: (workspaceId: string, close: boolean): Promise<ApplyStepsChangeResult> =>
+    ipcRenderer.invoke('workspaces:applyStepsChange', workspaceId, close),
   // Closes only this workspace's own apps — see orchestrator.ts's
   // closeWorkspace. macOS-only v1.
   closeWorkspace: (workspaceId: string): Promise<CloseResult> =>

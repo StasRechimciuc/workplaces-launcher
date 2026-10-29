@@ -5,6 +5,7 @@ import {
   getWorkspaceRestoreOutcome,
   type WorkspaceRestoreState,
   resultsForSteps,
+  withStepResults,
 } from './workspace-restore-state';
 
 function withResults(results: WorkspaceRestoreState['restoreResults']): WorkspaceRestoreState {
@@ -105,5 +106,29 @@ describe('resultsForSteps', () => {
     expect(
       resultsForSteps({ restoreResults: null, stepIdsAtRestore: null }, [{ id: 'a' }]),
     ).toEqual([]);
+  });
+});
+
+describe('withStepResults', () => {
+  const r = (message: string) => ({ success: true, message, durationMs: 1 });
+
+  it('replaces a re-run step’s result in place and adds a new one', () => {
+    const next = withStepResults(
+      { restoreResults: [r('a'), r('b')], stepIdsAtRestore: ['a', 'b'] },
+      [
+        { stepId: 'b', result: r('b2') },
+        { stepId: 'c', result: r('c') },
+      ],
+    );
+    expect(next.stepIdsAtRestore).toEqual(['a', 'b', 'c']);
+    expect(next.restoreResults?.map((x) => x.message)).toEqual(['a', 'b2', 'c']);
+  });
+
+  it('starts fresh when nothing was restored yet', () => {
+    expect(
+      withStepResults({ restoreResults: null, stepIdsAtRestore: null }, [
+        { stepId: 'a', result: r('a') },
+      ]),
+    ).toEqual({ restoreResults: [r('a')], stepIdsAtRestore: ['a'] });
   });
 });

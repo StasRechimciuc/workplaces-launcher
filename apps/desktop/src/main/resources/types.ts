@@ -82,6 +82,13 @@ export interface ResourceKindPlugin {
   check(handle: ResourceHandle, identity: ResourceSpec['identity']): Promise<HandleState>;
   close(handle: ResourceHandle): Promise<CloseOutcome>;
   /**
+   * Non-idempotent kinds: puts a live instance whose work has finished
+   * back to work in place, instead of the step opening a second one —
+   * a terminal whose commands are done re-runs them in the same window
+   * (decision 2). True if it did; false if there was nothing to revive.
+   */
+  revive?(handle: ResourceHandle): Promise<boolean>;
+  /**
    * At startup, for an 'opening' record left by a crash or a restart
    * mid-open: the instance that record was opening, if one is running
    * and provably started after `since` (the record's creation time).

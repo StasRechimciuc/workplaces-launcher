@@ -93,3 +93,28 @@ export function resultsForSteps<T extends { id: string }>(
     return result ? [{ step, result, index }] : [];
   });
 }
+
+/**
+ * Folds fresh results for some steps (changed steps re-run after a
+ * saved edit) into the last restore's results, by step id: a step that
+ * had a result gets the new one in its place, a step that didn't is
+ * added. Nothing restored yet → nothing to fold into; the results are
+ * shown as their own restore.
+ */
+export function withStepResults(
+  state: Pick<WorkspaceRestoreState, 'restoreResults' | 'stepIdsAtRestore'>,
+  fresh: readonly { stepId: string; result: StepResult }[],
+): Pick<WorkspaceRestoreState, 'restoreResults' | 'stepIdsAtRestore'> {
+  const results = [...(state.restoreResults ?? [])];
+  const ids = [...(state.stepIdsAtRestore ?? [])];
+  for (const { stepId, result } of fresh) {
+    const index = ids.indexOf(stepId);
+    if (index === -1) {
+      ids.push(stepId);
+      results.push(result);
+    } else {
+      results[index] = result;
+    }
+  }
+  return { restoreResults: results, stepIdsAtRestore: ids };
+}

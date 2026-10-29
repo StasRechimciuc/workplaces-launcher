@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import type {
   AccessibilityStatus,
+  ApplyStepsChangeResult,
   ChromeListProfilesResult,
   CloseResult,
   CreateWorkspaceResult,
@@ -37,9 +38,9 @@ import { expandHome } from '../lib/paths';
 import {
   closeWorkspace,
   getActiveWorkspaceIds,
-  closeRemovedSteps,
+  applyStepsChange,
   markWorkspaceDetectedActive,
-  previewWorkspaceStepRemoval,
+  previewStepsChange,
   releaseDeletedWorkspace,
   retryStep,
   runWorkspace,
@@ -256,48 +257,59 @@ export async function retryWorkspaceStep(
 }
 
 /**
- * The apps removing this step would close — the Detail view's
- * remove-step confirmation (see orchestrator.ts's
- * previewWorkspaceStepRemoval). Both ids come from the renderer, so
- * both are validated; an unknown step simply closes nothing.
+ * What saving these steps into this workspace would close right now
+ * (see orchestrator.ts's previewStepsChange) — asked before the Detail
+ * view or the Edit form saves. `steps` is the renderer's unsaved draft,
+ * so it's validated like a save would be; a draft that wouldn't save
+ * closes nothing.
  */
-export async function previewStepRemoval(workspaceId: unknown, stepId: unknown): Promise<string[]> {
-  if (typeof workspaceId !== 'string' || typeof stepId !== 'string') {
-    throw new Error(
-      'workspaces:previewStepRemoval expects a workspace id and a step id (strings).',
-    );
+export async function previewWorkspaceStepsChange(
+  workspaceId: unknown,
+  steps: unknown,
+): Promise<string[]> {
+  if (typeof workspaceId !== 'string') {
+    throw new Error('workspaces:previewStepsChange expects a workspace id (string).');
   }
   if (!SUPPORTS_WORKSPACE_ACTIVITY) return [];
   const allConfigs = await resolveAllWorkspaceConfigs();
-  const config = allConfigs.find((c) => c.id === workspaceId);
-  if (!config) {
+  const saved = allConfigs.find((c) => c.id === workspaceId);
+  if (!saved) {
     throw new Error(`No workspace found with id "${workspaceId}".`);
   }
-  return previewWorkspaceStepRemoval(config, stepId, allConfigs);
+  const proposed = parseWorkspaceConfig({
+    version: CURRENT_WORKSPACE_CONFIG_VERSION,
+    id: saved.id,
+    name: saved.name,
+    steps: assignStepIds(steps),
+  });
+  if (!proposed.success) return [];
+  return previewStepsChange(proposed.config, allConfigs);
 }
 
 /**
- * Releases (and, with `close`, closes) what steps just removed from a
- * workspace left behind — called by the Detail view right after a
- * remove-step save; `close` is true only when the user confirmed.
+ * Applies a just-saved edit to a running workspace — called by the
+ * Detail view and the Edit form right after a successful save. `close`
+ * is true only when the user just confirmed closing what
+ * previewWorkspaceStepsChange listed; otherwise claims are only
+ * released, so nothing is ever closed without having been asked about.
  */
-export async function closeRemovedWorkspaceSteps(
+export async function applyWorkspaceStepsChange(
   workspaceId: unknown,
   close: unknown,
-): Promise<CloseResult> {
+): Promise<ApplyStepsChangeResult> {
   if (typeof workspaceId !== 'string' || typeof close !== 'boolean') {
     throw new Error(
-      'workspaces:closeRemovedSteps expects a workspace id (string) and close (boolean).',
+      'workspaces:applyStepsChange expects a workspace id (string) and close (boolean).',
     );
   }
   return withOrchestratorBusy(async () => {
-    if (!SUPPORTS_WORKSPACE_ACTIVITY) return { closed: [], leftOpen: [] };
+    if (!SUPPORTS_WORKSPACE_ACTIVITY) return { closed: [], leftOpen: [], stepResults: [] };
     const allConfigs = await resolveAllWorkspaceConfigs();
     const config = allConfigs.find((c) => c.id === workspaceId);
     if (!config) {
       throw new Error(`No workspace found with id "${workspaceId}".`);
     }
-    return closeRemovedSteps(config, allConfigs, close);
+    return applyStepsChange(config, allConfigs, close);
   });
 }
 
@@ -966,15 +978,15 @@ export function registerIpcHandlers(): void {
   });
 
   ipcMain.handle(
-    'workspaces:previewStepRemoval',
-    async (_event, workspaceId: unknown, stepId: unknown) => {
-      return previewStepRemoval(workspaceId, stepId);
+    'workspaces:previewStepsChange',
+    async (_event, workspaceId: unknown, steps: unknown) => {
+      return previewWorkspaceStepsChange(workspaceId, steps);
     },
   );
   ipcMain.handle(
-    'workspaces:closeRemovedSteps',
+    'workspaces:applyStepsChange',
     async (_event, workspaceId: unknown, close: unknown) => {
-      return closeRemovedWorkspaceSteps(workspaceId, close);
+      return applyWorkspaceStepsChange(workspaceId, close);
     },
   );
   ipcMain.handle('workspaces:close', async (_event, workspaceId: unknown) => {

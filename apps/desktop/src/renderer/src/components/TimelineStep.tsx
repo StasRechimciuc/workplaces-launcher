@@ -269,15 +269,19 @@ export function TimelineStep({
   // DETAIL content (the message/breakdown row reverts to the plain
   // plan text while editing, since that content IS specific to a saved
   // config that's stale the instant editing starts). The corner status
-  // badge on the tool icon is deliberately a SEPARATE decision from
-  // `showResult` below, NOT gated on `!isOpen` — expanding a row to
+  // badge on the tool icon (and the Retry button, `canRetry`) is
+  // deliberately NOT gated on `!isOpen` — expanding a row to
   // look at (or tweak) its config is not the same as having actually
   // changed anything yet, and hiding "this succeeded/failed last time"
   // the moment you merely open the row to look was confirmed
   // confusing in real use: the badge should stay put until a save
   // actually happens, not disappear just from expanding.
   const treatment = result !== undefined ? getRestoreResultTreatment(result) : undefined;
-  const showResult = result !== undefined && !isOpen;
+  const canRetry =
+    result !== undefined &&
+    draftParams === null &&
+    treatment !== 'success' &&
+    treatment !== 'skipped';
   // A restore is happening RIGHT NOW and this step doesn't have its
   // final `result` yet (the full batch only lands once every step in
   // the restore has finished) — same isOpen-wins rule as `result`
@@ -356,7 +360,7 @@ export function TimelineStep({
             // an average across past runs — see formatPreciseDuration's
             // own doc comment for why these are two different
             // formatters, not one). Deliberately NOT gated on
-            // `showResult`/`!isOpen` — same reasoning as the corner
+            // `!isOpen` — same reasoning as the corner
             // status badge above: expanding the row to look at its
             // config shouldn't make the real last-restore time vanish
             // back into a generic estimate, only actually saving a
@@ -385,7 +389,11 @@ export function TimelineStep({
             </span>
           )}
           <span className="ml-auto flex shrink-0 items-center gap-1.5">
-            {showResult && treatment !== 'success' && treatment !== 'skipped' && onRetryStep && (
+            {/* Not tied to the row being collapsed: an expanded row with
+                no unsaved edit still offers Retry — only while Save/Cancel
+                are showing (a real edit in progress) does it step aside,
+                since saving re-runs the step anyway. */}
+            {canRetry && onRetryStep && (
               <button
                 type="button"
                 disabled={retryingIndex !== null || retryDisabled}

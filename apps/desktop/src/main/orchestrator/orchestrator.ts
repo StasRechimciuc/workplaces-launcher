@@ -1,5 +1,6 @@
 import { basename } from 'node:path';
 import type {
+  ApplyStepsChangeResult,
   CloseResult,
   LeftOpenEntry,
   RestoreProgressEvent,
@@ -26,13 +27,13 @@ import {
   locks,
   openTrackedStep,
   ownsResources,
-  previewStepRemoval,
-  reconcileRemovedSteps,
+  previewClaimRelease,
   releaseAndClose,
-  removedStepIds,
+  releaseClaims,
   releaseStepForRetry,
   resolveTrackedSteps,
   revalidateOwned,
+  staleClaims,
   workspaceLockKey,
   type CloseReport,
   type TrackedStep,
@@ -132,7 +133,9 @@ async function runWorkspaceHoldingLock(
     const trackedStep = trackedById.get(step.id);
     const result =
       store && trackedStep
-        ? await openTrackedStep(store, config.id, trackedStep, () => runStep(step, config.id))
+        ? await openTrackedStep(store, config.id, trackedStep, (liveResourceKeys) =>
+            runStep(step, config.id, liveResourceKeys),
+          )
         : await runStep(step, config.id);
     results.push(result);
     options.onStepProgress?.({
@@ -146,12 +149,16 @@ async function runWorkspaceHoldingLock(
 
   const allConfigs = options.allConfigs;
   if (store && allConfigs) {
-    const report = await reconcileRemovedSteps(store, config, async () => ({
-      untrackedAppNamesInUse: await untrackedAppNamesInUse(
-        await partition(allConfigs.filter((c) => c.id !== config.id)),
-      ),
-    }));
-    logReport(`cleaning up steps removed from "${config.name}"`, report);
+    const claims = staleClaims(store, config.id, currentKeys(tracked));
+    if (claims.length > 0) {
+      const report = await releaseClaims(
+        store,
+        claims,
+        { untrackedAppNamesInUse: await otherWorkspacesAppNames(config, allConfigs) },
+        true,
+      );
+      logReport(`cleaning up steps edited out of "${config.name}"`, report);
+    }
   }
 
   return results;
@@ -194,7 +201,9 @@ export async function retryStep(
       ),
     });
     logReport(`clearing "${step.type}" before retrying it`, report);
-    return openTrackedStep(store, config.id, trackedStep, () => runStep(step, config.id));
+    return openTrackedStep(store, config.id, trackedStep, (liveResourceKeys) =>
+      runStep(step, config.id, liveResourceKeys),
+    );
   });
 }
 
@@ -314,53 +323,75 @@ export async function markWorkspaceDetectedActive(config: WorkspaceConfig): Prom
   });
 }
 
-/**
- * The apps removing `stepId` from this workspace would close — see
- * tracking.ts's previewStepRemoval. Empty with tracking off.
- */
-export async function previewWorkspaceStepRemoval(
+/** Each tracked step's current identity keys — what its claims must match to stay valid. */
+function currentKeys(tracked: readonly TrackedStep[]): Map<string, Set<string>> {
+  return new Map(
+    tracked.map((t) => [t.step.id, new Set(t.specs.map((spec) => identityKeyFor(spec)))]),
+  );
+}
+
+async function otherWorkspacesAppNames(
   config: WorkspaceConfig,
-  stepId: string,
+  allConfigs: readonly WorkspaceConfig[],
+): Promise<Set<string>> {
+  return untrackedAppNamesInUse(await partition(allConfigs.filter((c) => c.id !== config.id)));
+}
+
+/**
+ * What saving `proposed` (this workspace with edited steps, not saved
+ * yet) would close right now: the running things this app opened for
+ * steps it removes or changes, that nothing else uses — see
+ * tracking.ts's previewClaimRelease. The Detail view and the Edit form
+ * ask before such a save; empty means save without asking.
+ */
+export async function previewStepsChange(
+  proposed: WorkspaceConfig,
   allConfigs: WorkspaceConfig[],
 ): Promise<string[]> {
   const store = getLedgerStore();
   if (!store) return [];
-  return locks.withLocks([workspaceLockKey(config.id)], async () =>
-    previewStepRemoval(store, config.id, stepId, {
-      untrackedAppNamesInUse: await untrackedAppNamesInUse(
-        await partition(allConfigs.filter((c) => c.id !== config.id)),
-      ),
+  const { tracked } = await resolveTrackedSteps(proposed);
+  return locks.withLocks([workspaceLockKey(proposed.id)], async () =>
+    previewClaimRelease(store, staleClaims(store, proposed.id, currentKeys(tracked)), {
+      untrackedAppNamesInUse: await otherWorkspacesAppNames(proposed, allConfigs),
     }),
   );
 }
 
 /**
- * Right after steps were removed from a saved workspace: releases
- * their claims, so the workspace no longer owns (and isn't kept active
- * by) anything for them. With `close` — the user just confirmed it —
- * also closes what that leaves ownerless and ours, the same cleanup a
- * restore would do later. Without it nothing is closed, even if
- * something became ownerless since the confirmation was decided.
+ * Right after a saved edit to this workspace: claims of removed or
+ * changed steps are released — with `close` (the user confirmed) also
+ * closing what that leaves ownerless and ours — and every changed step
+ * runs again with its new settings, so a
+ * running workspace reflects the edit at once (a terminal whose command
+ * changed is replaced by one running the new command).
  */
-export async function closeRemovedSteps(
+export async function applyStepsChange(
   config: WorkspaceConfig,
   allConfigs: WorkspaceConfig[],
   close: boolean,
-): Promise<CloseResult> {
+): Promise<ApplyStepsChangeResult> {
   const store = getLedgerStore();
-  if (!store) return { closed: [], leftOpen: [] };
+  if (!store) return { closed: [], leftOpen: [], stepResults: [] };
   return locks.withLocks([workspaceLockKey(config.id)], async () => {
-    if (!close) {
-      const removed = removedStepIds(store, config);
-      store.update((ledger) => releaseWorkspace(ledger, config.id, removed));
-      return { closed: [], leftOpen: [] };
+    const { tracked } = await resolveTrackedSteps(config);
+    const claims = staleClaims(store, config.id, currentKeys(tracked));
+    const report = await releaseClaims(
+      store,
+      claims,
+      { untrackedAppNamesInUse: await otherWorkspacesAppNames(config, allConfigs) },
+      close,
+    );
+    const changed = new Set(claims.map((c) => c.owner.stepId));
+    const stepResults: ApplyStepsChangeResult['stepResults'] = [];
+    for (const trackedStep of tracked.filter((t) => changed.has(t.step.id))) {
+      const { step } = trackedStep;
+      const result = await openTrackedStep(store, config.id, trackedStep, (liveResourceKeys) =>
+        runStep(step, config.id, liveResourceKeys),
+      );
+      stepResults.push({ stepId: step.id, result });
     }
-    const report = await reconcileRemovedSteps(store, config, async () => ({
-      untrackedAppNamesInUse: await untrackedAppNamesInUse(
-        await partition(allConfigs.filter((c) => c.id !== config.id)),
-      ),
-    }));
-    return { closed: report.closed, leftOpen: report.leftOpen };
+    return { closed: report.closed, leftOpen: report.leftOpen, stepResults };
   });
 }
 
@@ -635,6 +666,7 @@ function logReport(context: string, report: CloseReport): void {
 async function runStep(
   step: WorkspaceConfig['steps'][number],
   workspaceId: string,
+  liveResourceKeys?: ReadonlySet<string>,
 ): Promise<StepResult> {
   const tool = getTool(step.type);
   if (!tool) {
@@ -674,7 +706,13 @@ async function runStep(
     // re-guess whether an optional/defaulted field survived a config
     // saved before that field existed (see each tool's own detail on
     // why they still keep a defensive guard anyway).
-    const result = await withTimeout(tool.run(validation.data, { workspaceId }), timeoutMs);
+    const result = await withTimeout(
+      tool.run(validation.data, {
+        workspaceId,
+        ...(liveResourceKeys ? { liveResourceKeys } : {}),
+      }),
+      timeoutMs,
+    );
     const durationMs =
       // Trust the tool's own reported duration unless it didn't set one
       // — a plain `||` here would wrongly override a real 0ms result,

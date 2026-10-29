@@ -556,13 +556,7 @@ null }`; the first check that sees a heartbeat for that folder with
   different sessionId for the folder → the user reopened it → gone (not
   ours any more); no heartbeat and VS Code not running → gone; no
   heartbeat but VS Code running → unknown (kept).
-- **No-extension fallback, later (founder, 2026-10-29):** once phase 3
-  builds window capture for terminals, a VS Code window opened without
-  the extension is tracked by the helper instead (window-list diff
-  around the open, AX close button — VS Code asks about unsaved files
-  itself). Its weak spot is reuse/re-finding an already-open window,
-  which falls back to matching the window title. Until then:
-- **No-extension fallback, now (founder, 2026-10-29):** Close never quits
+- **No-extension fallback (founder, 2026-10-29):** Close never quits
   VS Code when a window can't be tracked — it's left open with the
   reason ("needs the VS Code extension to close just this window"),
   never quitting the user's other windows. The upgrade fallback skips
@@ -594,6 +588,67 @@ possible now:
 - **Still to do (after phases 3–4):** retire `workspace-activity-store`
   entirely once no step is untracked; make the ledger the only source of
   "active".
+
+## Phase 3 technical plan: Terminal + Tilt windows (2026-10-29, draft)
+
+Spike (2026-10-29, this Mac): a title set by the generated script
+(`printf '\e]0;MARKER\a'`) shows up in Terminal's AX window title
+(`stas — MARKER — sleep … — 120×30`), so a per-terminal marker is
+enough to tell which new window is whose, even when one step opens
+several.
+
+**3a — terminal windows (fixes the motivating Retry bug).**
+
+- One resource per terminal entry of a Terminal step. Identity: `{ app:
+Terminal, cwd (normalized), commands, occurrence }` — occurrence
+  tells two identical entries apart. Marker = a short hash of the
+  identity, shared by `resources()` and `run()` so the script sets it
+  and capture looks for it.
+- The script sets the marker title first, then writes `{ tty, pid }`
+  of its shell to a per-marker info file (start time read via the
+  helper's `processStartTime`).
+- Helper: `captureNewWindow` gains `titleContains`, so capture is
+  "the new Terminal window whose title has my marker" — no ambiguity
+  when a step opens three at once.
+- Check: window alive (held AX ref) and the recorded shell alive (pid
+  - start time + tty all match); shell `cd`'d elsewhere → drifted
+    (decision 4).
+- Close: SIGHUP the recorded shell's descendants (never "everything on
+  the tty"), SIGKILL leftovers after 1.5s, then press the window's
+  close button; a dialog anyway → refused, never auto-confirmed.
+- Non-idempotent: an open window is reused (not reopened); Retry closes
+  the step's own window first, then opens a fresh one.
+- Known limitations: users with "open new windows as tabs" get tabs —
+  background tabs can't be closed, only their processes stopped;
+  Terminal.app only (iTerm2 untested).
+
+**3b — re-run loop (decision 2).** After the commands finish, the
+script records the exit code and waits instead of dropping to a shell:
+a re-run request from the app (a per-marker control file) runs the
+commands again in the same window; any keypress drops to the normal
+shell and marks it `user-took-over` (never auto-closed after that). A
+restore that finds the window alive but its commands done re-runs them
+there instead of opening another window.
+
+**3c — Tilt.** A Docker step on the Tilt engine is the same terminal
+kind (a Terminal step running `tilt up` in the same dir shares its
+identity). Close with stop-on-close on: SIGINT `tilt up`, wait, `tilt
+down` (the step's Down command), then close the window; off → window
+stays, `kept-running`.
+
+**3d — detection without AppleScript.** "Save current workspace" finds
+terminals via `ps` (+ `lsof` for cwd) instead of `tell application
+"Terminal"` — no Automation prompt, and fixes `tee` being reported as
+the command.
+
+**Dropped (founder, 2026-10-29): VS Code without the extension.** With
+the first-run tour installing the extension (and in-VS Code terminals
+needing it anyway), almost every VS Code user will have it; a
+helper-only fallback would add title-matching for the rare user who
+skips it. Without the extension VS Code stays open, with the reason.
+Revisit only if real users skip it and complain.
+
+Order: 3a → 3b → 3c → 3d, each hand-checked before the next.
 
 ## Status
 
@@ -636,6 +691,11 @@ Open UX question (founder, 2026-10-29, slice 4 hand-check): Close
 leaving an app the user had opened themselves running ("Left ProtonVPN
 running (it was already open before this workspace)") follows
 decision 1 but may not feel intuitive — revisit before release.
+Same question for terminals (founder, 2026-10-29, phase 3a/3b
+hand-check): a terminal the user pressed a key in ("you've used it
+since — left open for you") is never closed by Close — confirmed
+working, but the founder isn't sure it's the right call; decide
+together with the user-opened-app case.
 
 Follow-up after window tracking is finished (founder, 2026-10-29):
 redesign the Detail view after Close / Switch. Today it stacks the
@@ -654,6 +714,10 @@ suggestion chip on a Docker/Terminal step is too faint to notice
 (founder missed it, 2026-10-29) — make it prominent, or pre-fill the
 directory from the VS Code step with an easy way to change it. Do it
 together with the Close/Switch view redesign above, through /judge.
+Same pass: the sidebar's status badge is solid red for a step that
+"started, then failed" (terminal opened, a command failed) while the
+Detail strip shows that step half green / half red (founder,
+2026-10-29) — make the two agree.
 
 **Important open product question (founder, 2026-10-29):** users
 shouldn't silently run without what the app needs. Idea: a first-run

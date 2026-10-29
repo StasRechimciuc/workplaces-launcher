@@ -37,8 +37,17 @@ export interface PlatformLauncher {
    * array still opens a terminal at `cwd` with nothing queued — a
    * real, supported case, not a degraded one (same precedent as
    * `openUrlInBrowserProfile`'s optional `url`).
+   *
+   * `marker` (macOS): makes it a tracked terminal — the marker goes in
+   * its window title and names its session files (terminal-session.ts),
+   * and once its commands finish it waits to re-run them instead of
+   * dropping straight to a shell.
    */
-  openTerminal(cwd: string, commands: string[]): Promise<PlatformResult>;
+  openTerminal(
+    cwd: string,
+    commands: string[],
+    options?: { marker?: string },
+  ): Promise<PlatformResult>;
   /**
    * Opens a file with the OS's default handler app for its type (the
    * "File or Link" step's no-`appPath`-override case). `path` must

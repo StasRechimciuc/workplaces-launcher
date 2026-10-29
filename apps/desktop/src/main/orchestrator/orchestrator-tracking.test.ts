@@ -6,11 +6,11 @@ import type {
   WorkspaceConfig,
 } from '@workspace-launcher/shared';
 import {
-  closeRemovedSteps,
+  applyStepsChange,
   closeWorkspace,
   getActiveWorkspaceIds,
   markWorkspaceDetectedActive,
-  previewWorkspaceStepRemoval,
+  previewStepsChange,
   releaseDeletedWorkspace,
   retryStep,
   runWorkspace,
@@ -57,6 +57,9 @@ let nextInstance = 1;
 const closeOutcome = new Map<string, CloseOutcome['outcome']>();
 const closes: string[] = [];
 const runs: string[] = [];
+/** Window instances whose commands have finished — what revive re-runs in place. */
+const finished = new Set<string>();
+const reruns: string[] = [];
 
 function makeKind(
   kind: string,
@@ -106,6 +109,17 @@ function makeKind(
       if (outcome === 'already-gone') return { outcome: 'already-gone' };
       return { outcome, detail: `${outcome} for test` } as CloseOutcome;
     },
+    ...(openIsIdempotent
+      ? {}
+      : {
+          async revive(handle: ResourceHandle) {
+            const name = String(handle['name']);
+            if (!finished.has(name)) return false;
+            finished.delete(name);
+            reruns.push(name);
+            return true;
+          },
+        }),
     async reconcileOpening(identity) {
       const now = running(identity);
       return now.length > 0
@@ -162,6 +176,28 @@ registerTool(trackedTool('spotify', 'fake-app') as ToolPlugin);
 // Untracked: the real 'app' type's app-level name is the bundle's
 // display name (tool-identity.ts), so `path: '/Applications/Music.app'`
 // is app-level "Music".
+// A step opening several windows (a Terminal step's terminals): opens
+// only those not already live, the way terminal-tool.ts does.
+registerTool({
+  type: 't-multi',
+  validate: (params) => ({ valid: true, data: params }),
+  async run(params, ctx) {
+    for (const name of (params as { names: string[] }).names) {
+      if (ctx.liveResourceKeys?.has(JSON.stringify({ name }))) continue;
+      runs.push(name);
+      world.set(name, [...(world.get(name) ?? []), nextInstance++]);
+    }
+    return { success: true, message: 'opened', durationMs: 1 };
+  },
+  teardown: async () => ({ success: true, message: '', durationMs: 0 }),
+  resources: async (params) =>
+    (params as { names: string[] }).names.map((name) => ({
+      kind: 'fake-window',
+      identity: { name },
+      label: name,
+    })),
+} as ToolPlugin);
+
 registerTool({
   type: 'app',
   validate: (params) => ({ valid: true, data: params }),
@@ -200,6 +236,8 @@ beforeEach(() => {
   closeOutcome.clear();
   closes.length = 0;
   runs.length = 0;
+  finished.clear();
+  reruns.length = 0;
   store = memoryStore();
   setLedgerStore(store);
   (activityStore as unknown as { __reset: () => void }).__reset();
@@ -230,6 +268,35 @@ describe('restore', () => {
     expect(runs).toEqual(['term']);
     expect(world.get('term')).toHaveLength(1);
     expect(second).toMatchObject({ success: true, message: 'Already open — reused.' });
+  });
+
+  it('re-runs a finished terminal’s commands in the same window instead of opening another', async () => {
+    const a = ws('A', [{ type: 't-window', params: { name: 'term' } }]);
+    await runWorkspace(a);
+    finished.add('term');
+    const [result] = await runWorkspace(a);
+    expect(reruns).toEqual(['term']);
+    expect(runs).toEqual(['term']);
+    expect(world.get('term')).toHaveLength(1);
+    expect(result).toMatchObject({
+      success: true,
+      message: 'Already open — re-ran its commands there.',
+    });
+  });
+
+  it('opens only the terminals of a step that aren’t open any more', async () => {
+    const a = ws('A', [{ type: 't-multi', params: { names: ['one', 'two'] } }]);
+    await runWorkspace(a);
+    world.set('two', []); // the user closed one of them
+    await runWorkspace(a);
+    expect(runs).toEqual(['one', 'two', 'two']);
+    expect(world.get('one')).toHaveLength(1);
+    expect(
+      store
+        .get()
+        .resources.map((r) => r.label)
+        .sort(),
+    ).toEqual(['one', 'two']);
   });
 
   it('re-runs an app step (its link/playlist is the point) without duplicating the app', async () => {
@@ -459,40 +526,41 @@ describe('activity, delete, save-current', () => {
   });
 });
 
-describe('removing a step from the Detail view', () => {
+describe('editing a running workspace', () => {
+  const without = (config: WorkspaceConfig, stepId: string): WorkspaceConfig => ({
+    ...config,
+    steps: config.steps.filter((step) => step.id !== stepId),
+  });
+
   it('asks before removing a step whose app only it opened and is running', async () => {
     const a = ws('A', [{ id: 'p', type: 't-app', params: { name: 'ProtonVPN' } }]);
     await runWorkspace(a);
-    await expect(previewWorkspaceStepRemoval(a, 'p', [a])).resolves.toEqual(['ProtonVPN']);
+    await expect(previewStepsChange(without(a, 'p'), [a])).resolves.toEqual(['ProtonVPN']);
   });
 
   it('removes without asking when the app is shared, was already open, isn’t running, or another step uses it', async () => {
-    // Shared with another workspace.
     const a = ws('A', [{ id: 'p', type: 't-app', params: { name: 'Shared' } }]);
     const b = ws('B', [{ id: 'q', type: 't-app', params: { name: 'Shared' } }]);
     await runWorkspace(a);
     await runWorkspace(b);
-    await expect(previewWorkspaceStepRemoval(a, 'p', [a, b])).resolves.toEqual([]);
+    await expect(previewStepsChange(without(a, 'p'), [a, b])).resolves.toEqual([]);
 
-    // Already open before this workspace touched it.
     world.set('Mine', [50]);
     const c = ws('C', [{ id: 'm', type: 't-app', params: { name: 'Mine' } }]);
     await runWorkspace(c);
-    await expect(previewWorkspaceStepRemoval(c, 'm', [c])).resolves.toEqual([]);
+    await expect(previewStepsChange(without(c, 'm'), [c])).resolves.toEqual([]);
 
-    // Opened by this app but since quit.
     const d = ws('D', [{ id: 'g', type: 't-app', params: { name: 'Gone' } }]);
     await runWorkspace(d);
     world.set('Gone', []);
-    await expect(previewWorkspaceStepRemoval(d, 'g', [d])).resolves.toEqual([]);
+    await expect(previewStepsChange(without(d, 'g'), [d])).resolves.toEqual([]);
 
-    // Two steps of the same workspace open the same app.
     const e = ws('E', [
       { id: 'one', type: 't-app', params: { name: 'Twice' } },
       { id: 'two', type: 't-app', params: { name: 'Twice' } },
     ]);
     await runWorkspace(e);
-    await expect(previewWorkspaceStepRemoval(e, 'one', [e])).resolves.toEqual([]);
+    await expect(previewStepsChange(without(e, 'one'), [e])).resolves.toEqual([]);
   });
 
   it('closes the removed step’s app once confirmed', async () => {
@@ -501,10 +569,11 @@ describe('removing a step from the Detail view', () => {
       { id: 'p', type: 't-app', params: { name: 'ProtonVPN' } },
     ]);
     await runWorkspace(before);
-    const after = ws('A', [{ id: 'keep', type: 't-app', params: { name: 'Figma' } }]);
-    await expect(closeRemovedSteps(after, [after], true)).resolves.toEqual({
+    const after = without(before, 'p');
+    await expect(applyStepsChange(after, [after], true)).resolves.toEqual({
       closed: ['ProtonVPN'],
       leftOpen: [],
+      stepResults: [],
     });
     expect(store.get().resources.map((r) => r.label)).toEqual(['Figma']);
   });
@@ -512,24 +581,33 @@ describe('removing a step from the Detail view', () => {
   it('without confirmation only releases the claim — never closes', async () => {
     const before = ws('A', [{ id: 'p', type: 't-app', params: { name: 'ProtonVPN' } }]);
     await runWorkspace(before);
-    const after = ws('A', []);
-    await expect(closeRemovedSteps(after, [after], false)).resolves.toEqual({
-      closed: [],
-      leftOpen: [],
-    });
+    const after = without(before, 'p');
+    await applyStepsChange(after, [after], false);
     expect(closes).toEqual([]);
     expect(resourcesOwnedBy(store.get(), 'A')).toEqual([]);
   });
 
-  it('keeps a shared app open when the removed step’s claim is released', async () => {
-    const a = ws('A', [{ id: 'p', type: 't-app', params: { name: 'ProtonVPN' } }]);
-    const b = ws('B', [{ id: 'q', type: 't-app', params: { name: 'ProtonVPN' } }]);
-    await runWorkspace(a);
-    await runWorkspace(b);
-    const after = ws('A', []);
-    await closeRemovedSteps(after, [after, b], false);
-    expect(closes).toEqual([]);
-    expect(resourcesOwnedBy(store.get(), 'B')).toHaveLength(1);
+  it('a changed terminal command closes the old window and opens one running the new command', async () => {
+    const before = ws('A', [{ id: 't', type: 't-window', params: { name: 'npm run dev' } }]);
+    await runWorkspace(before);
+    const after = ws('A', [{ id: 't', type: 't-window', params: { name: 'npm start' } }]);
+    await expect(previewStepsChange(after, [before])).resolves.toEqual(['npm run dev']);
+    const result = await applyStepsChange(after, [after], true);
+    expect(result.closed).toEqual(['npm run dev']);
+    expect(result.stepResults).toEqual([
+      { stepId: 't', result: expect.objectContaining({ success: true }) },
+    ]);
+    expect(runs).toEqual(['npm run dev', 'npm start']);
+    expect(store.get().resources.map((r) => r.label)).toEqual(['npm start']);
+  });
+
+  it('even without applying, the next restore replaces a changed terminal instead of leaking the old one', async () => {
+    const before = ws('A', [{ id: 't', type: 't-window', params: { name: 'npm run dev' } }]);
+    await runWorkspace(before);
+    const after = ws('A', [{ id: 't', type: 't-window', params: { name: 'npm start' } }]);
+    await runWorkspace(after, { allConfigs: [after] });
+    expect(closes).toEqual(['npm run dev']);
+    expect(store.get().resources.map((r) => r.label)).toEqual(['npm start']);
   });
 });
 

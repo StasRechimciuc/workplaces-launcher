@@ -9,27 +9,31 @@ import {
   DialogTitle,
 } from './ui/dialog';
 
-interface RemoveStepConfirmProps {
-  /** null closes the dialog; otherwise what removing the step closes. */
-  pending: { closes: string[] } | null;
+interface StepChangeConfirmProps {
+  /**
+   * null closes the dialog. `action`: removing one step, or saving an
+   * edit (which may remove and change several); `closes`: what doing so
+   * would close (orchestrator.ts's previewStepsChange).
+   */
+  pending: { action: 'remove' | 'save'; closes: string[] } | null;
   onCancel: () => void;
   onConfirm: () => void;
 }
 
 /**
- * Asked only when removing a step would close something right away:
- * an app this workspace opened that nothing else is using (see
- * orchestrator.ts's previewWorkspaceStepRemoval). Removing a step
- * whose app is shared, was already open, or isn't running needs no
- * confirmation — nothing closes. Same dialog shape as
- * DeleteWorkspaceConfirm.tsx; every way of dismissing it is Cancel.
+ * Asked only when removing or changing steps would close something
+ * right away: something this workspace opened that nothing else uses —
+ * a changed terminal is closed and reopened with its new command.
+ * Anything shared, already open before, or not running needs no
+ * confirmation. Same dialog shape as DeleteWorkspaceConfirm.tsx; every
+ * way of dismissing it is Cancel.
  */
-export function RemoveStepConfirm({
+export function StepChangeConfirm({
   pending,
   onCancel,
   onConfirm,
-}: RemoveStepConfirmProps): JSX.Element {
-  const apps = pending ? formatList(pending.closes) : '';
+}: StepChangeConfirmProps): JSX.Element {
+  const things = pending ? formatList(pending.closes) : '';
   return (
     <Dialog
       open={pending !== null}
@@ -39,7 +43,9 @@ export function RemoveStepConfirm({
     >
       <DialogContent showCloseButton={false} className="w-105" onEnterKey={onConfirm}>
         <DialogHeader>
-          <DialogTitle>Remove this step?</DialogTitle>
+          <DialogTitle>
+            {pending?.action === 'remove' ? 'Remove this step?' : 'Save changes?'}
+          </DialogTitle>
           <DialogClose className="flex h-7 w-7 items-center justify-center rounded-md text-text-muted hover:bg-bg-hover hover:text-text">
             <Icon name="x" size={14} />
           </DialogClose>
@@ -48,7 +54,9 @@ export function RemoveStepConfirm({
         <div className="p-5">
           <DialogDescription>
             {pending &&
-              `Removing this step will also close ${apps}, which this workspace opened and nothing else is using.`}
+              (pending.action === 'remove'
+                ? `Removing this step will also close ${things}, which this workspace opened and nothing else is using.`
+                : `Saving will close ${things}, which this workspace opened and nothing else is using. A changed step opens again with its new settings.`)}
           </DialogDescription>
         </div>
 
@@ -61,7 +69,7 @@ export function RemoveStepConfirm({
             type="button"
             onClick={onConfirm}
           >
-            Remove and close {pending && pending.closes.length === 1 ? pending.closes[0] : 'them'}
+            {pending?.action === 'remove' ? 'Remove' : 'Save'} and close
           </button>
         </DialogFooter>
       </DialogContent>

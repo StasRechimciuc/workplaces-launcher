@@ -119,8 +119,12 @@ describe('terminalTool', () => {
         { workspaceId: 'ws-1' },
       );
 
-      expect(openTerminal).toHaveBeenNthCalledWith(1, '~/a', ['npm run dev']);
-      expect(openTerminal).toHaveBeenNthCalledWith(2, '~/b', []);
+      expect(openTerminal).toHaveBeenNthCalledWith(1, '~/a', ['npm run dev'], {
+        marker: expect.stringMatching(/^wl-[0-9a-f]{12}$/),
+      });
+      expect(openTerminal).toHaveBeenNthCalledWith(2, '~/b', [], {
+        marker: expect.stringMatching(/^wl-[0-9a-f]{12}$/),
+      });
       expect(result.success).toBe(true);
       expect(result.message).toBe('Opened 2 terminals.');
     });

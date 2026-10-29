@@ -154,6 +154,17 @@ export interface SwitchResult {
   leftOpen: LeftOpenEntry[];
 }
 
+/**
+ * Result of applying a saved edit to a running workspace (removed or
+ * changed steps): what was closed or left open, and the fresh result of
+ * every changed step that ran again with its new settings.
+ */
+export interface ApplyStepsChangeResult {
+  closed: string[];
+  leftOpen: LeftOpenEntry[];
+  stepResults: { stepId: string; result: StepResult }[];
+}
+
 /** Result of "Close this workspace" — closes only this workspace's own
  * apps; never opens anything. */
 export interface CloseResult {
@@ -175,6 +186,13 @@ export interface StepDisplayRow {
  * function signature.
  */
 export interface RunContext {
+  /**
+   * Identity keys (resources/kind-registry.ts's identityKeyFor) of this
+   * step's resources that are already open and being reused — a step
+   * that opens several things (a Terminal step's terminals) opens only
+   * the others, never a second copy of these.
+   */
+  liveResourceKeys?: ReadonlySet<string>;
   workspaceId: string;
 }
 

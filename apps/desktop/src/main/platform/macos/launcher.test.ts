@@ -15,7 +15,7 @@ import { join } from 'node:path';
 const openTerminalWithPollOptions = macosLauncher.openTerminal as (
   cwd: string,
   commands: string[],
-  pollOptions?: { intervalMs?: number; timeoutMs?: number; startTimeoutMs?: number },
+  options?: { marker?: string; intervalMs?: number; timeoutMs?: number; startTimeoutMs?: number },
 ) => Promise<PlatformResult>;
 
 vi.mock('../../lib/shell-exec', () => ({
@@ -249,6 +249,73 @@ describe('macosLauncher', () => {
           '',
         ].join('\n'),
       );
+    });
+
+    it('writes the exact tracked-terminal script: marker title, session files, re-run loop', async () => {
+      stat.mockResolvedValueOnce({ isDirectory: () => true } as never);
+      writeFile.mockResolvedValueOnce(undefined);
+      runCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
+      readFile.mockRejectedValue(enoentError());
+
+      const marker = 'wl-0123456789ab';
+      await openTerminalWithPollOptions('/Users/stas/projects/x', ['npm run dev'], {
+        ...fastPoll,
+        marker,
+      });
+
+      const session = join(tmpdir(), `workspace-launcher-session-${marker}`);
+      const [, contents] = writeFile.mock.calls[0]!;
+      expect(contents).toBe(
+        [
+          '#!/bin/zsh -l',
+          'rm -f -- "$0"',
+          `echo "started" >> '${sentinelPath}'`,
+          `printf '\\e]0;%s\\a' '${marker}'`,
+          `print -r -- "$TTY $$" > '${session}.info'`,
+          `echo running > '${session}.state'`,
+          "trap 'true' INT",
+          'clear',
+          `cd '/Users/stas/projects/x' || { echo "cd into the configured directory failed."; echo "cd:1" >> '${sentinelPath}'; exec "$SHELL" -l; }`,
+          'wl_run() {',
+          '  :',
+          `  echo '$ npm run dev'`,
+          `  echo "###OUT:0###" >> '${outputLogPath}'`,
+          `  { npm run dev; echo "0:$?" >> '${sentinelPath}'; } 2>&1 | tee -a '${outputLogPath}'`,
+          '}',
+          'wl_run',
+          'while true; do',
+          `  echo done > '${session}.state'`,
+          "  echo ''",
+          "  echo '[Workspace Launcher] Commands finished — press any key for a shell.'",
+          `  while [[ ! -f '${session}.rerun' ]]; do`,
+          '    if read -s -t 1 -k 1; then',
+          `      echo shell > '${session}.state'`,
+          '      trap - INT',
+          '      exec "$SHELL" -l',
+          '    fi',
+          '  done',
+          `  rm -f -- '${session}.rerun'`,
+          `  echo running > '${session}.state'`,
+          '  wl_run',
+          'done',
+          '',
+        ].join('\n'),
+      );
+
+      // And it's valid zsh — checked by the real zsh, not by eye.
+      if (process.platform === 'darwin') {
+        const realFs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+        const { execFileSync } =
+          await vi.importActual<typeof import('node:child_process')>('node:child_process');
+        const dir = await realFs.mkdtemp(join(tmpdir(), 'wl-script-test-'));
+        const file = join(dir, 'check.zsh');
+        await realFs.writeFile(file, String(contents));
+        try {
+          expect(() => execFileSync('/bin/zsh', ['-n', file])).not.toThrow();
+        } finally {
+          await realFs.rm(dir, { recursive: true, force: true });
+        }
+      }
     });
 
     it('writes the exact script content for a terminal with zero commands queued', async () => {

@@ -110,7 +110,7 @@ export async function openTrackedStep(
   store: ResourceLedgerStore,
   workspaceId: string,
   { step, specs }: TrackedStep,
-  run: () => Promise<StepResult>,
+  run: (liveResourceKeys: ReadonlySet<string>) => Promise<StepResult>,
 ): Promise<StepResult> {
   const owner: ResourceOwner = { workspaceId, stepId: step.id };
   const keys = specs.map((s) => identityLockKey(s.kind, identityKeyFor(s)));
@@ -123,13 +123,20 @@ export async function openTrackedStep(
       snapshot: unknown;
     }[] = [];
     let mustRun = false;
+    const liveKeys = new Set<string>();
+    let revived = 0;
 
     for (const spec of specs) {
       const kind = getResourceKind(spec.kind)!;
       const live = await findLiveResource(store, kind, spec);
       if (live) {
         store.update((l) => addOwner(l, live.id, owner));
-        if (kind.openIsIdempotent) mustRun = true;
+        if (kind.openIsIdempotent) {
+          mustRun = true;
+        } else {
+          liveKeys.add(live.identityKey);
+          if (kind.revive && live.handle && (await kind.revive(live.handle))) revived++;
+        }
         continue;
       }
       const snapshot = await kind.snapshot(spec.identity);
@@ -152,7 +159,13 @@ export async function openTrackedStep(
       mustRun = true;
     }
 
-    const result = mustRun ? await run() : { ...REUSED_RESULT, durationMs: 0 };
+    const result = mustRun
+      ? await run(liveKeys)
+      : {
+          ...REUSED_RESULT,
+          ...(revived > 0 ? { message: 'Already open — re-ran its commands there.' } : {}),
+          durationMs: 0,
+        };
 
     for (const { spec, kind, id, snapshot } of pending) {
       const captured = await kind.capture(spec.identity, snapshot, spec.options);
@@ -379,52 +392,88 @@ export async function closeOwnerless(
   return report;
 }
 
-/**
- * After a run: claims by steps that are no longer in the workspace
- * (edited out since they opened something) are released and closed if
- * ownerless — an edit never orphans a resource. `context` is only
- * worked out when there's something to release, which is rare.
- */
-export async function reconcileRemovedSteps(
-  store: ResourceLedgerStore,
-  config: WorkspaceConfig,
-  context: () => Promise<CloseContext>,
-): Promise<CloseReport> {
-  const removed = removedStepIds(store, config);
-  if (removed.size === 0) return { closed: [], leftOpen: [], hadFailure: false, refused: [] };
-  return releaseAndClose(store, config.id, await context(), removed);
+/** One workspace step's claim on one resource. */
+export interface Claim {
+  resourceId: string;
+  owner: ResourceOwner;
 }
 
-/** Ids of steps this workspace still has claims for but no longer contains. */
-export function removedStepIds(store: ResourceLedgerStore, config: WorkspaceConfig): Set<string> {
-  const current = new Set(config.steps.map((s) => s.id));
-  return new Set(
-    resourcesOwnedBy(store.get(), config.id)
-      .flatMap((r) => r.owners)
-      .filter((o) => o.workspaceId === config.id && !current.has(o.stepId))
-      .map((o) => o.stepId),
+/**
+ * The workspace's claims that no longer match its steps: a step that
+ * was removed, or a step that was edited so it now needs something
+ * else (a terminal whose command changed is a different terminal). The
+ * claimed resource is the old version — no step will ever reuse it, so
+ * keeping the claim would only leak it.
+ *
+ * `currentKeys` is each tracked step's current identity keys; a step
+ * missing from it (removed, or no longer tracked) has no valid claims.
+ */
+export function staleClaims(
+  store: ResourceLedgerStore,
+  workspaceId: string,
+  currentKeys: ReadonlyMap<string, ReadonlySet<string>>,
+): Claim[] {
+  return resourcesOwnedBy(store.get(), workspaceId).flatMap((resource) =>
+    resource.owners
+      .filter(
+        (o) =>
+          o.workspaceId === workspaceId &&
+          !(currentKeys.get(o.stepId)?.has(resource.identityKey) ?? false),
+      )
+      .map((owner) => ({ resourceId: resource.id, owner })),
   );
 }
 
 /**
- * What removing one step would close right now: resources this app
- * opened that only this step claims (not another workspace, not
- * another step of the same one), that are still running, and that no
- * active workspace's untracked step uses by name. The Detail view asks
- * before removing such a step; anything else is removed silently.
+ * Releases these claims; with `close`, also closes what that leaves
+ * ownerless and ours (the same rules as Close). Without it nothing is
+ * closed, even if something became ownerless — the user didn't agree
+ * to close it. A refused close gets its claims back.
  */
-export async function previewStepRemoval(
+export async function releaseClaims(
   store: ResourceLedgerStore,
-  workspaceId: string,
-  stepId: string,
+  claims: readonly Claim[],
+  context: CloseContext,
+  close: boolean,
+): Promise<CloseReport> {
+  for (const { resourceId, owner } of claims) {
+    store.update((l) => (findResource(l, resourceId) ? removeOwner(l, resourceId, owner) : l));
+  }
+  const ids = [...new Set(claims.map((c) => c.resourceId))];
+  if (!close) return { closed: [], leftOpen: [], hadFailure: false, refused: [] };
+  const report = await closeOwnerless(store, ids, context);
+  const ownersById = new Map<string, ResourceOwner[]>();
+  for (const { resourceId, owner } of claims) {
+    ownersById.set(resourceId, [...(ownersById.get(resourceId) ?? []), owner]);
+  }
+  restoreClaims(store, report.refused, ownersById);
+  return report;
+}
+
+/**
+ * What releasing these claims would close right now: resources this
+ * app opened that only these claims hold, that are still running, and
+ * that nothing else needs by app name. Asked about before a save that
+ * would release them (the Detail view and the Edit form); anything
+ * else is let go of silently.
+ */
+export async function previewClaimRelease(
+  store: ResourceLedgerStore,
+  claims: readonly Claim[],
   context: CloseContext,
 ): Promise<string[]> {
   const labels: string[] = [];
-  for (const resource of resourcesOwnedBy(store.get(), workspaceId, stepId)) {
-    const onlyThisStep = resource.owners.every(
-      (o) => o.workspaceId === workspaceId && o.stepId === stepId,
+  for (const resourceId of new Set(claims.map((c) => c.resourceId))) {
+    const resource = findResource(store.get(), resourceId);
+    if (!resource || !resource.createdByApp || resource.handle === null) continue;
+    const releasing = claims.filter((c) => c.resourceId === resourceId);
+    const keepsAnOwner = resource.owners.some(
+      (o) =>
+        !releasing.some(
+          (c) => c.owner.workspaceId === o.workspaceId && c.owner.stepId === o.stepId,
+        ),
     );
-    if (!onlyThisStep || !resource.createdByApp || resource.handle === null) continue;
+    if (keepsAnOwner) continue;
     const kind = getResourceKind(resource.kind);
     if (!kind) continue;
     if (kind.closesWholeApp && resource.appName !== undefined) {

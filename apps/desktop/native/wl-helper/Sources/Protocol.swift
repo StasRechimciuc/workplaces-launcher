@@ -73,6 +73,16 @@ struct Params {
     return TimeInterval(number.int64Value) / 1000
   }
 
+  /// An optional plain-text needle (a window title marker): absent is
+  /// nil; anything present must be a short, non-empty string.
+  func optionalString(_ key: String, maxLength: Int = 128) throws -> String? {
+    guard let value = raw[key] else { return nil }
+    guard let text = value as? String, !text.isEmpty, text.count <= maxLength else {
+      throw RpcError.invalidParams("\(key) must be a non-empty string of at most \(maxLength) characters")
+    }
+    return text
+  }
+
   // Reverse-DNS bundle identifiers: letters, digits, '.', '-' and '_'.
   private static let bundleIdCharacters = CharacterSet(
     charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_")

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import type {
   LeftOpenEntry,
+  WorkspaceStepInput,
   RestoreProgressEvent,
   StepResult,
   WorkspaceConfig,
@@ -18,10 +19,14 @@ import { useSpotifyConnection } from '../lib/useSpotifyConnection';
 import { useAppPathDetections } from '../lib/useAppPathDetections';
 import { useProjectFilesDetection } from '../lib/useProjectFilesDetection';
 import { PROJECT_PATH_STEP_TYPES, getProjectPathSuggestion } from '../lib/project-path-suggestion';
-import { resultsForSteps, type WorkspaceRestoreState } from '../lib/workspace-restore-state';
+import {
+  resultsForSteps,
+  withStepResults,
+  type WorkspaceRestoreState,
+} from '../lib/workspace-restore-state';
 import { TimelineStep } from './TimelineStep';
 import { RestoreResults } from './RestoreResults';
-import { RemoveStepConfirm } from './RemoveStepConfirm';
+import { StepChangeConfirm } from './StepChangeConfirm';
 import { ErrorCode } from './ErrorCode';
 import { WorkspaceHotkeyControl } from './WorkspaceHotkeyControl';
 
@@ -174,11 +179,13 @@ export function Detail({
   // (a step can be removed whether or not it's currently expanded).
   const [removingIndex, setRemovingIndex] = useState<number | null>(null);
   const [removeStepError, setRemoveStepError] = useState<DisplayError | null>(null);
-  // Set while the remove-step confirmation is open (RemoveStepConfirm).
-  const [pendingRemoval, setPendingRemoval] = useState<{
-    stepId: string;
-    closes: string[];
-  } | null>(null);
+  // Set while StepChangeConfirm is open: a remove or a quick-edit save
+  // that would close something, waiting for the user's answer.
+  const [pendingChange, setPendingChange] = useState<
+    | { action: 'remove'; stepId: string; closes: string[] }
+    | { action: 'save'; index: number; params: Record<string, unknown>; closes: string[] }
+    | null
+  >(null);
   const recentFolders = useMemo(() => getRecentProjectPaths(allWorkspaces), [allWorkspaces]);
   const recentCommands = useMemo(() => getRecentCommands(allWorkspaces), [allWorkspaces]);
   // Independently instantiated from WorkspaceFormModal's own instance —
@@ -211,20 +218,55 @@ export function Detail({
    * must know whether to proceed with an auto-committed draft or abort
    * the restore entirely, see its own comment on why.
    */
+  /**
+   * Quick-edit Save. A change that would close something this workspace
+   * opened and nothing else uses (a terminal whose command changed)
+   * asks first (StepChangeConfirm); otherwise it saves straight away.
+   * Resolves false when nothing was saved yet — a failure, or the
+   * confirmation is still open — so a Restore waiting on it stops.
+   */
   async function handleSaveStep(i: number): Promise<boolean> {
     if (draftParams === null) return true; // nothing to save is not a failure
-    setIsSavingStep(true);
+    const params = draftParams;
+    const steps = stepsWithParams(i, params);
     setSaveStepError(null);
-    const steps = replaceStepParams(
+    let closes: string[];
+    try {
+      closes = await window.api.previewStepsChange(workspace.id, steps);
+    } catch (err) {
+      setSaveStepError({
+        message: err instanceof Error ? err.message : String(err),
+        code: ERROR_CODES.SYSTEM_UNEXPECTED.code,
+      });
+      return false;
+    }
+    if (closes.length > 0) {
+      setPendingChange({ action: 'save', index: i, params, closes });
+      return false;
+    }
+    return saveStep(i, params, false);
+  }
+
+  function stepsWithParams(i: number, params: Record<string, unknown>): WorkspaceStepInput[] {
+    return replaceStepParams(
       workspace.tools.map((t) => ({ id: t.id, type: t.type, params: t.params })),
       i,
-      draftParams,
+      params,
     );
+  }
+
+  async function saveStep(
+    i: number,
+    params: Record<string, unknown>,
+    close: boolean,
+  ): Promise<boolean> {
+    setIsSavingStep(true);
+    setSaveStepError(null);
     try {
       const result = await window.api.updateWorkspace({
         id: workspace.id,
         name: workspace.name,
-        steps,
+        steps: stepsWithParams(i, params),
       });
       if (!result.success) {
         setSaveStepError({
@@ -235,6 +277,7 @@ export function Detail({
         return false;
       }
       setDraftParams(null);
+      await applySavedChange(close);
       onQuickEditSaved(result.config);
       return true;
     } catch (err) {
@@ -248,25 +291,35 @@ export function Detail({
     }
   }
 
+  /**
+   * After a saved edit: what removed/changed steps held is released
+   * (closed only with `close` — confirmed), and changed steps run again
+   * with their new settings; their fresh results replace their old
+   * ones. See orchestrator.ts's applyStepsChange.
+   */
+  async function applySavedChange(close: boolean): Promise<void> {
+    const report = await window.api.applyStepsChange(workspace.id, close);
+    if (!isMountedRef.current) return;
+    if (report.closed.length > 0 || report.leftOpen.length > 0) {
+      onUpdateRestoreState({ activityLog: { closed: report.closed, leftOpen: report.leftOpen } });
+    }
+    if (report.stepResults.length > 0) {
+      onUpdateRestoreState((prev) => ({
+        ...withStepResults(prev, report.stepResults),
+        restoredAt: prev.restoredAt ?? Date.now(),
+      }));
+    }
+  }
+
   function handleCancelStep(): void {
     setDraftParams(null);
     setSaveStepError(null);
   }
 
   /**
-   * Removes one step entirely and persists immediately — a quick,
-   * direct action (no confirmation dialog), matching this app's
-   * existing precedent for removing a single item within an
-   * already-editing context (WorkspaceFormModal's removeTool,
-   * EditableStringList's own remove row) rather than the heavier,
-   * confirmed "Delete workspace" flow. If the step being removed is
-   * also the currently-expanded one, its quick-edit state is cleared
-   * too — nothing left to save/cancel for a step that no longer exists.
-   */
-  /**
    * Remove-step button: asks first only when removing it would close an
    * app right away — one this workspace opened that nothing else uses
-   * (previewStepRemoval). Otherwise (shared, already open before, not
+   * (previewStepsChange). Otherwise (shared, already open before, not
    * running) the step is simply removed.
    */
   async function handleRemoveStep(i: number): Promise<void> {
@@ -275,7 +328,12 @@ export function Detail({
     setRemoveStepError(null);
     let closes: string[];
     try {
-      closes = await window.api.previewStepRemoval(workspace.id, tool.id);
+      closes = await window.api.previewStepsChange(
+        workspace.id,
+        workspace.tools
+          .filter((t) => t.id !== tool.id)
+          .map((t) => ({ id: t.id, type: t.type, params: t.params })),
+      );
     } catch (err) {
       if (isMountedRef.current) {
         setRemoveStepError({
@@ -287,7 +345,7 @@ export function Detail({
     }
     if (!isMountedRef.current) return;
     if (closes.length > 0) {
-      setPendingRemoval({ stepId: tool.id, closes });
+      setPendingChange({ action: 'remove', stepId: tool.id, closes });
       return;
     }
     await removeStep(tool.id, false);
@@ -317,11 +375,8 @@ export function Detail({
         setRemoveStepError({ message: result.error, code: result.code });
         return;
       }
-      const report = await window.api.closeRemovedSteps(workspace.id, close);
+      await applySavedChange(close);
       if (!isMountedRef.current) return;
-      if (report.closed.length > 0 || report.leftOpen.length > 0) {
-        onUpdateRestoreState({ activityLog: report });
-      }
       if (expandedIndex === i) {
         setExpandedIndex(null);
         setDraftParams(null);
@@ -862,15 +917,16 @@ export function Detail({
         })}
       </div>
 
-      <RemoveStepConfirm
-        pending={pendingRemoval}
+      <StepChangeConfirm
+        pending={pendingChange}
         onCancel={() => {
-          setPendingRemoval(null);
+          setPendingChange(null);
         }}
         onConfirm={() => {
-          const removal = pendingRemoval;
-          setPendingRemoval(null);
-          if (removal) void removeStep(removal.stepId, true);
+          const change = pendingChange;
+          setPendingChange(null);
+          if (change?.action === 'remove') void removeStep(change.stepId, true);
+          if (change?.action === 'save') void saveStep(change.index, change.params, true);
         }}
       />
     </main>

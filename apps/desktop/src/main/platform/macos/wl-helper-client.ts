@@ -44,9 +44,10 @@ export interface HelperWindow {
 export interface HelperMethods {
   listWindows: { params: { bundleId: string }; result: HelperWindow[] };
   captureNewWindow: {
-    params: { bundleId: string; before: number[]; timeoutMs?: number };
+    params: { bundleId: string; before: number[]; titleContains?: string; timeoutMs?: number };
     result: HelperWindow;
   };
+  processStartTime: { params: { pid: number }; result: { startedAt: number | null } };
   windowState: {
     params: { pid: number; windowId: number };
     result: { state: 'alive' | 'gone' | 'blocked'; reachable: boolean };

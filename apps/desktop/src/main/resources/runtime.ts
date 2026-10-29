@@ -13,6 +13,7 @@ import {
   type VscodeWindowDeps,
 } from './kinds/vscode-window-kind';
 import { readBundleId } from '../platform/macos/bundle-id';
+import { createTerminalKind, defaultTerminalDeps } from './kinds/terminal-kind';
 
 /**
  * The live resource ledger, or null when tracking is off: not macOS,
@@ -43,6 +44,7 @@ export async function initResourceTracking(configs: readonly WorkspaceConfig[]):
   try {
     registerResourceKind(createAppKind(getWlHelper()));
     registerResourceKind(createComposeKind());
+    registerResourceKind(createTerminalKind({ helper: getWlHelper(), ...defaultTerminalDeps }));
     registerResourceKind(createVscodeWindowKind(vscodeWindowDeps()));
     const store = createResourceLedgerStore();
     const loaded = store.load(await readBootSessionUuid());

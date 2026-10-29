@@ -53,9 +53,12 @@ final class WindowRegistry {
   /// a short settle period and looks again, so two windows appearing in
   /// quick succession are reported as ambiguous rather than one of them
   /// being silently picked.
-  func captureNewWindow(bundleId: String, before: Set<CGWindowID>, timeout: TimeInterval) throws
-    -> WindowInfo
-  {
+  /// `titleContains` narrows the candidates to windows whose title has
+  /// that text — a per-terminal marker the opener set, so one step
+  /// opening several windows at once still captures each one exactly.
+  func captureNewWindow(
+    bundleId: String, before: Set<CGWindowID>, titleContains: String?, timeout: TimeInterval
+  ) throws -> WindowInfo {
     let deadline = Date().addingTimeInterval(timeout)
     var lastTimeout: RpcError?
     func candidates() throws -> [(WindowInfo, AXUIElement)] {
@@ -73,7 +76,8 @@ final class WindowRegistry {
         }
         return elements.compactMap { element in
           guard let window = info(element, pid: app.processIdentifier),
-            window.standard, !before.contains(window.id)
+            window.standard, !before.contains(window.id),
+            titleContains.map({ window.title.contains($0) }) ?? true
           else { return nil }
           return (window, element)
         }

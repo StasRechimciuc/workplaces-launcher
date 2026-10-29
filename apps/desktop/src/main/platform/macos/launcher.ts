@@ -8,6 +8,7 @@ import type { TerminalCommandResult, TerminalEntryResult } from '@workspace-laun
 import { runCommand } from '../../lib/shell-exec';
 import { expandHome } from '../../lib/paths';
 import { pollUntil } from '../../lib/poll-until';
+import { terminalSessionPaths } from './terminal-session';
 
 /**
  * Safe to embed in a single-quoted shell string — the only quoting
@@ -350,8 +351,16 @@ export const macosLauncher: PlatformLauncher = {
   async openTerminal(
     cwd,
     commands,
-    commandPollOptions?: { intervalMs?: number; timeoutMs?: number; startTimeoutMs?: number },
+    options?: {
+      marker?: string;
+      // Test-only, non-interface: shorter early-failure poll windows.
+      intervalMs?: number;
+      timeoutMs?: number;
+      startTimeoutMs?: number;
+    },
   ): Promise<PlatformResult> {
+    const commandPollOptions = options;
+    const marker = options?.marker;
     const expandedCwd = expandHome(cwd);
     // Every early-return below this point represents "nothing
     // configured for this entry ever got a chance to run" — same
@@ -419,6 +428,12 @@ export const macosLauncher: PlatformLauncher = {
     // bounded regardless of how many commands a terminal entry has.
     const outputLogPath = join(tmpdir(), `workspace-launcher-terminal-${id}.out`);
     const safeOutputLog = singleQuote(outputLogPath);
+    const commandLines = commands.flatMap((command, i) => [
+      `echo ${singleQuote(`$ ${command}`)}`,
+      `echo "###OUT:${i}###" >> ${safeOutputLog}`,
+      `{ ${command}; echo "${i}:$?" >> ${safeSentinel}; } 2>&1 | tee -a ${safeOutputLog}`,
+    ]);
+    const session = marker === undefined ? undefined : { marker, ...terminalSessionPaths(marker) };
     const lines = [
       '#!/bin/zsh -l',
       // Self-deletes immediately — the interpreter already has the
@@ -434,6 +449,22 @@ export const macosLauncher: PlatformLauncher = {
       // exists as its own marker rather than inferring "started" from
       // the `cd`/command lines' own sentinel writes.
       `echo "started" >> ${safeSentinel}`,
+      // Tracked terminal (phase 3a): the marker goes in the window title
+      // first — before `cd` or any command can set a title of its own —
+      // so the app can tell which new window is this one; then the
+      // shell's tty and pid, which is how its processes are found and
+      // stopped again. Ctrl+C on a command returns to the re-run wait
+      // below instead of ending the script: a handler (not an ignore,
+      // which children would inherit) keeps the commands' own Ctrl+C
+      // behavior intact.
+      ...(session
+        ? [
+            `printf '\\e]0;%s\\a' ${singleQuote(session.marker)}`,
+            `print -r -- "$TTY $$" > ${singleQuote(session.info)}`,
+            `echo running > ${singleQuote(session.state)}`,
+            "trap 'true' INT",
+          ]
+        : []),
       // Terminal.app's own behavior when it opens a .command file (via
       // `open -a Terminal`, same as a double-click) — not anything this
       // script controls — is to visibly "type" the script's full path
@@ -485,12 +516,35 @@ export const macosLauncher: PlatformLauncher = {
       // is harmless (an orphaned, slowly-growing file for that
       // session's lifetime, same category of leftover this script's
       // sentinel already accepts elsewhere in this file).
-      ...commands.flatMap((command, i) => [
-        `echo ${singleQuote(`$ ${command}`)}`,
-        `echo "###OUT:${i}###" >> ${safeOutputLog}`,
-        `{ ${command}; echo "${i}:$?" >> ${safeSentinel}; } 2>&1 | tee -a ${safeOutputLog}`,
-      ]),
-      'exec "$SHELL" -l',
+      ...(session
+        ? [
+            // Decision 2 (phase 3b): finished commands don't hand the
+            // window straight to a shell. It waits instead — a re-run
+            // request from the app (the .rerun file) runs them again in
+            // this same window; any keypress hands it to the user, from
+            // then on theirs and never closed by the app.
+            'wl_run() {',
+            '  :',
+            ...commandLines.map((line) => `  ${line}`),
+            '}',
+            'wl_run',
+            'while true; do',
+            `  echo done > ${singleQuote(session.state)}`,
+            "  echo ''",
+            "  echo '[Workspace Launcher] Commands finished — press any key for a shell.'",
+            `  while [[ ! -f ${singleQuote(session.rerun)} ]]; do`,
+            '    if read -s -t 1 -k 1; then',
+            `      echo shell > ${singleQuote(session.state)}`,
+            '      trap - INT',
+            '      exec "$SHELL" -l',
+            '    fi',
+            '  done',
+            `  rm -f -- ${singleQuote(session.rerun)}`,
+            `  echo running > ${singleQuote(session.state)}`,
+            '  wl_run',
+            'done',
+          ]
+        : [...commandLines, 'exec "$SHELL" -l']),
     ];
 
     try {

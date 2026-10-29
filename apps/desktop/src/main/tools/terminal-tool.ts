@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import type {
+  ResourceSpec,
+  RunContext,
   StepResult,
   TerminalEntryResult,
   ToolPlugin,
@@ -8,6 +10,8 @@ import type {
 import { ERROR_CODES, zodValidate } from '@workspace-launcher/shared';
 import { getPlatformLauncher } from '../platform';
 import { isAcceptableToolPath } from '../lib/paths';
+import { identityKeyFor } from '../resources/kind-registry';
+import { markerOf, terminalWindowResource } from '../resources/kinds/terminal-spec';
 
 /**
  * One terminal's config: a working directory (`cd`'d into first — most
@@ -74,12 +78,13 @@ export const terminalTool: ToolPlugin<TerminalStepParams> = {
     return zodValidate(TerminalStepParamsSchema, params);
   },
 
-  async run(params: TerminalStepParams): Promise<StepResult> {
+  async run(params: TerminalStepParams, ctx: RunContext): Promise<StepResult> {
     const startedAt = Date.now();
     // Defensive re-check, same precedent as vscode-tool.ts's own
     // terminals guard — validate()'s default isn't guaranteed to have
     // run on every path that reaches here.
     const terminals = Array.isArray(params.terminals) ? params.terminals : [];
+    const specs = terminalSpecs(terminals);
 
     if (terminals.length === 0) {
       return {
@@ -93,8 +98,19 @@ export const terminalTool: ToolPlugin<TerminalStepParams> = {
     // own multi-url handling: concurrent window creation gives no
     // guaranteed order, risking focus/z-order races.
     const results: { success: boolean; message: string; detail?: Record<string, unknown> }[] = [];
-    for (const entry of terminals) {
-      results.push(await getPlatformLauncher().openTerminal(entry.cwd, entry.commands));
+    for (const [i, entry] of terminals.entries()) {
+      const spec = specs[i]!;
+      // Already open and being reused (resources/tracking.ts) — never a
+      // second window for the same terminal.
+      if (ctx.liveResourceKeys?.has(identityKeyFor(spec))) {
+        results.push({ success: true, message: `Reused the open terminal at ${entry.cwd}.` });
+        continue;
+      }
+      results.push(
+        await getPlatformLauncher().openTerminal(entry.cwd, entry.commands, {
+          marker: markerOf(spec.identity),
+        }),
+      );
     }
 
     const failed = results.filter((r) => !r.success);
@@ -156,6 +172,13 @@ export const terminalTool: ToolPlugin<TerminalStepParams> = {
     return { success: true, message: 'No teardown for Terminal steps yet.', durationMs: 0 };
   },
 
+  // One tracked window per terminal (resources/kinds/terminal-kind.ts):
+  // Close stops its processes and closes just that window; Retry
+  // replaces it instead of opening a second one next to it.
+  async resources(params) {
+    return terminalSpecs(Array.isArray(params.terminals) ? params.terminals : []);
+  },
+
   detail(params: Record<string, unknown>): string {
     const entries = readEntries(params);
     return entries.length === 0
@@ -175,3 +198,18 @@ export const terminalTool: ToolPlugin<TerminalStepParams> = {
     }));
   },
 };
+
+/**
+ * Each terminal's resource spec, in order — `occurrence` counts
+ * identical earlier entries, so two terminals with the same directory
+ * and commands are still two resources (and two windows).
+ */
+function terminalSpecs(terminals: readonly { cwd: string; commands: string[] }[]): ResourceSpec[] {
+  const seen = new Map<string, number>();
+  return terminals.map((entry) => {
+    const key = JSON.stringify([entry.cwd, entry.commands]);
+    const occurrence = seen.get(key) ?? 0;
+    seen.set(key, occurrence + 1);
+    return terminalWindowResource(entry.cwd, entry.commands, occurrence);
+  });
+}

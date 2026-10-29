@@ -44,7 +44,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
-import { RemoveStepConfirm } from './RemoveStepConfirm';
+import { StepChangeConfirm } from './StepChangeConfirm';
 import { withStepIdsOf } from '../lib/workspace-duplicate';
 
 interface WorkspaceFormModalProps {
@@ -271,13 +271,15 @@ export function WorkspaceFormModal({
     stepKey?: number;
     fieldErrors?: Record<string, string>;
   } | null>(null);
-  // The remove-step confirmation (RemoveStepConfirm), and whether a
-  // confirmed removal should close its app once the form is saved.
-  const [pendingRemoval, setPendingRemoval] = useState<{
-    key: number;
-    closes: string[];
-  } | null>(null);
-  const [closeRemovedOnSave, setCloseRemovedOnSave] = useState(false);
+  // StepChangeConfirm: a row's ✕ or Save waiting for the user's answer,
+  // and what's already been confirmed via ✕ — Save never asks about
+  // that again, and closes it once saved.
+  const [pendingChange, setPendingChange] = useState<
+    | { action: 'remove'; key: number; closes: string[] }
+    | { action: 'save'; closes: string[] }
+    | null
+  >(null);
+  const [confirmedCloses, setConfirmedCloses] = useState<ReadonlySet<string>>(new Set());
   // Which rows show their fields expanded, keyed by CreateStepDraft.key
   // (stable across reorders/removals, unlike an array index). Collapsed
   // by default — both fresh defaults and an existing workspace's saved
@@ -394,8 +396,8 @@ export function WorkspaceFormModal({
     setOpenKeys(new Set());
     setSaveError(null);
     setIsSaving(false);
-    setPendingRemoval(null);
-    setCloseRemovedOnSave(false);
+    setPendingChange(null);
+    setConfirmedCloses(new Set());
     resetAppPathDetections();
     resetProjectFilesDetection();
   }, [resetAppPathDetections, resetProjectFilesDetection]);
@@ -469,9 +471,10 @@ export function WorkspaceFormModal({
   /**
    * A row's ✕. Removing a saved step whose app this workspace opened and
    * nothing else uses would close that app, so that's confirmed first
-   * (RemoveStepConfirm) — same rule as the Detail view's inline remove.
-   * The close itself only happens on Save; cancelling the form undoes
-   * everything.
+   * (StepChangeConfirm) — same rule as the Detail view's inline remove.
+   * Checked against the SAVED workspace minus this step, so other
+   * unsaved edits don't show up in this question. The close itself only
+   * happens on Save; cancelling the form undoes everything.
    */
   async function requestRemoveTool(key: number): Promise<void> {
     const draft = createSteps.find((s) => s.key === key);
@@ -482,7 +485,12 @@ export function WorkspaceFormModal({
     const stepId = draft.id;
     let closes: string[];
     try {
-      closes = await window.api.previewStepRemoval(editingWorkspace.id, stepId);
+      closes = await window.api.previewStepsChange(
+        editingWorkspace.id,
+        editingWorkspace.tools
+          .filter((t) => t.id !== stepId)
+          .map((t) => ({ id: t.id, type: t.type, params: t.params })),
+      );
     } catch (err) {
       if (isMountedRef.current) {
         setSaveError({
@@ -497,7 +505,7 @@ export function WorkspaceFormModal({
       removeTool(key);
       return;
     }
-    setPendingRemoval({ key, closes });
+    setPendingChange({ action: 'remove', key, closes });
   }
 
   function removeTool(key: number): void {
@@ -597,7 +605,41 @@ export function WorkspaceFormModal({
     }
   }
 
+  /**
+   * Save. When editing, a change that would close something this
+   * workspace opened and nothing else uses (a changed terminal, a
+   * removed app) asks first — unless every such close was already
+   * confirmed via a row's ✕.
+   */
   async function handleSave(): Promise<void> {
+    if (!editingWorkspace) {
+      await save(false);
+      return;
+    }
+    setSaveError(null);
+    let closes: string[];
+    try {
+      closes = await window.api.previewStepsChange(editingWorkspace.id, steps);
+    } catch (err) {
+      if (isMountedRef.current) {
+        setSaveError({
+          message: err instanceof Error ? err.message : String(err),
+          code: ERROR_CODES.SYSTEM_UNEXPECTED.code,
+        });
+      }
+      return;
+    }
+    if (!isMountedRef.current) return;
+    const unconfirmed = closes.filter((label) => !confirmedCloses.has(label));
+    if (unconfirmed.length > 0) {
+      setPendingChange({ action: 'save', closes: unconfirmed });
+      return;
+    }
+    await save(closes.length > 0);
+  }
+
+  /** Saves the draft; when editing, then applies it (`close`: what was confirmed). */
+  async function save(close: boolean): Promise<void> {
     setIsSaving(true);
     setSaveError(null);
     try {
@@ -612,7 +654,7 @@ export function WorkspaceFormModal({
         return;
       }
       if (editingWorkspace) {
-        await releaseRemovedSteps(editingWorkspace.id, closeRemovedOnSave);
+        await applySavedChange(editingWorkspace.id, close);
       }
       onSaved(result.config);
       closeAndReset();
@@ -631,17 +673,18 @@ export function WorkspaceFormModal({
   }
 
   /**
-   * After a successful save: removed steps drop their claims, and with
-   * `close` (a removal was confirmed) what they left behind is closed.
+   * After a successful save: what removed or changed steps held is
+   * released (closed with `close` — confirmed), and changed steps run
+   * again with their new settings (orchestrator.ts's applyStepsChange).
    * The workspace is already saved by then, so a failure here is logged
    * rather than shown as a save failure.
    */
-  async function releaseRemovedSteps(workspaceId: string, close: boolean): Promise<void> {
+  async function applySavedChange(workspaceId: string, close: boolean): Promise<void> {
     try {
-      await window.api.closeRemovedSteps(workspaceId, close);
+      await window.api.applyStepsChange(workspaceId, close);
     } catch (err) {
       console.error(
-        `Couldn't release removed steps: ${err instanceof Error ? err.message : String(err)}`,
+        `Couldn't apply the saved changes: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
@@ -1092,17 +1135,18 @@ export function WorkspaceFormModal({
                   : 'Save workspace'}
           </button>
         </DialogFooter>
-        <RemoveStepConfirm
-          pending={pendingRemoval}
+        <StepChangeConfirm
+          pending={pendingChange}
           onCancel={() => {
-            setPendingRemoval(null);
+            setPendingChange(null);
           }}
           onConfirm={() => {
-            if (pendingRemoval) {
-              removeTool(pendingRemoval.key);
-              setCloseRemovedOnSave(true);
-            }
-            setPendingRemoval(null);
+            const change = pendingChange;
+            setPendingChange(null);
+            if (!change) return;
+            setConfirmedCloses((current) => new Set([...current, ...change.closes]));
+            if (change.action === 'remove') removeTool(change.key);
+            else void save(true);
           }}
         />
       </DialogContent>

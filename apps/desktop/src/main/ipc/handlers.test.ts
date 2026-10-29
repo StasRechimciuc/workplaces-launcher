@@ -369,7 +369,9 @@ describe('restoreWorkspace', () => {
     const id = await createMixedWorkspace();
     const results = await restoreWorkspace(id);
 
-    expect(openTerminal).toHaveBeenCalledWith('~/real', ['npm run dev']);
+    expect(openTerminal).toHaveBeenCalledWith('~/real', ['npm run dev'], {
+      marker: expect.stringMatching(/^wl-[0-9a-f]{12}$/),
+    });
     expect(results[2]).toMatchObject({ success: true });
   });
 

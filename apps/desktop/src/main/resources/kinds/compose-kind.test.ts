@@ -3,6 +3,7 @@ import { createComposeKind } from './compose-kind';
 import { composeResource } from './compose-spec';
 import * as shellExec from '../../lib/shell-exec';
 import { dockerTool } from '../../tools/docker-tool';
+import { terminalWindowResource } from './terminal-spec';
 
 // A scripted `docker` CLI: whether the daemon is up, which projects
 // `compose ls` reports, and what a Down command does.
@@ -139,7 +140,7 @@ describe('compose kind', () => {
 });
 
 describe('docker step resources', () => {
-  it('declares a Compose stack, and nothing for Tilt', async () => {
+  it('declares a Compose stack, or the Tilt terminal with how to stop it', async () => {
     const compose = dockerTool.validate({
       directory: '/work/app',
       engine: 'compose',
@@ -155,6 +156,8 @@ describe('docker step resources', () => {
     await expect(dockerTool.resources!(compose.data)).resolves.toEqual([
       composeResource('/work/app', '', true),
     ]);
-    await expect(dockerTool.resources!(tilt.data)).resolves.toEqual([]);
+    await expect(dockerTool.resources!(tilt.data)).resolves.toEqual([
+      terminalWindowResource('/work/app', ['tilt up'], 0, { downCommand: '', stopOnClose: false }),
+    ]);
   });
 });

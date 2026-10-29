@@ -8,6 +8,7 @@ import {
   type TerminalSessionState,
 } from '../../platform/macos/terminal-session';
 import { runCommand } from '../../lib/shell-exec';
+import { runEngineCommand } from '../../tools/docker-tool';
 import { pollUntil } from '../../lib/poll-until';
 import type { CloseOutcome, HandleState, ResourceHandle, ResourceKindPlugin } from '../types';
 import { TERMINAL_BUNDLE_ID, TERMINAL_WINDOW_KIND, markerOf } from './terminal-spec';
@@ -24,6 +25,11 @@ import { TERMINAL_BUNDLE_ID, TERMINAL_WINDOW_KIND, markerOf } from './terminal-s
  * and killing first closes cleanly (D2). A dialog anyway is never
  * confirmed on the user's behalf.
  *
+ * A terminal whose window opened on another desktop is still tracked
+ * through its shell; closing it switches to that desktop (by bringing
+ * Terminal forward) to find and close the window — the founder's call,
+ * 2026-10-29.
+ *
  * A window the user took over (pressed a key once its commands
  * finished) is theirs from then on: it's reported as drifted, so the
  * workspace lets go of it without closing it, and the next restore
@@ -32,12 +38,27 @@ import { TERMINAL_BUNDLE_ID, TERMINAL_WINDOW_KIND, markerOf } from './terminal-s
 
 const HandleSchema = z.object({
   marker: z.string().min(1),
-  /** Terminal.app's pid and the window's id. */
+  /**
+   * Terminal.app's pid and the window's id — null when the window
+   * opened on a desktop Accessibility couldn't see at the time (it only
+   * sees the current one, finding S2); the terminal is still tracked by
+   * its shell, and its window found by marker when it's closed.
+   */
   pid: z.number().int().positive(),
-  windowId: z.number().int().positive(),
+  windowId: z.number().int().positive().nullable(),
   shellPid: z.number().int().positive(),
   shellStartedAt: z.number(),
   tty: z.string().min(1),
+  /** Its directory — where a Tilt Down command runs. */
+  cwd: z.string().min(1),
+  /** A Docker step on the Tilt engine: how it's stopped (ResourceSpec.options). */
+  tilt: z.object({ downCommand: z.string(), stopOnClose: z.boolean() }).optional(),
+});
+
+const TiltOptionsSchema = z.object({
+  engine: z.literal('tilt'),
+  downCommand: z.string(),
+  stopOnClose: z.boolean(),
 });
 
 type TerminalHandle = z.infer<typeof HandleSchema>;
@@ -52,9 +73,12 @@ export interface TerminalKindDeps {
   descendantsOf: (pid: number) => Promise<number[] | null>;
   signal: (pid: number, signal: NodeJS.Signals) => void;
   isAlive: (pid: number) => boolean;
+  /** Runs a Tilt Down command in `directory` (docker-tool.ts's runEngineCommand). */
+  runDown: (directory: string, command: string) => Promise<{ success: boolean; message: string }>;
 }
 
 export const defaultTerminalDeps: Omit<TerminalKindDeps, 'helper'> = {
+  runDown: (directory, command) => runEngineCommand(directory, command, TILT_DOWN_TIMEOUT_MS),
   readInfo: readTerminalSessionInfo,
   readState: readTerminalSessionState,
   requestRerun: requestTerminalRerun,
@@ -79,13 +103,18 @@ export const defaultTerminalDeps: Omit<TerminalKindDeps, 'helper'> = {
 
 // What a window close sends a shell; leftovers get SIGKILL after this.
 const HANGUP_GRACE_MS = 1_500;
+// How long `tilt up` gets to wind down after Ctrl+C before `tilt down`.
+const TILT_INTERRUPT_GRACE_MS = 10_000;
+// Same bound docker-tool.ts gives a Down command.
+const TILT_DOWN_TIMEOUT_MS = 60_000;
 
 export function createTerminalKind(
   deps: TerminalKindDeps,
-  options: { captureTimeoutMs?: number; graceMs?: number } = {},
+  options: { captureTimeoutMs?: number; graceMs?: number; tiltGraceMs?: number } = {},
 ): ResourceKindPlugin {
   const captureTimeoutMs = options.captureTimeoutMs ?? 8_000;
   const graceMs = options.graceMs ?? HANGUP_GRACE_MS;
+  const tiltGraceMs = options.tiltGraceMs ?? TILT_INTERRUPT_GRACE_MS;
 
   async function terminalPid(): Promise<number | null> {
     const running = await deps.helper.request('isRunning', { bundleId: TERMINAL_BUNDLE_ID });
@@ -102,21 +131,21 @@ export function createTerminalKind(
   async function captureMarked(
     marker: string,
     before: number[],
+    cwd: string,
+    tilt: TerminalHandle['tilt'],
   ): Promise<{ found: true; handle: TerminalHandle } | { found: false; reason: string }> {
     const window = await deps.helper.request(
       'captureNewWindow',
       { bundleId: TERMINAL_BUNDLE_ID, before, titleContains: marker, timeoutMs: captureTimeoutMs },
       { timeoutMs: captureTimeoutMs + 2_000 },
     );
-    if (!window.ok) {
-      return {
-        found: false,
-        // Terminal set to open new windows as tabs: there's no new
-        // window to find (a known limitation — only the active tab is
-        // visible to Accessibility).
-        reason: `no new Terminal window for this terminal (${window.error.message})`,
-      };
-    }
+    // No window found: it opened on a desktop Accessibility can't see
+    // right now (or as a tab, which only shows while it's the active
+    // one). Still tracked through its shell — the window is looked for
+    // again, by marker, when it's closed.
+    const windowId = window.ok ? window.result.windowId : null;
+    const appPid = window.ok ? window.result.pid : await terminalPid();
+    if (appPid === null) return { found: false, reason: "Terminal isn't running" };
     const { value: info } = await pollUntil(
       () => deps.readInfo(marker).then((i) => i ?? undefined),
       {
@@ -133,11 +162,13 @@ export function createTerminalKind(
       found: true,
       handle: {
         marker,
-        pid: window.result.pid,
-        windowId: window.result.windowId,
+        pid: appPid,
+        windowId,
         shellPid: info.shellPid,
         shellStartedAt,
         tty: info.tty,
+        cwd,
+        ...(tilt ? { tilt } : {}),
       },
     };
   }
@@ -148,12 +179,14 @@ export function createTerminalKind(
     const parsed = HandleSchema.safeParse(raw);
     if (!parsed.success) return { state: 'gone' };
     const handle = parsed.data;
-    const window = await deps.helper.request('windowState', {
-      pid: handle.pid,
-      windowId: handle.windowId,
-    });
-    if (!window.ok) return { state: 'unknown', reason: window.error.message };
-    if (window.result.state === 'gone') return { state: 'gone' };
+    if (handle.windowId !== null) {
+      const window = await deps.helper.request('windowState', {
+        pid: handle.pid,
+        windowId: handle.windowId,
+      });
+      if (!window.ok) return { state: 'unknown', reason: window.error.message };
+      if (window.result.state === 'gone') return { state: 'gone' };
+    }
     // pid + start time together: the same pid with another start time
     // is a different process, and is never touched.
     const startedAt = await startTime(handle.shellPid);
@@ -162,6 +195,27 @@ export function createTerminalKind(
     const session = await deps.readState(handle.marker);
     if (session === 'shell') return { state: 'drifted' };
     return { state: 'alive', ...(session ? { session } : {}) };
+  }
+
+  /**
+   * The terminal's window, made reachable: one never found is looked
+   * for by its marker once Terminal is brought forward — which switches
+   * to the desktop it's on. Looked up BEFORE its processes are stopped,
+   * while the marker is still in its title.
+   */
+  async function locateWindow(handle: TerminalHandle, pid: number): Promise<number | null> {
+    if (handle.windowId !== null) return handle.windowId;
+    await deps.helper.request('activateApp', { pid });
+    const { value } = await pollUntil(
+      async () => {
+        const listing = await deps.helper.request('listWindows', { bundleId: TERMINAL_BUNDLE_ID });
+        return listing.ok
+          ? listing.result.find((w) => w.title.includes(handle.marker))?.windowId
+          : undefined;
+      },
+      { intervalMs: 150, timeoutMs: 2_000 },
+    );
+    return value ?? null;
   }
 
   async function stopProcesses(handle: TerminalHandle): Promise<void> {
@@ -189,18 +243,28 @@ export function createTerminalKind(
       return listing.ok ? listing.result.map((w) => w.windowId) : [];
     },
 
-    async capture(identity, snapshot) {
+    async capture(identity, snapshot, rawOptions) {
       const marker = markerOf(identity);
       const before = Array.isArray(snapshot) ? (snapshot as number[]) : [];
-      const result = await captureMarked(marker, before);
+      const tilt = TiltOptionsSchema.safeParse(rawOptions);
+      const result = await captureMarked(
+        marker,
+        before,
+        String(identity['cwd']),
+        tilt.success
+          ? { downCommand: tilt.data.downCommand, stopOnClose: tilt.data.stopOnClose }
+          : undefined,
+      );
       return result.found ? { found: true, handle: result.handle, preexisting: false } : result;
     },
 
     async reconcileOpening(identity) {
       // A crash between opening and capturing: the marker in its title
       // still says which window it was.
+      // The Tilt options aren't recorded until capture: a reconciled Tilt
+      // terminal closes like a plain one (its processes stopped).
       const marker = markerOf(identity);
-      const result = await captureMarked(marker, []);
+      const result = await captureMarked(marker, [], String(identity['cwd']), undefined);
       return result.found ? { found: true, handle: result.handle, preexisting: false } : result;
     },
 
@@ -230,9 +294,38 @@ export function createTerminalKind(
         return { outcome: 'kept-running', detail: "you've used it since — left open for you" };
       }
       const handle = raw as TerminalHandle;
-      await stopProcesses(handle);
+      if (handle.tilt) {
+        if (!handle.tilt.stopOnClose) {
+          return { outcome: 'kept-running', detail: 'stop on close is off for this step' };
+        }
+        // Tilt's own shutdown first — Ctrl+C lets `tilt up` stop
+        // cleanly, then Down removes what it started; only then is the
+        // window closed like any other terminal.
+        const descendants = (await deps.descendantsOf(handle.shellPid)) ?? [];
+        for (const pid of descendants) deps.signal(pid, 'SIGINT');
+        await pollUntil(
+          async () => (descendants.every((pid) => !deps.isAlive(pid)) ? true : undefined),
+          { intervalMs: 200, timeoutMs: tiltGraceMs },
+        );
+        const command = handle.tilt.downCommand.length > 0 ? handle.tilt.downCommand : 'tilt down';
+        const down = await deps.runDown(handle.cwd, command);
+        if (!down.success) return { outcome: 'failed', detail: down.message };
+      }
       const pid = (await terminalPid()) ?? handle.pid;
-      const close = await deps.helper.request('closeWindow', { pid, windowId: handle.windowId });
+      const windowId = await locateWindow(handle, pid);
+      await stopProcesses(handle);
+      if (windowId === null) {
+        return {
+          outcome: 'failed',
+          detail: "stopped its processes, but couldn't find its window to close it",
+        };
+      }
+      let close = await deps.helper.request('closeWindow', { pid, windowId });
+      if (!close.ok && close.error.code === 'unreachable') {
+        // On another desktop: bring Terminal (and that desktop) forward, then try again.
+        await deps.helper.request('activateApp', { pid });
+        close = await deps.helper.request('closeWindow', { pid, windowId });
+      }
       if (!close.ok) {
         return close.error.code === 'not-trusted'
           ? { outcome: 'needs-permission', detail: close.error.message }

@@ -379,7 +379,9 @@ describe('dockerTool', () => {
         { workspaceId: 'w1' },
       );
 
-      expect(openTerminal).toHaveBeenCalledWith('/Users/stas/projects/x', ['tilt up']);
+      expect(openTerminal).toHaveBeenCalledWith('/Users/stas/projects/x', ['tilt up'], {
+        marker: expect.stringMatching(/^wl-[0-9a-f]{12}$/),
+      });
       expect(mockedRunCommand).toHaveBeenCalledTimes(1); // only the daemon check
       expect(result.success).toBe(true);
     });

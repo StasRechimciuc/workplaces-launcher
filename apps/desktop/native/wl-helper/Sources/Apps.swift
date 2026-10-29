@@ -20,6 +20,21 @@ enum Apps {
     ]
   }
 
+  /// Brings an app forward — and with it to the desktop its windows are
+  /// on, which is what makes a window on another desktop reachable
+  /// through Accessibility (finding S2). Falls back to Launch Services
+  /// (what a Dock click does) when the system refuses the activation.
+  static func bringForward(pid: pid_t) throws -> JSONObject {
+    guard processAlive(pid), let app = NSRunningApplication(processIdentifier: pid) else {
+      throw RpcError(code: "gone", message: "Process \(pid) is no longer running")
+    }
+    if activate(app) { return ["activated": true, "via": "activate"] }
+    if let bundleId = app.bundleIdentifier, openWithLaunchServices(bundleId), waitUntilFrontmost(pid) {
+      return ["activated": true, "via": "launch-services"]
+    }
+    return ["activated": false]
+  }
+
   /// The app's own native quit (`NSRunningApplication.terminate`) —
   /// the same as choosing Quit from its menu, so it can still show its
   /// own "save changes?" prompt and stay running. Triggers no

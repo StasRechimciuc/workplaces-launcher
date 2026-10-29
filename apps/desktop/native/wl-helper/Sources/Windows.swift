@@ -308,7 +308,7 @@ private func focusedApplicationPid() -> pid_t? {
   return AXUIElementGetPid(app, &pid) == .success ? pid : nil
 }
 
-private func openWithLaunchServices(_ bundleId: String) -> Bool {
+func openWithLaunchServices(_ bundleId: String) -> Bool {
   let process = Process()
   process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
   // argv, never a shell string — and the id comes from the system's

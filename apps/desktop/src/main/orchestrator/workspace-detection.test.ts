@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { detectCurrentWorkspaceDraft } from './workspace-detection';
-import { listForegroundApps, type ListForegroundAppsResult, type RunningApp } from '../platform/macos/app-enumeration';
+import {
+  listForegroundApps,
+  type ListForegroundAppsResult,
+  type RunningApp,
+} from '../platform/macos/app-enumeration';
 import { getLastUsedChromeProfileFolder } from '../platform/chrome-profiles';
 import { inspectTerminalAppWindows } from '../platform/macos/terminal-inspection';
 import { isOrchestratorBusy } from './orchestrator-busy';
@@ -65,7 +69,13 @@ describe('detectCurrentWorkspaceDraft', () => {
 
   it('builds a spotify step with no extra params', async () => {
     mockedListForegroundApps.mockResolvedValue(
-      apps([{ name: 'Spotify', bundleId: 'com.spotify.client', bundlePath: '/Applications/Spotify.app' }]),
+      apps([
+        {
+          name: 'Spotify',
+          bundleId: 'com.spotify.client',
+          bundlePath: '/Applications/Spotify.app',
+        },
+      ]),
     );
 
     const result = await detectCurrentWorkspaceDraft();
@@ -78,7 +88,9 @@ describe('detectCurrentWorkspaceDraft', () => {
 
   it('builds a clockify step with no extra params', async () => {
     mockedListForegroundApps.mockResolvedValue(
-      apps([{ name: 'Clockify', bundleId: undefined, bundlePath: '/Applications/Clockify Desktop.app' }]),
+      apps([
+        { name: 'Clockify', bundleId: undefined, bundlePath: '/Applications/Clockify Desktop.app' },
+      ]),
     );
 
     const result = await detectCurrentWorkspaceDraft();
@@ -92,7 +104,11 @@ describe('detectCurrentWorkspaceDraft', () => {
   it('builds a chrome step with the best-guess profile and a caveat flagging it as a guess', async () => {
     mockedListForegroundApps.mockResolvedValue(
       apps([
-        { name: 'Google Chrome', bundleId: 'com.google.Chrome', bundlePath: '/Applications/Google Chrome.app' },
+        {
+          name: 'Google Chrome',
+          bundleId: 'com.google.Chrome',
+          bundlePath: '/Applications/Google Chrome.app',
+        },
       ]),
     );
     mockedGetLastUsedChromeProfileFolder.mockResolvedValue('Profile 2');
@@ -115,7 +131,11 @@ describe('detectCurrentWorkspaceDraft', () => {
   it('builds a chrome step with no profile param and a different caveat when the profile could not be resolved', async () => {
     mockedListForegroundApps.mockResolvedValue(
       apps([
-        { name: 'Google Chrome', bundleId: 'com.google.Chrome', bundlePath: '/Applications/Google Chrome.app' },
+        {
+          name: 'Google Chrome',
+          bundleId: 'com.google.Chrome',
+          bundlePath: '/Applications/Google Chrome.app',
+        },
       ]),
     );
     mockedGetLastUsedChromeProfileFolder.mockResolvedValue(undefined);
@@ -124,13 +144,17 @@ describe('detectCurrentWorkspaceDraft', () => {
 
     expect(result).toMatchObject({
       status: 'ready',
-      steps: [{ type: 'chrome', params: {}, caveat: expect.stringContaining('Could not determine') }],
+      steps: [
+        { type: 'chrome', params: {}, caveat: expect.stringContaining('Could not determine') },
+      ],
     });
   });
 
   it('falls back to a generic "app" step for a running app with no dedicated plugin — included by default, never unmatched', async () => {
     mockedListForegroundApps.mockResolvedValue(
-      apps([{ name: 'Figma', bundleId: 'com.figma.Desktop', bundlePath: '/Applications/Figma.app' }]),
+      apps([
+        { name: 'Figma', bundleId: 'com.figma.Desktop', bundlePath: '/Applications/Figma.app' },
+      ]),
     );
 
     const result = await detectCurrentWorkspaceDraft();
@@ -144,7 +168,9 @@ describe('detectCurrentWorkspaceDraft', () => {
   });
 
   it('reports an app with no bundlePath as unmatched, never as a generic app step', async () => {
-    mockedListForegroundApps.mockResolvedValue(apps([{ name: 'some-tool', bundleId: undefined, bundlePath: undefined }]));
+    mockedListForegroundApps.mockResolvedValue(
+      apps([{ name: 'some-tool', bundleId: undefined, bundlePath: undefined }]),
+    );
 
     const result = await detectCurrentWorkspaceDraft();
 
@@ -160,18 +186,33 @@ describe('detectCurrentWorkspaceDraft', () => {
     it('builds one vscode step per open folder reported by the companion extension', async () => {
       mockedListForegroundApps.mockResolvedValue(
         apps([
-          { name: 'Code', bundleId: 'com.microsoft.VSCode', bundlePath: '/Applications/Visual Studio Code.app' },
+          {
+            name: 'Code',
+            bundleId: 'com.microsoft.VSCode',
+            bundlePath: '/Applications/Visual Studio Code.app',
+          },
         ]),
       );
-      mockedListOpenWindowFolders.mockResolvedValue(['/Users/me/projects/a', '/Users/me/projects/b']);
+      mockedListOpenWindowFolders.mockResolvedValue([
+        '/Users/me/projects/a',
+        '/Users/me/projects/b',
+      ]);
 
       const result = await detectCurrentWorkspaceDraft();
 
       expect(result).toMatchObject({
         status: 'ready',
         steps: [
-          { type: 'vscode', params: { path: '/Users/me/projects/a' }, label: '/Users/me/projects/a' },
-          { type: 'vscode', params: { path: '/Users/me/projects/b' }, label: '/Users/me/projects/b' },
+          {
+            type: 'vscode',
+            params: { path: '/Users/me/projects/a' },
+            label: '/Users/me/projects/a',
+          },
+          {
+            type: 'vscode',
+            params: { path: '/Users/me/projects/b' },
+            label: '/Users/me/projects/b',
+          },
         ],
       });
     });
@@ -179,7 +220,11 @@ describe('detectCurrentWorkspaceDraft', () => {
     it('falls back to a generic "app" step, with a caveat, when VS Code is running but no folder was reported', async () => {
       mockedListForegroundApps.mockResolvedValue(
         apps([
-          { name: 'Code', bundleId: 'com.microsoft.VSCode', bundlePath: '/Applications/Visual Studio Code.app' },
+          {
+            name: 'Code',
+            bundleId: 'com.microsoft.VSCode',
+            bundlePath: '/Applications/Visual Studio Code.app',
+          },
         ]),
       );
       mockedListOpenWindowFolders.mockResolvedValue([]);
@@ -202,7 +247,11 @@ describe('detectCurrentWorkspaceDraft', () => {
     it('never double-reports VS Code through the generic app-step fallback loop', async () => {
       mockedListForegroundApps.mockResolvedValue(
         apps([
-          { name: 'Code', bundleId: 'com.microsoft.VSCode', bundlePath: '/Applications/Visual Studio Code.app' },
+          {
+            name: 'Code',
+            bundleId: 'com.microsoft.VSCode',
+            bundlePath: '/Applications/Visual Studio Code.app',
+          },
         ]),
       );
       mockedListOpenWindowFolders.mockResolvedValue(['/Users/me/projects/a']);
@@ -256,7 +305,9 @@ describe('detectCurrentWorkspaceDraft', () => {
           },
         ]),
       );
-      mockedInspectTerminalAppWindows.mockResolvedValue([{ cwd: '/Users/me/x', command: undefined }]);
+      mockedInspectTerminalAppWindows.mockResolvedValue([
+        { cwd: '/Users/me/x', command: undefined },
+      ]);
 
       const result = await detectCurrentWorkspaceDraft();
 
@@ -282,7 +333,10 @@ describe('detectCurrentWorkspaceDraft', () => {
           },
         ]),
       );
-      mockedInspectTerminalAppWindows.mockResolvedValue([{ cwd: '/Users/me/ok', command: 'npm run dev' }, { cwd: undefined, command: undefined }]);
+      mockedInspectTerminalAppWindows.mockResolvedValue([
+        { cwd: '/Users/me/ok', command: 'npm run dev' },
+        { cwd: undefined, command: undefined },
+      ]);
 
       const result = await detectCurrentWorkspaceDraft();
 
@@ -294,7 +348,28 @@ describe('detectCurrentWorkspaceDraft', () => {
       }
     });
 
-    it('reports a top-level issue, not a silent gap, when a running terminal app has zero inspectable windows', async () => {
+    it('reports a top-level issue, not a silent gap, when a running terminal app’s sessions can’t be read', async () => {
+      mockedListForegroundApps.mockResolvedValue(
+        apps([
+          {
+            name: 'Terminal',
+            bundleId: 'com.apple.Terminal',
+            bundlePath: '/System/Applications/Utilities/Terminal.app',
+          },
+        ]),
+      );
+      mockedInspectTerminalAppWindows.mockResolvedValue(null);
+
+      const result = await detectCurrentWorkspaceDraft();
+
+      expect(result.status).toBe('ready');
+      if (result.status === 'ready') {
+        expect(result.issues).toEqual([expect.stringContaining('Terminal')]);
+        expect(result.steps).toEqual([]);
+      }
+    });
+
+    it('contributes nothing, and reports nothing, for a terminal app with no windows open', async () => {
       mockedListForegroundApps.mockResolvedValue(
         apps([
           {
@@ -310,7 +385,7 @@ describe('detectCurrentWorkspaceDraft', () => {
 
       expect(result.status).toBe('ready');
       if (result.status === 'ready') {
-        expect(result.issues).toEqual([expect.stringContaining('Terminal')]);
+        expect(result.issues).toEqual([]);
         expect(result.steps).toEqual([]);
       }
     });
@@ -337,7 +412,13 @@ describe('detectCurrentWorkspaceDraft', () => {
 
     it('queries iTerm2 separately when it, not Terminal.app, is the one running', async () => {
       mockedListForegroundApps.mockResolvedValue(
-        apps([{ name: 'iTerm2', bundleId: 'com.googlecode.iterm2', bundlePath: '/Applications/iTerm.app' }]),
+        apps([
+          {
+            name: 'iTerm2',
+            bundleId: 'com.googlecode.iterm2',
+            bundlePath: '/Applications/iTerm.app',
+          },
+        ]),
       );
       mockedInspectTerminalAppWindows.mockResolvedValue([{ cwd: '/Users/me', command: undefined }]);
 
@@ -350,19 +431,29 @@ describe('detectCurrentWorkspaceDraft', () => {
   it('combines every category in one pass: vscode, terminal, chrome, a generic app, and an unmatched entry together', async () => {
     mockedListForegroundApps.mockResolvedValue(
       apps([
-        { name: 'Code', bundleId: 'com.microsoft.VSCode', bundlePath: '/Applications/Visual Studio Code.app' },
+        {
+          name: 'Code',
+          bundleId: 'com.microsoft.VSCode',
+          bundlePath: '/Applications/Visual Studio Code.app',
+        },
         {
           name: 'Terminal',
           bundleId: 'com.apple.Terminal',
           bundlePath: '/System/Applications/Utilities/Terminal.app',
         },
-        { name: 'Google Chrome', bundleId: 'com.google.Chrome', bundlePath: '/Applications/Google Chrome.app' },
+        {
+          name: 'Google Chrome',
+          bundleId: 'com.google.Chrome',
+          bundlePath: '/Applications/Google Chrome.app',
+        },
         { name: 'Figma', bundleId: 'com.figma.Desktop', bundlePath: '/Applications/Figma.app' },
         { name: 'mystery-tool', bundleId: undefined, bundlePath: undefined },
       ]),
     );
     mockedListOpenWindowFolders.mockResolvedValue(['/Users/me/projects/a']);
-    mockedInspectTerminalAppWindows.mockResolvedValue([{ cwd: '/Users/me/projects/a', command: 'npm run dev' }]);
+    mockedInspectTerminalAppWindows.mockResolvedValue([
+      { cwd: '/Users/me/projects/a', command: 'npm run dev' },
+    ]);
     mockedGetLastUsedChromeProfileFolder.mockResolvedValue('Default');
 
     const result = await detectCurrentWorkspaceDraft();

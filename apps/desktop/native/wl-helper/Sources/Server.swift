@@ -85,6 +85,8 @@ final class Server {
       return try windows.focusWindow(pid: params.pid("pid"), windowId: params.windowId("windowId"))
     case "isRunning":
       return Apps.isRunning(bundleId: try params.bundleId("bundleId"))
+    case "activateApp":
+      return try Apps.bringForward(pid: params.pid("pid"))
     case "processStartTime":
       // Any process, not only apps: a terminal's shell is identified by
       // pid + start time, since pids are reused.

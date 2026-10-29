@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type {
+  ResourceSpec,
   StepResult,
   StepDisplayRow,
   ToolPlugin,
@@ -11,6 +12,7 @@ import { runCommand } from '../lib/shell-exec';
 import { expandHome, isAcceptableToolPath } from '../lib/paths';
 import { pollUntil } from '../lib/poll-until';
 import { composeResource } from '../resources/kinds/compose-spec';
+import { markerOf, terminalWindowResource } from '../resources/kinds/terminal-spec';
 
 /**
  * Minimal, local-only tokenizer for the Up/Down command text fields —
@@ -305,7 +307,9 @@ export const dockerTool: ToolPlugin<DockerStepParams> = {
       // the first ~2.5s," catching the common case (a typo, a missing
       // compose/Tiltfile, a port already in use) that used to silently
       // report success just because a terminal window opened.
-      const result = await getPlatformLauncher().openTerminal(directory, [params.upCommand]);
+      const result = await getPlatformLauncher().openTerminal(directory, [params.upCommand], {
+        marker: markerOf(tiltResource(params).identity),
+      });
       if (result.success) {
         return {
           success: true,
@@ -410,10 +414,13 @@ export const dockerTool: ToolPlugin<DockerStepParams> = {
   // so Close stops only a stack this app started and nothing else uses.
   // Tilt runs in a terminal window — tracked with the terminal kind, not
   // here.
+  // Compose: the stack (resources/kinds/compose-kind.ts). Tilt: the
+  // terminal running `tilt up` (resources/kinds/terminal-kind.ts), which
+  // Close stops the Tilt way — Ctrl+C, then the Down command.
   async resources(params) {
     return params.engine === 'compose'
       ? [composeResource(params.directory, params.downCommand, params.stopOnClose)]
-      : [];
+      : [tiltResource(params)];
   },
 
   detail(params: Record<string, unknown>): string {
@@ -431,3 +438,10 @@ export const dockerTool: ToolPlugin<DockerStepParams> = {
     return rows;
   },
 };
+
+function tiltResource(params: DockerStepParams): ResourceSpec {
+  return terminalWindowResource(params.directory, [params.upCommand], 0, {
+    downCommand: params.downCommand,
+    stopOnClose: params.stopOnClose,
+  });
+}

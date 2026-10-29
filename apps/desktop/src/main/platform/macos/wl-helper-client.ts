@@ -48,6 +48,10 @@ export interface HelperMethods {
     result: HelperWindow;
   };
   processStartTime: { params: { pid: number }; result: { startedAt: number | null } };
+  activateApp: {
+    params: { pid: number };
+    result: { activated: true; via: 'activate' | 'launch-services' } | { activated: false };
+  };
   windowState: {
     params: { pid: number; windowId: number };
     result: { state: 'alive' | 'gone' | 'blocked'; reachable: boolean };

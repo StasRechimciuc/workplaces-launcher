@@ -8,6 +8,24 @@ vi.mock('../../lib/shell-exec', () => ({
 
 const runCommand = vi.mocked(shellExec.runCommand);
 
+/**
+ * `ps -A` output for a Terminal.app (or iTerm2) with one session per
+ * tty: each session is a `login` child of the app's process, holding
+ * its tty — the real shape on macOS. Plus an unrelated process on
+ * another tty, which must never be picked up.
+ */
+function processTree(
+  ttys: string[],
+  root = '/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal',
+) {
+  const lines = [
+    `100 1 ??       ${root}`,
+    ...ttys.map((tty, i) => `${200 + i} 100 ${tty}  login -pf stas`),
+    '900 1 ttys099  /bin/zsh -il',
+  ];
+  return { success: true as const, stdout: `${lines.join('\n')}\n`, stderr: '' };
+}
+
 beforeEach(() => {
   runCommand.mockClear();
 });
@@ -16,7 +34,7 @@ describe('inspectTerminalAppWindows("Terminal")', () => {
   it('reports cwd + command for a window actively running a non-shell foreground job', async () => {
     runCommand
       // tty of every window
-      .mockResolvedValueOnce({ success: true, stdout: '/dev/ttys004\n', stderr: '' })
+      .mockResolvedValueOnce(processTree(['ttys004']))
       // ps -t ttys004
       .mockResolvedValueOnce({
         success: true,
@@ -49,7 +67,7 @@ describe('inspectTerminalAppWindows("Terminal")', () => {
 
   it('reports cwd only, no command, for an idle shell (foreground group is just the shell itself)', async () => {
     runCommand
-      .mockResolvedValueOnce({ success: true, stdout: '/dev/ttys004\n', stderr: '' })
+      .mockResolvedValueOnce(processTree(['ttys004']))
       .mockResolvedValueOnce({ success: true, stdout: '12345 S+   -zsh', stderr: '' })
       .mockResolvedValueOnce({
         success: true,
@@ -67,9 +85,13 @@ describe('inspectTerminalAppWindows("Terminal")', () => {
     // there is no way to distinguish "never ran anything" from "ran
     // something and already finished" from process state alone.
     runCommand
-      .mockResolvedValueOnce({ success: true, stdout: '/dev/ttys004\n', stderr: '' })
+      .mockResolvedValueOnce(processTree(['ttys004']))
       .mockResolvedValueOnce({ success: true, stdout: '12345 S+   -zsh', stderr: '' })
-      .mockResolvedValueOnce({ success: true, stdout: 'p12345\nfcwd\nn/Users/stas/x\n', stderr: '' });
+      .mockResolvedValueOnce({
+        success: true,
+        stdout: 'p12345\nfcwd\nn/Users/stas/x\n',
+        stderr: '',
+      });
 
     expect(await inspectTerminalAppWindows('Terminal')).toEqual([
       { cwd: '/Users/stas/x', command: undefined },
@@ -78,7 +100,7 @@ describe('inspectTerminalAppWindows("Terminal")', () => {
 
   it('handles multiple windows, each its own entry, never merged', async () => {
     runCommand
-      .mockResolvedValueOnce({ success: true, stdout: '/dev/ttys004, /dev/ttys007\n', stderr: '' })
+      .mockResolvedValueOnce(processTree(['ttys007', 'ttys004']))
       .mockResolvedValueOnce({ success: true, stdout: '1 S+ -zsh', stderr: '' })
       .mockResolvedValueOnce({ success: true, stdout: 'p1\nfcwd\nn/Users/a\n', stderr: '' })
       .mockResolvedValueOnce({ success: true, stdout: '2 R+ tilt up', stderr: '' })
@@ -93,25 +115,29 @@ describe('inspectTerminalAppWindows("Terminal")', () => {
   });
 
   it('returns an empty array, not a throw, when no windows are open', async () => {
-    runCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
+    runCommand.mockResolvedValueOnce(processTree([]));
     expect(await inspectTerminalAppWindows('Terminal')).toEqual([]);
   });
 
-  it('returns an empty array when the osascript call itself fails', async () => {
+  it('returns null — a failure, not "nothing open" — when the process table can’t be read', async () => {
     runCommand.mockResolvedValueOnce({
       success: false,
-      message: 'not authorized',
+      message: 'ps failed',
       stdout: '',
       stderr: '',
       code: 1,
     });
-    expect(await inspectTerminalAppWindows('Terminal')).toEqual([]);
+    expect(await inspectTerminalAppWindows('Terminal')).toBeNull();
   });
 
   it('reports undefined cwd/command, not a throw, when ps fails for a tty', async () => {
-    runCommand
-      .mockResolvedValueOnce({ success: true, stdout: '/dev/ttys004\n', stderr: '' })
-      .mockResolvedValueOnce({ success: false, message: 'ps failed', stdout: '', stderr: '', code: 1 });
+    runCommand.mockResolvedValueOnce(processTree(['ttys004'])).mockResolvedValueOnce({
+      success: false,
+      message: 'ps failed',
+      stdout: '',
+      stderr: '',
+      code: 1,
+    });
 
     expect(await inspectTerminalAppWindows('Terminal')).toEqual([
       { cwd: undefined, command: undefined },
@@ -120,9 +146,15 @@ describe('inspectTerminalAppWindows("Terminal")', () => {
 
   it('reports undefined cwd, but keeps the command, when lsof fails', async () => {
     runCommand
-      .mockResolvedValueOnce({ success: true, stdout: '/dev/ttys004\n', stderr: '' })
+      .mockResolvedValueOnce(processTree(['ttys004']))
       .mockResolvedValueOnce({ success: true, stdout: '1 R+ npm run dev', stderr: '' })
-      .mockResolvedValueOnce({ success: false, message: 'lsof failed', stdout: '', stderr: '', code: 1 });
+      .mockResolvedValueOnce({
+        success: false,
+        message: 'lsof failed',
+        stdout: '',
+        stderr: '',
+        code: 1,
+      });
 
     expect(await inspectTerminalAppWindows('Terminal')).toEqual([
       { cwd: undefined, command: 'npm run dev' },
@@ -131,7 +163,7 @@ describe('inspectTerminalAppWindows("Terminal")', () => {
 
   it('treats a login wrapper (login -pf user /bin/zsh) as idle, not as the running command', async () => {
     runCommand
-      .mockResolvedValueOnce({ success: true, stdout: '/dev/ttys004\n', stderr: '' })
+      .mockResolvedValueOnce(processTree(['ttys004']))
       .mockResolvedValueOnce({ success: true, stdout: '1 S+ login -pf stas /bin/zsh', stderr: '' })
       .mockResolvedValueOnce({ success: true, stdout: 'p1\nfcwd\nn/Users/stas\n', stderr: '' });
 
@@ -142,7 +174,7 @@ describe('inspectTerminalAppWindows("Terminal")', () => {
 
   it('picks the non-shell process over the shell when a pipeline puts both in the foreground group', async () => {
     runCommand
-      .mockResolvedValueOnce({ success: true, stdout: '/dev/ttys004\n', stderr: '' })
+      .mockResolvedValueOnce(processTree(['ttys004']))
       .mockResolvedValueOnce({
         success: true,
         stdout: ['1 S+ -zsh', '2 R+ tail -f app.log'].join('\n'),
@@ -157,12 +189,45 @@ describe('inspectTerminalAppWindows("Terminal")', () => {
 });
 
 describe('inspectTerminalAppWindows("iTerm2")', () => {
-  it('queries iTerm2\'s own scripting dictionary, not Terminal.app\'s', async () => {
-    runCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
+  it('finds iTerm2’s sessions under its iTermServer process, not Terminal.app’s', async () => {
+    runCommand
+      .mockResolvedValueOnce(processTree(['ttys010'], '/Users/stas/Library/iTermServer-3.5.0'))
+      .mockResolvedValueOnce({ success: true, stdout: '1 S+ -zsh', stderr: '' })
+      .mockResolvedValueOnce({ success: true, stdout: 'p1\nfcwd\nn/Users/stas\n', stderr: '' });
 
+    expect(await inspectTerminalAppWindows('iTerm2')).toEqual([
+      { cwd: '/Users/stas', command: undefined },
+    ]);
+    expect(runCommand.mock.calls[1]![1]).toEqual(['-t', 'ttys010', '-o', 'pid=,stat=,command=']);
+  });
+});
+
+describe('never asks for Automation', () => {
+  it('reads only the process table — no osascript, ever', async () => {
+    runCommand.mockResolvedValue(processTree(['ttys004']));
+    await inspectTerminalAppWindows('Terminal');
     await inspectTerminalAppWindows('iTerm2');
+    expect(runCommand.mock.calls.every(([command]) => command !== 'osascript')).toBe(true);
+  });
+});
 
-    const [, args] = runCommand.mock.calls[0]!;
-    expect(args).toContain('tell application "iTerm2"');
+describe('a tracked terminal’s own output logger', () => {
+  it('reports the user’s command, never the tee the script pipes it through', async () => {
+    runCommand
+      .mockResolvedValueOnce(processTree(['ttys004']))
+      .mockResolvedValueOnce({
+        success: true,
+        stdout: [
+          '1 S+ /bin/zsh -l /tmp/x.command',
+          '2 S+ tee -a /tmp/x.out',
+          '3 S+ npm run dev',
+        ].join('\n'),
+        stderr: '',
+      })
+      .mockResolvedValueOnce({ success: true, stdout: 'p3\nfcwd\nn/Users/app\n', stderr: '' });
+
+    expect(await inspectTerminalAppWindows('Terminal')).toEqual([
+      { cwd: '/Users/app', command: 'npm run dev' },
+    ]);
   });
 });

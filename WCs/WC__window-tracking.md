@@ -636,6 +636,16 @@ identity). Close with stop-on-close on: SIGINT `tilt up`, wait, `tilt
 down` (the step's Down command), then close the window; off → window
 stays, `kept-running`.
 
+**Other desktops (found 2026-10-29, real Tilt test; founder decision):**
+a terminal opened while the user is on another desktop (or in a
+full-screen app) opens where Accessibility can't see it, so capture
+finds no window. It's tracked through its shell anyway (window id
+unknown); closing it brings Terminal forward — switching to that
+desktop — finds the window by its marker, stops the processes, then
+closes it. A known window that moved to another desktop is closed the
+same way. Verified for real: Tilt captured off-desktop, Ctrl+C →
+`tilt down` (deployment gone) → switched → window closed, 1.7s.
+
 **3d — detection without AppleScript.** "Save current workspace" finds
 terminals via `ps` (+ `lsof` for cwd) instead of `tell application
 "Terminal"` — no Automation prompt, and fixes `tee` being reported as

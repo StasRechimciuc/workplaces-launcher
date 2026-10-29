@@ -24,12 +24,18 @@ export function terminalWindowResource(
   cwd: string,
   commands: readonly string[],
   occurrence: number,
+  tilt?: { downCommand: string; stopOnClose: boolean },
 ): ResourceSpec {
   const directory = normalizeDirectory(expandHome(cwd));
   return {
     kind: TERMINAL_WINDOW_KIND,
     identity: { cwd: directory, commands: JSON.stringify(commands), occurrence },
     label: `Terminal (${commands[0] ?? basename(directory)})`,
+    // Tilt (a Docker step on the Tilt engine) is a terminal too, closed
+    // its own way — see terminal-kind.ts's close. Not part of the
+    // identity: a Terminal step running `tilt up` in the same directory
+    // is the same terminal.
+    ...(tilt ? { options: { engine: 'tilt', ...tilt } } : {}),
   };
 }
 

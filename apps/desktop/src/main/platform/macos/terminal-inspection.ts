@@ -16,7 +16,6 @@ export interface TerminalWindowState {
 
 export type TerminalAppKind = 'Terminal' | 'iTerm2';
 
-const OSASCRIPT_TIMEOUT_MS = 5000;
 const PS_TIMEOUT_MS = 5000;
 const LSOF_TIMEOUT_MS = 5000;
 
@@ -46,73 +45,48 @@ const NON_COMMAND_BASENAMES = new Set([
   'su',
 ]);
 
-function isShellCommand(command: string): boolean {
+function basenameOf(command: string): string {
   const argv0 = command.split(/\s+/)[0] ?? '';
-  const basename = argv0.split('/').pop() ?? argv0;
-  return NON_COMMAND_BASENAMES.has(basename);
+  return argv0.split('/').pop() ?? argv0;
+}
+
+function isShellCommand(command: string): boolean {
+  return NON_COMMAND_BASENAMES.has(basenameOf(command));
 }
 
 /**
- * AppleScript returns a list of strings as a single comma-space-joined
- * string (e.g. "/dev/ttys004, /dev/ttys007"), and a single-item result
- * (one window) as a plain string with no separator at all — this
- * handles both shapes identically.
+ * The ttys of an app's terminal sessions, read from the process table —
+ * no AppleScript, so no Automation permission prompt (WCs/
+ * WC__window-tracking.md, phase 3d). Each Terminal.app window (or tab)
+ * is a `login` process that's a direct child of Terminal.app, holding
+ * that window's tty (confirmed against this machine's real process
+ * tree); iTerm2's sessions hang off its `iTermServer` process the same
+ * way. Bare device names ("ttys004"), in tty order, one per session.
  */
-function parseTtyList(stdout: string): string[] {
-  return stdout
-    .split(',')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-}
-
-async function getTerminalAppTtys(): Promise<string[]> {
-  const result = await runCommand(
-    'osascript',
-    ['-e', 'tell application "Terminal" to get tty of every window'],
-    { timeoutMs: OSASCRIPT_TIMEOUT_MS },
+async function listSessionTtys(app: TerminalAppKind): Promise<string[] | null> {
+  const result = await runCommand('ps', ['-A', '-o', 'pid=,ppid=,tty=,command='], {
+    timeoutMs: PS_TIMEOUT_MS,
+  });
+  if (!result.success) return null;
+  const rows = result.stdout
+    .split('\n')
+    .map((line) => /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/.exec(line))
+    .filter((match): match is RegExpExecArray => match !== null)
+    .map(([, pid, ppid, tty, command]) => ({
+      pid: pid!,
+      ppid: ppid!,
+      tty: tty!,
+      command: command!,
+    }));
+  const isRoot =
+    app === 'Terminal'
+      ? (command: string) => command.includes('/Terminal.app/Contents/MacOS/Terminal')
+      : (command: string) => command.includes('iTermServer');
+  const roots = new Set(rows.filter((r) => isRoot(r.command)).map((r) => r.pid));
+  const ttys = new Set(
+    rows.filter((r) => roots.has(r.ppid) && r.tty.startsWith('ttys')).map((r) => r.tty),
   );
-  return result.success ? parseTtyList(result.stdout) : [];
-}
-
-/**
- * iTerm2's own scripting dictionary exposes `tty` as a session property
- * (a real, documented part of its AppleScript support) — not
- * independently live-verified on this machine (iTerm2 isn't installed
- * here yet), unlike the Terminal.app path above and the `ps`/`lsof`
- * calls below, which were confirmed against this machine's actual
- * output. Worth a real check once iTerm2 is installed for comparison
- * (see WCs/WC__save-current-workspace.md).
- */
-async function getITerm2Ttys(): Promise<string[]> {
-  const result = await runCommand(
-    'osascript',
-    [
-      '-e',
-      'tell application "iTerm2"',
-      '-e',
-      'set ttyList to {}',
-      '-e',
-      'repeat with aWindow in windows',
-      '-e',
-      'repeat with aTab in tabs of aWindow',
-      '-e',
-      'repeat with aSession in sessions of aTab',
-      '-e',
-      'set end of ttyList to (tty of aSession)',
-      '-e',
-      'end repeat',
-      '-e',
-      'end repeat',
-      '-e',
-      'end repeat',
-      '-e',
-      'return ttyList',
-      '-e',
-      'end tell',
-    ],
-    { timeoutMs: OSASCRIPT_TIMEOUT_MS },
-  );
-  return result.success ? parseTtyList(result.stdout) : [];
+  return [...ttys].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 }
 
 interface PsRow {
@@ -150,12 +124,19 @@ function parsePsOutput(stdout: string): PsRow[] {
  * idle prompt), the shell's own pid is used to still report a real cwd,
  * just no command.
  */
-function selectForegroundRepresentative(rows: PsRow[]): { pid: string; command: string | undefined } | undefined {
+function selectForegroundRepresentative(
+  rows: PsRow[],
+): { pid: string; command: string | undefined } | undefined {
   const foregroundGroup = rows.filter((r) => r.stat.includes('+'));
   if (foregroundGroup.length === 0) {
     return undefined;
   }
-  const nonShell = foregroundGroup.find((r) => !isShellCommand(r.command));
+  // `tee` is skipped in favour of any other candidate: a tracked
+  // terminal's script pipes each command through `tee` into its output
+  // log (launcher.ts's openTerminal), so in a pipeline it's never the
+  // user's command — it was being saved as one.
+  const candidates = foregroundGroup.filter((r) => !isShellCommand(r.command));
+  const nonShell = candidates.find((r) => basenameOf(r.command) !== 'tee') ?? candidates[0];
   const representative = nonShell ?? foregroundGroup[0]!;
   return { pid: representative.pid, command: nonShell?.command };
 }
@@ -178,16 +159,8 @@ async function getProcessCwd(pid: string): Promise<string | undefined> {
   return line ? line.slice(1) : undefined;
 }
 
-/**
- * ps -t wants the bare device name ("ttys004"), not the "/dev/ttys004"
- * form AppleScript's `tty of window`/`tty of session` reports.
- */
-function stripDevPrefix(ttyPath: string): string {
-  return ttyPath.replace(/^\/dev\//, '');
-}
-
-async function inspectTty(ttyPath: string): Promise<TerminalWindowState> {
-  const psResult = await runCommand('ps', ['-t', stripDevPrefix(ttyPath), '-o', 'pid=,stat=,command='], {
+async function inspectTty(tty: string): Promise<TerminalWindowState> {
+  const psResult = await runCommand('ps', ['-t', tty, '-o', 'pid=,stat=,command='], {
     timeoutMs: PS_TIMEOUT_MS,
   });
   if (!psResult.success) {
@@ -207,17 +180,15 @@ async function inspectTty(ttyPath: string): Promise<TerminalWindowState> {
  * Every open window/session of the given terminal app, each with its
  * own best-effort cwd/command — one entry per window, never merged
  * (mirrors how a VS Code window with two different projects is never
- * merged into one step either). An app with no open windows (or whose
- * tty/ps/lsof chain fails entirely) returns an empty array, never a
- * throw — detection degrades to "nothing found for this app," not a
- * crash.
+ * merged into one step either). An empty array means the app has no
+ * sessions open; null means the process table itself couldn't be read
+ * — a detection failure the caller should name, not "nothing open".
  */
-export async function inspectTerminalAppWindows(app: TerminalAppKind): Promise<TerminalWindowState[]> {
-  const ttys = app === 'Terminal' ? await getTerminalAppTtys() : await getITerm2Ttys();
-  // Sequential, not Promise.all — same reasoning as terminal-tool.ts's
-  // own run(): no correctness need for concurrency here (a handful of
-  // windows at most), and it keeps each window's own ps/lsof pair from
-  // interleaving with another window's.
+export async function inspectTerminalAppWindows(
+  app: TerminalAppKind,
+): Promise<TerminalWindowState[] | null> {
+  const ttys = await listSessionTtys(app);
+  if (ttys === null) return null;
   const results: TerminalWindowState[] = [];
   for (const tty of ttys) {
     results.push(await inspectTty(tty));

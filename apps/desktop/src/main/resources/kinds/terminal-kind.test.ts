@@ -15,10 +15,16 @@ let shellStartedAt: number | null = 1000;
 let session: TerminalSessionState | null = 'running';
 let info: { tty: string; shellPid: number } | null = { tty: '/dev/ttys004', shellPid: 500 };
 let captureOk = true;
+/** The marked window shows up in Accessibility only once Terminal is brought forward. */
+let visibleAfterActivate = true;
+let activated = false;
+let closeUnreachableOnce = false;
 let alive = new Set([500, 501, 502]);
 const signals: [number, string][] = [];
 const reruns: string[] = [];
 const requests: { method: string; params: Record<string, unknown> }[] = [];
+const downs: [string, string][] = [];
+let downOk = true;
 
 const helper = {
   request: (async (method: string, params: Record<string, unknown>) => {
@@ -27,8 +33,24 @@ const helper = {
       case 'listWindows':
         return {
           ok: true,
-          result: [{ windowId: 1, pid: 77, title: 'old', minimized: false, standard: true }],
+          result: [
+            { windowId: 1, pid: 77, title: 'old', minimized: false, standard: true },
+            ...(activated && visibleAfterActivate
+              ? [
+                  {
+                    windowId: 43,
+                    pid: 77,
+                    title: `x — ${marker}`,
+                    minimized: false,
+                    standard: true,
+                  },
+                ]
+              : []),
+          ],
         };
+      case 'activateApp':
+        activated = true;
+        return { ok: true, result: { activated: true, via: 'activate' } };
       case 'captureNewWindow':
         return captureOk
           ? {
@@ -49,6 +71,9 @@ const helper = {
       case 'isRunning':
         return { ok: true, result: { running: true, pids: [77], apps: [] } };
       case 'closeWindow':
+        if (closeUnreachableOnce && !activated) {
+          return { ok: false, error: { code: 'unreachable', message: 'on another desktop' } };
+        }
         return { ok: true, result: { outcome: closeOutcome } };
       default:
         throw new Error(`unexpected ${method}`);
@@ -71,8 +96,12 @@ const kind = createTerminalKind(
       alive.delete(pid);
     },
     isAlive: (pid) => alive.has(pid),
+    runDown: async (directory, command) => {
+      downs.push([directory, command]);
+      return downOk ? { success: true, message: '' } : { success: false, message: 'down failed' };
+    },
   },
-  { captureTimeoutMs: 50, graceMs: 30 },
+  { captureTimeoutMs: 50, graceMs: 30, tiltGraceMs: 30 },
 );
 
 const handle = {
@@ -82,6 +111,7 @@ const handle = {
   shellPid: 500,
   shellStartedAt: 1000,
   tty: '/dev/ttys004',
+  cwd: String(spec.identity['cwd']),
 };
 
 beforeEach(() => {
@@ -95,6 +125,11 @@ beforeEach(() => {
   signals.length = 0;
   reruns.length = 0;
   requests.length = 0;
+  visibleAfterActivate = true;
+  activated = false;
+  closeUnreachableOnce = false;
+  downs.length = 0;
+  downOk = true;
 });
 
 describe('terminal kind', () => {
@@ -116,12 +151,43 @@ describe('terminal kind', () => {
     });
   });
 
-  it('reports why nothing was captured (e.g. Terminal opens tabs, not windows)', async () => {
+  it('still tracks a terminal whose window opened on a desktop it can’t see, by its shell', async () => {
     captureOk = false;
+    await expect(kind.capture(spec.identity, [])).resolves.toEqual({
+      found: true,
+      handle: { ...handle, windowId: null },
+      preexisting: false,
+    });
+  });
+
+  it('says why when even the shell never reported', async () => {
+    captureOk = false;
+    info = null;
     await expect(kind.capture(spec.identity, [])).resolves.toMatchObject({
       found: false,
-      reason: expect.stringContaining('no new Terminal window'),
+      reason: expect.stringContaining('shell'),
     });
+  });
+
+  it('closing a window never found switches to its desktop, finds it by marker, then closes it', async () => {
+    await expect(kind.close({ ...handle, windowId: null })).resolves.toEqual({ outcome: 'closed' });
+    expect(requests.map((r) => r.method)).toContain('activateApp');
+    expect(requests.at(-1)).toMatchObject({ method: 'closeWindow', params: { windowId: 43 } });
+  });
+
+  it('a known window now on another desktop is closed after switching there', async () => {
+    closeUnreachableOnce = true;
+    await expect(kind.close(handle)).resolves.toEqual({ outcome: 'closed' });
+    expect(requests.filter((r) => r.method === 'closeWindow')).toHaveLength(2);
+  });
+
+  it('still stops the processes, and says so, when the window can’t be found at all', async () => {
+    visibleAfterActivate = false;
+    await expect(kind.close({ ...handle, windowId: null })).resolves.toEqual({
+      outcome: 'failed',
+      detail: "stopped its processes, but couldn't find its window to close it",
+    });
+    expect(signals.map(([pid]) => pid)).toContain(500);
   });
 
   it('is gone once the window or the shell is — a reused pid is a different shell', async () => {
@@ -172,6 +238,7 @@ describe('terminal kind', () => {
           if (sig === 'SIGKILL' || pid !== 501) alive.delete(pid);
         },
         isAlive: (pid) => alive.has(pid),
+        runDown: async () => ({ success: true, message: '' }),
       },
       { graceMs: 30 },
     );
@@ -184,6 +251,46 @@ describe('terminal kind', () => {
     await expect(kind.close(handle)).resolves.toEqual({
       outcome: 'refused',
       detail: 'Terminal is asking before closing it',
+    });
+  });
+
+  describe('Tilt', () => {
+    const tilt = { downCommand: '', stopOnClose: true };
+
+    it('records how to stop it when its step is a Tilt one', async () => {
+      const tiltSpec = terminalWindowResource('~/app', ['tilt up'], 0, tilt);
+      const captured = await kind.capture(tiltSpec.identity, [], tiltSpec.options);
+      expect(captured).toMatchObject({ found: true, handle: { tilt } });
+    });
+
+    it('Ctrl+C first, then the Down command in its directory, then closes the window', async () => {
+      await expect(kind.close({ ...handle, tilt })).resolves.toEqual({ outcome: 'closed' });
+      expect(signals.slice(0, 2)).toEqual([
+        [502, 'SIGINT'],
+        [501, 'SIGINT'],
+      ]);
+      expect(downs).toEqual([[handle.cwd, 'tilt down']]);
+      expect(requests.at(-1)).toMatchObject({ method: 'closeWindow' });
+    });
+
+    it('leaves Tilt running when stop on close is off', async () => {
+      await expect(
+        kind.close({ ...handle, tilt: { downCommand: '', stopOnClose: false } }),
+      ).resolves.toEqual({
+        outcome: 'kept-running',
+        detail: 'stop on close is off for this step',
+      });
+      expect(signals).toEqual([]);
+      expect(downs).toEqual([]);
+    });
+
+    it('keeps the window open and reports a failed Down command', async () => {
+      downOk = false;
+      await expect(kind.close({ ...handle, tilt })).resolves.toEqual({
+        outcome: 'failed',
+        detail: 'down failed',
+      });
+      expect(requests.some((r) => r.method === 'closeWindow')).toBe(false);
     });
   });
 });

@@ -1,9 +1,16 @@
-import type { DetectWorkspaceDraftResult, DetectedStepDraft, UnmatchedRunningApp } from '@workspace-launcher/shared';
+import type {
+  DetectWorkspaceDraftResult,
+  DetectedStepDraft,
+  UnmatchedRunningApp,
+} from '@workspace-launcher/shared';
 import { appDisplayName } from '@workspace-launcher/shared';
 import { listOpenWindowFolders } from '@workspace-launcher/shared/vscode-restore';
 import { listForegroundApps, type RunningApp } from '../platform/macos/app-enumeration';
 import { getLastUsedChromeProfileFolder } from '../platform/chrome-profiles';
-import { inspectTerminalAppWindows, type TerminalAppKind } from '../platform/macos/terminal-inspection';
+import {
+  inspectTerminalAppWindows,
+  type TerminalAppKind,
+} from '../platform/macos/terminal-inspection';
 import { findTypeForBundlePath } from './detection-registry';
 import { isOrchestratorBusy } from './orchestrator-busy';
 
@@ -40,14 +47,14 @@ async function detectTerminalSteps(
 
   for (const kind of presentKinds) {
     const windows = await inspectTerminalAppWindows(kind);
-    if (windows.length === 0) {
+    if (windows === null) {
       // The app IS running (we only got here because lsappinfo saw it),
-      // but nothing came back — almost always a missing Automation
-      // permission for this specific app, not "it has no windows." A
-      // real, user-actionable gap, named explicitly rather than making
-      // this terminal app silently vanish from the draft.
+      // but the process table that lists its sessions couldn't be read
+      // — named explicitly rather than making this terminal app
+      // silently vanish from the draft. An app with no windows open is
+      // an empty list instead, and simply contributes nothing.
       issues.push(
-        `${kind} is open, but Workspace Launcher couldn't read its windows — check that Automation access for ${kind} is allowed in System Settings > Privacy & Security.`,
+        `${kind} is open, but Workspace Launcher couldn't read its terminal sessions — detection may be missing them.`,
       );
       continue;
     }
@@ -65,13 +72,18 @@ async function detectTerminalSteps(
       }
       steps.push({
         type: 'terminal',
-        params: { terminals: [{ cwd: window.cwd, commands: window.command ? [window.command] : [] }] },
+        params: {
+          terminals: [{ cwd: window.cwd, commands: window.command ? [window.command] : [] }],
+        },
         label: window.command ? `${window.cwd} — ${window.command}` : window.cwd,
         // exactOptionalPropertyTypes forbids an explicit `caveat: undefined`
         // — conditionally spread instead of a ternary onto the key itself.
         ...(window.command
           ? {}
-          : { caveat: 'No running command detected for this terminal — only its folder was captured.' }),
+          : {
+              caveat:
+                'No running command detected for this terminal — only its folder was captured.',
+            }),
       });
     }
     if (droppedCount > 0) {
@@ -105,7 +117,11 @@ async function detectVscodeSteps(runningApps: RunningApp[]): Promise<DetectedSte
     // One step per open folder — real multi-window support, since the
     // companion extension's own heartbeat is per-window by construction
     // (VS Code can't open the same folder in two windows at once).
-    return openFolders.map((folder) => ({ type: 'vscode', params: { path: folder }, label: folder }));
+    return openFolders.map((folder) => ({
+      type: 'vscode',
+      params: { path: folder },
+      label: folder,
+    }));
   }
 
   // VS Code is running, but no window reported an open folder — either
@@ -118,7 +134,7 @@ async function detectVscodeSteps(runningApps: RunningApp[]): Promise<DetectedSte
       params: { path: vscodeApp.bundlePath },
       label: appDisplayName(vscodeApp.bundlePath),
       caveat:
-        "Could not detect which project folder was open — install the Workspace Launcher VS Code extension for full detection.",
+        'Could not detect which project folder was open — install the Workspace Launcher VS Code extension for full detection.',
     },
   ];
 }
@@ -135,7 +151,7 @@ async function detectChromeStep(): Promise<DetectedStepDraft> {
     label: profile ? `Chrome (${profile})` : 'Chrome',
     caveat: profile
       ? "Profile is a best guess based on Chrome's own last-used record — confirm it's the right one."
-      : "Could not determine which Chrome profile was open.",
+      : 'Could not determine which Chrome profile was open.',
   };
 }
 
@@ -165,7 +181,7 @@ export async function detectCurrentWorkspaceDraft(): Promise<DetectWorkspaceDraf
   );
 
   // Terminal/VS Code/Chrome detection are each their own independent
-  // shell-out chains (osascript+ps+lsof, a file directory read, a
+  // shell-out chains (ps+lsof, a file directory read, a
   // Local State read) — none depends on another's result, so running
   // them concurrently bounds this interactive, hotkey-triggered pass by
   // the slowest of the three instead of their sum.
@@ -206,7 +222,11 @@ export async function detectCurrentWorkspaceDraft(): Promise<DetectWorkspaceDraf
     // "unmatched" bucket just because there's no rich plugin for it
     // yet — see WCs/WC__save-current-workspace.md's "no plugin-per-app
     // commitment" decision.
-    steps.push({ type: 'app', params: { path: app.bundlePath }, label: appDisplayName(app.bundlePath) });
+    steps.push({
+      type: 'app',
+      params: { path: app.bundlePath },
+      label: appDisplayName(app.bundlePath),
+    });
   }
 
   return { status: 'ready', steps, unmatched, issues };

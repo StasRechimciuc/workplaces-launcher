@@ -360,8 +360,8 @@ export type DetectWorkspaceDraftResult =
       steps: DetectedStepDraft[];
       unmatched: UnmatchedRunningApp[];
       /** Detection-wide problems worth naming on the review screen —
-       * e.g. "Terminal is open, but its windows couldn't be read" (a
-       * systemic failure, like a missing Automation permission) — as
+       * e.g. "Terminal is open, but its sessions couldn't be read" (a
+       * systemic failure, like the process table being unreadable) — as
        * distinct from a single step's own `caveat` above. */
       issues: string[];
     };

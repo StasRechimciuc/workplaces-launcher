@@ -10,6 +10,7 @@ import { getPlatformLauncher } from '../platform';
 import { runCommand } from '../lib/shell-exec';
 import { expandHome, isAcceptableToolPath } from '../lib/paths';
 import { pollUntil } from '../lib/poll-until';
+import { composeResource } from '../resources/kinds/compose-spec';
 
 /**
  * Minimal, local-only tokenizer for the Up/Down command text fields —
@@ -148,12 +149,12 @@ function readRawParams(params: Record<string, unknown>): {
  * each caller's job (run() tries to launch it itself; teardown()
  * doesn't, so it tells the user to).
  */
-type DockerDaemonStatus =
+export type DockerDaemonStatus =
   | { status: 'up' }
   | { status: 'not-installed'; message: string }
   | { status: 'down'; message: string };
 
-async function checkDockerDaemon(): Promise<DockerDaemonStatus> {
+export async function checkDockerDaemon(): Promise<DockerDaemonStatus> {
   const result = await runCommand('docker', ['info'], { timeoutMs: 8_000 });
   if (result.success) return { status: 'up' };
   if (/ENOENT|command not found/i.test(result.message)) {
@@ -226,7 +227,12 @@ export async function ensureDockerDaemonRunning(
   };
 }
 
-async function runEngineCommand(
+/**
+ * Runs one user-configured engine command (an Up or Down command) in
+ * the step's directory — tokenized, never through a shell. Also used by
+ * the Compose resource kind to stop a tracked stack on Close.
+ */
+export async function runEngineCommand(
   directory: string,
   command: string,
   timeoutMs: number,
@@ -398,6 +404,16 @@ export const dockerTool: ToolPlugin<DockerStepParams> = {
       };
     }
     return { ...result, durationMs };
+  },
+
+  // Compose stacks are tracked resources (resources/kinds/compose-kind.ts),
+  // so Close stops only a stack this app started and nothing else uses.
+  // Tilt runs in a terminal window — tracked with the terminal kind, not
+  // here.
+  async resources(params) {
+    return params.engine === 'compose'
+      ? [composeResource(params.directory, params.downCommand, params.stopOnClose)]
+      : [];
   },
 
   detail(params: Record<string, unknown>): string {

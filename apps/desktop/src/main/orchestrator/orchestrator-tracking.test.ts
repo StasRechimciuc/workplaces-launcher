@@ -58,12 +58,17 @@ const closeOutcome = new Map<string, CloseOutcome['outcome']>();
 const closes: string[] = [];
 const runs: string[] = [];
 
-function makeKind(kind: string, openIsIdempotent: boolean): ResourceKindPlugin {
+function makeKind(
+  kind: string,
+  openIsIdempotent: boolean,
+  closesWholeApp: boolean,
+): ResourceKindPlugin {
   const key = (identity: ResourceSpec['identity']): string => String(identity['name']);
   const running = (identity: ResourceSpec['identity']): number[] => world.get(key(identity)) ?? [];
   return {
     kind,
     openIsIdempotent,
+    closesWholeApp,
     async snapshot(identity) {
       return [...running(identity)];
     },
@@ -110,8 +115,8 @@ function makeKind(kind: string, openIsIdempotent: boolean): ResourceKindPlugin {
   };
 }
 
-registerResourceKind(makeKind('fake-app', true));
-registerResourceKind(makeKind('fake-window', false));
+registerResourceKind(makeKind('fake-app', true, true));
+registerResourceKind(makeKind('fake-window', false, false));
 
 /**
  * A step that opens one resource of `kind` named `params.name`. Its
@@ -136,7 +141,15 @@ function trackedTool(type: string, kind: string): ToolPlugin<{ name: string; fai
       return { success: true, message: '', durationMs: 0 };
     },
     async resources(params) {
-      return [{ kind, identity: { name: params.name }, label: params.name }];
+      // An app resource is the app itself, so its app-level name is its label.
+      return [
+        {
+          kind,
+          identity: { name: params.name },
+          label: params.name,
+          ...(kind === 'fake-app' ? { appName: params.name } : {}),
+        },
+      ];
     },
   };
 }
@@ -326,6 +339,22 @@ describe('close', () => {
     expect(result.leftOpen).toEqual([
       { appName: 'Editor', reason: 'kept-running', detail: 'kept-running for test' },
     ]);
+    expect(store.get().resources).toEqual([]);
+  });
+
+  it('keeps a refused close (unsaved changes) claimed, so Close works again once dealt with', async () => {
+    const a = ws('A', [{ type: 't-window', params: { name: 'editor' } }]);
+    await runWorkspace(a);
+    closeOutcome.set('editor', 'refused');
+    const first = await closeWorkspace(a, [a]);
+    expect(first.leftOpen).toEqual([
+      { appName: 'editor', reason: 'kept-running', detail: 'refused for test' },
+    ]);
+    expect(resourcesOwnedBy(store.get(), 'A')).toHaveLength(1);
+    expect(await getActiveWorkspaceIds([a])).toEqual(new Set(['A']));
+
+    closeOutcome.delete('editor');
+    await expect(closeWorkspace(a, [a])).resolves.toEqual({ closed: ['editor'], leftOpen: [] });
     expect(store.get().resources).toEqual([]);
   });
 

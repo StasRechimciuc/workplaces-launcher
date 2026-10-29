@@ -521,6 +521,60 @@ non-idempotent resources, the upgrade fallback, ledger-unavailable
 fallback. Keyed lock: serialization, order, release on throw. Startup
 reconcile of `opening` records.
 
+## Phase 2, slice 6 technical plan: VS Code windows (2026-10-29, draft)
+
+**Finding:** the companion extension isn't installed on the founder's
+Mac — it has only ever run in the F5 Extension Development Host. Every
+per-window mechanism below needs it, so this slice adds
+`npm run install:vscode-extension` (esbuild → `vsce package` → `code
+--install-extension`). Bundling/auto-installing it from the app stays
+out of scope (known limitation).
+
+- **Identity:** `{ bundleId, folder }` — the VS Code app the step opens
+  (VS Code vs Insiders vs Cursor) and the folder, lexically normalized.
+  One window per folder is VS Code's own rule.
+- **Heartbeat v2** (extension → app, the existing
+  `vscode-current-state` files): adds `sessionId` (`vscode.env.sessionId`,
+  unique per window), `activatedAt`, `appRoot` (→ bundle id) and
+  `folderCount`; multi-root windows are never tracked or commanded.
+  v1 readers (Save-current detection) keep working.
+- **No restore slowdown:** capture doesn't wait for VS Code + the
+  extension to start. The handle is `{ bundleId, folder, sessionId:
+null }`; the first check that sees a heartbeat for that folder with
+  `activatedAt` after the record was written binds its `sessionId`
+  (check may return an updated handle). A heartbeat already there
+  before the open → that window pre-existed → not ours.
+- **Command channel** (app → extension): `vscode-commands/cmd-<id>.json`
+  `{ id, sessionId, action: 'close', createdAt }`; the extension
+  watches the directory (+ 1.5s poll), only executes commands for its
+  own sessionId, ignores anything older than 10s and everything already
+  present at activation; answers with `ack-<id>.json` `{ status: 'ok' |
+'refused', reason }`. Close refuses when any document is dirty
+  (`kept-running`, "has unsaved changes") and otherwise runs
+  `workbench.action.closeWindow`.
+- **Check:** fresh heartbeat with the bound sessionId → alive; a
+  different sessionId for the folder → the user reopened it → gone (not
+  ours any more); no heartbeat and VS Code not running → gone; no
+  heartbeat but VS Code running → unknown (kept).
+- **No-extension fallback, later (founder, 2026-10-29):** once phase 3
+  builds window capture for terminals, a VS Code window opened without
+  the extension is tracked by the helper instead (window-list diff
+  around the open, AX close button — VS Code asks about unsaved files
+  itself). Its weak spot is reuse/re-finding an already-open window,
+  which falls back to matching the window title. Until then:
+- **No-extension fallback, now (founder, 2026-10-29):** Close never quits
+  VS Code when a window can't be tracked — it's left open with the
+  reason ("needs the VS Code extension to close just this window"),
+  never quitting the user's other windows. The upgrade fallback skips
+  VS Code steps for the same reason, and an app resource for VS Code
+  (a link opened in it) is never quit while a VS Code window resource
+  is owned (the plan's "app-quit blocked while any owned resource of
+  that app is in use").
+- **Terminals restore** (pending-restore files) is unchanged.
+- **Tests:** heartbeat v2 + command/ack files as pure shared functions
+  (both sides), the kind against a fake heartbeat/command directory,
+  the extension's command handling with a mocked `vscode` API.
+
 ## Status
 
 Idea approved, research + spike done, Stage 2 plan approved
@@ -575,7 +629,21 @@ Follow-up after window tracking (founder, 2026-10-29): adding a step
 takes too many clicks (⋯ → Edit → Add tool → App → Choose app). Idea:
 an "+ Add step" button at the end of the Detail view's step list —
 pick a tool, and for App open the macOS app picker straight away (~2
-clicks, no Edit form). Do it together with the Close/Switch view
-redesign above, through /judge.
+clicks, no Edit form). Same pass: the "Use VS Code's folder: …"
+suggestion chip on a Docker/Terminal step is too faint to notice
+(founder missed it, 2026-10-29) — make it prominent, or pre-fill the
+directory from the VS Code step with an easy way to change it. Do it
+together with the Close/Switch view redesign above, through /judge.
+
+**Important open product question (founder, 2026-10-29):** users
+shouldn't silently run without what the app needs. Idea: a first-run
+setup tour that gets everything enabled up front — Accessibility, the
+VS Code extension (installed from the app), Docker, etc. But not every
+user uses VS Code (or Docker, or Chrome), so the tour has to know the
+user's domain/stack first → onboarding "templates" (e.g. "fullstack web
+dev: VS Code + Docker + Chrome") that decide which requisites to ask
+for, and possibly seed a first workspace. Touches onboarding, the
+extension bundling limitation, and workspace templates — needs its own
+/judge before the validation build, not a quick add.
 
 Next: phase 2.

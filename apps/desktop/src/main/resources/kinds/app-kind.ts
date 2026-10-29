@@ -63,6 +63,7 @@ export function createAppKind(
   return {
     kind: APP_KIND,
     openIsIdempotent: true,
+    closesWholeApp: true,
 
     async snapshot(identity) {
       const bundleId = bundleIdOf(identity);
@@ -150,8 +151,8 @@ export function createAppKind(
           return { outcome: 'already-gone' };
         case 'still-running':
           return {
-            outcome: 'kept-running',
-            detail: 'It asked to stay open — it may have unsaved changes.',
+            outcome: 'refused',
+            detail: 'it asked to stay open — it may have unsaved changes',
           };
       }
     },
@@ -191,5 +192,5 @@ export async function appResourceFor(target: string, label: string): Promise<Res
     return [];
   }
   const bundleId = await readBundleId(target);
-  return bundleId ? [{ kind: APP_KIND, identity: { bundleId }, label }] : [];
+  return bundleId ? [{ kind: APP_KIND, identity: { bundleId }, label, appName: label }] : [];
 }

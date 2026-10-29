@@ -16,7 +16,8 @@ export type CaptureResult =
  *   treated as gone, so nothing is reopened or forgotten on a guess.
  */
 export type HandleState =
-  | { state: 'alive' }
+  /** `handle`: an updated handle to record (e.g. a window bound lazily, on first sight). */
+  | { state: 'alive'; handle?: ResourceHandle }
   | { state: 'gone' }
   | { state: 'drifted' }
   | { state: 'unknown'; reason: string };
@@ -25,7 +26,14 @@ export type CloseOutcome =
   | { outcome: 'closed' }
   | { outcome: 'already-gone' }
   /** It asked to stay open (unsaved work, a dialog) — left to the user, never forced. */
+  /** Left open by design (e.g. stop-on-close is off) — it's let go of, nothing to retry. */
   | { outcome: 'kept-running'; detail: string }
+  /**
+   * It declined to close (unsaved changes, a dialog) — the user is
+   * expected to deal with it and close again, so the workspace keeps its
+   * claim and stays active.
+   */
+  | { outcome: 'refused'; detail: string }
   | { outcome: 'needs-permission'; detail: string }
   | { outcome: 'failed'; detail: string };
 
@@ -50,10 +58,25 @@ export interface ResourceKindPlugin {
    * live is skipped instead.
    */
   readonly openIsIdempotent: boolean;
+  /**
+   * True when closing it quits a whole app (the app kind) rather than
+   * closing something inside one (a window) or outside any (a stack).
+   * Such a close is held back while anything else in that app is still
+   * owned, or an active workspace's untracked step uses the app by name.
+   */
+  readonly closesWholeApp: boolean;
   /** Before the step runs: whatever capture() needs to tell what's new. */
   snapshot(identity: ResourceSpec['identity']): Promise<unknown>;
-  /** After the step runs: the instance it opened (or found already open). */
-  capture(identity: ResourceSpec['identity'], snapshot: unknown): Promise<CaptureResult>;
+  /**
+   * After the step runs: the instance it opened (or found already
+   * open). `options` (ResourceSpec.options) is the kind's to keep in
+   * the handle if it needs them later, at close time.
+   */
+  capture(
+    identity: ResourceSpec['identity'],
+    snapshot: unknown,
+    options?: ResourceSpec['options'],
+  ): Promise<CaptureResult>;
   /** An instance that's running right now, whoever opened it; null if none. */
   findLive(identity: ResourceSpec['identity']): Promise<ResourceHandle | null>;
   check(handle: ResourceHandle, identity: ResourceSpec['identity']): Promise<HandleState>;

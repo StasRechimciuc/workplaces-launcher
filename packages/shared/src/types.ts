@@ -198,6 +198,21 @@ export interface ResourceSpec {
   identity: Record<string, string | number | boolean>;
   /** Shown in Close/Switch results, e.g. "Spotify". */
   label: string;
+  /**
+   * The app it lives in, named the way the app-level (untracked) path
+   * names apps (orchestrator/tool-identity.ts's getMacAppName) — how the
+   * two paths avoid quitting what the other still uses. An app
+   * resource's own label; "Visual Studio Code" for a VS Code window.
+   * Absent for things not inside an app (a Compose stack).
+   */
+  appName?: string;
+  /**
+   * How to handle it that isn't part of what makes it "the same" — e.g.
+   * a Compose stack's Down command and stop-on-close opt-in. Recorded
+   * with the handle when it's opened, so it still applies after the
+   * step that opened it is edited out or its workspace deleted.
+   */
+  options?: Record<string, string | number | boolean>;
 }
 
 export interface ToolPlugin<TParams = unknown> {

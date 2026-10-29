@@ -113,8 +113,11 @@ describe('WlHelperClient', () => {
     expect(!response.ok && response.error.code).toBe('protocol');
   });
 
-  it('times a request out and drops its late answer', { timeout: 15_000 }, async () => {
+  it('times a request out and drops its late answer', async () => {
     const { client, logs } = makeClient(['normal']);
+    // Started first: a timeout that fires before the helper is even up
+    // would drop the request unsent, and there'd be no late answer.
+    await call(client, 'echo', {});
     const response = await call(client, 'slow', { delayMs: 300 }, 100);
     expect(response).toEqual({
       ok: false,
@@ -122,9 +125,7 @@ describe('WlHelperClient', () => {
     });
     // The helper is still usable, and the late answer never reaches anyone.
     await expect(call(client, 'echo', { n: 1 })).resolves.toEqual({ ok: true, result: { n: 1 } });
-    // Generous: under a loaded full-suite run, spawning node for the
-    // fake helper alone can take seconds.
-    await waitFor(() => logs.some((l) => l.includes('no pending request')), 10_000);
+    await waitFor(() => logs.some((l) => l.includes('no pending request')));
   });
 
   it('gives helper-side waits their own time plus a margin before timing out', async () => {

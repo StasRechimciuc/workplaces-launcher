@@ -17,6 +17,14 @@ import {
   writePendingVscodeRestore,
 } from './vscode-restore';
 
+/** A v2 heartbeat's window details — fixed, so tests only vary what they're about. */
+const WINDOW_DETAILS = {
+  sessionId: 'session-1',
+  activatedAt: '2026-10-29T10:00:00.000Z',
+  appRoot: '/Applications/Visual Studio Code.app/Contents/Resources/app',
+  folderCount: 1,
+};
+
 // vscode-restore.ts reads homedir() fresh on every call (not cached at
 // import time), so — unlike windows/app-paths.ts's KNOWN_APP_PATHS —
 // no vi.resetModules() is needed here; stubbing homedir/env/platform
@@ -267,7 +275,7 @@ describe('writeCurrentWindowState / readCurrentWindowState / deleteCurrentWindow
   });
 
   it('reports "open" with a fresh heartbeat right after writing', async () => {
-    await writeCurrentWindowState('/Users/me/projects/client-a');
+    await writeCurrentWindowState('/Users/me/projects/client-a', WINDOW_DETAILS);
 
     const result = await readCurrentWindowState('/Users/me/projects/client-a');
 
@@ -278,13 +286,13 @@ describe('writeCurrentWindowState / readCurrentWindowState / deleteCurrentWindow
   });
 
   it('matches the same folder regardless of a trailing slash, same as the pending-restore file', async () => {
-    await writeCurrentWindowState('/Users/me/projects/client-a/');
+    await writeCurrentWindowState('/Users/me/projects/client-a/', WINDOW_DETAILS);
     const result = await readCurrentWindowState('/Users/me/projects/client-a');
     expect(result.status).toBe('open');
   });
 
   it('reports "stale" once the heartbeat is older than 3x its own interval', async () => {
-    await writeCurrentWindowState('/Users/me/projects/aging');
+    await writeCurrentWindowState('/Users/me/projects/aging', WINDOW_DETAILS);
     const dir = getCurrentWindowStateDir();
     const files = await readdir(dir);
     const filePath = join(dir, files[0]!);
@@ -297,7 +305,7 @@ describe('writeCurrentWindowState / readCurrentWindowState / deleteCurrentWindow
   });
 
   it('reports "none", never throws, for malformed JSON', async () => {
-    await writeCurrentWindowState('/Users/me/projects/to-corrupt');
+    await writeCurrentWindowState('/Users/me/projects/to-corrupt', WINDOW_DETAILS);
     const dir = getCurrentWindowStateDir();
     const files = await readdir(dir);
     await writeFile(join(dir, files[0]!), '{ not json', 'utf-8');
@@ -307,8 +315,8 @@ describe('writeCurrentWindowState / readCurrentWindowState / deleteCurrentWindow
   });
 
   it('a later write refreshes the same file rather than creating a second one', async () => {
-    await writeCurrentWindowState('/Users/me/projects/refreshed');
-    await writeCurrentWindowState('/Users/me/projects/refreshed');
+    await writeCurrentWindowState('/Users/me/projects/refreshed', WINDOW_DETAILS);
+    await writeCurrentWindowState('/Users/me/projects/refreshed', WINDOW_DETAILS);
 
     const dir = getCurrentWindowStateDir();
     const files = await readdir(dir);
@@ -316,7 +324,7 @@ describe('writeCurrentWindowState / readCurrentWindowState / deleteCurrentWindow
   });
 
   it('deletes the heartbeat file, after which it reads back as "none"', async () => {
-    await writeCurrentWindowState('/Users/me/projects/to-delete');
+    await writeCurrentWindowState('/Users/me/projects/to-delete', WINDOW_DETAILS);
     await deleteCurrentWindowState('/Users/me/projects/to-delete');
 
     const result = await readCurrentWindowState('/Users/me/projects/to-delete');
@@ -330,8 +338,10 @@ describe('writeCurrentWindowState / readCurrentWindowState / deleteCurrentWindow
   });
 
   it('is independent of the pending-restore file for the same folder — writing one never affects the other', async () => {
-    await writePendingVscodeRestore('/Users/me/projects/both', { terminals: [{ commands: ['x'] }] });
-    await writeCurrentWindowState('/Users/me/projects/both');
+    await writePendingVscodeRestore('/Users/me/projects/both', {
+      terminals: [{ commands: ['x'] }],
+    });
+    await writeCurrentWindowState('/Users/me/projects/both', WINDOW_DETAILS);
 
     const pending = await readPendingVscodeRestore('/Users/me/projects/both');
     const current = await readCurrentWindowState('/Users/me/projects/both');
@@ -351,8 +361,8 @@ describe('listOpenWindowFolders', () => {
   });
 
   it('returns every distinct open folder, one entry per window', async () => {
-    await writeCurrentWindowState('/Users/me/projects/a');
-    await writeCurrentWindowState('/Users/me/projects/b');
+    await writeCurrentWindowState('/Users/me/projects/a', WINDOW_DETAILS);
+    await writeCurrentWindowState('/Users/me/projects/b', WINDOW_DETAILS);
 
     const folders = await listOpenWindowFolders();
 
@@ -360,8 +370,8 @@ describe('listOpenWindowFolders', () => {
   });
 
   it('excludes a stale entry (older than 3x the heartbeat interval)', async () => {
-    await writeCurrentWindowState('/Users/me/projects/fresh');
-    await writeCurrentWindowState('/Users/me/projects/aged');
+    await writeCurrentWindowState('/Users/me/projects/fresh', WINDOW_DETAILS);
+    await writeCurrentWindowState('/Users/me/projects/aged', WINDOW_DETAILS);
 
     const dir = getCurrentWindowStateDir();
     const files = (await readdir(dir)).sort();
@@ -380,7 +390,7 @@ describe('listOpenWindowFolders', () => {
   });
 
   it('skips a corrupt file rather than throwing', async () => {
-    await writeCurrentWindowState('/Users/me/projects/good');
+    await writeCurrentWindowState('/Users/me/projects/good', WINDOW_DETAILS);
     const dir = getCurrentWindowStateDir();
     await writeFile(join(dir, 'state-garbage.json'), '{ not json', 'utf-8');
 

@@ -9,6 +9,7 @@
     ".": "./src/index.ts",
     "./write-file-atomic": "./src/write-file-atomic.ts",
     "./vscode-restore": "./src/vscode-restore.ts",
+    "./vscode-window-commands": "./src/vscode-window-commands.ts",
     "./restore-progress": "./src/restore-progress.ts",
     "./save-current-workspace-channel": "./src/save-current-workspace-channel.ts"
   },

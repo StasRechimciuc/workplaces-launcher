@@ -127,7 +127,7 @@ describe('app kind', () => {
     fake.running = [{ pid: 42, startedAt: 1000 }];
     fake.quitOutcome = 'still-running';
     const result = await kind.close({ bundleId: 'com.spotify.client', pid: 42, startedAt: 1000 });
-    expect(result).toMatchObject({ outcome: 'kept-running' });
+    expect(result).toMatchObject({ outcome: 'refused' });
   });
 
   it('reports a helper failure while closing instead of guessing', async () => {
@@ -151,7 +151,12 @@ describe('appResourceFor', () => {
   it('tracks an app bundle by its bundle id', async () => {
     vi.mocked(bundleId.readBundleId).mockResolvedValue('com.spotify.client');
     await expect(appResourceFor('/Applications/Spotify.app', 'Spotify')).resolves.toEqual([
-      { kind: 'app', identity: { bundleId: 'com.spotify.client' }, label: 'Spotify' },
+      {
+        kind: 'app',
+        identity: { bundleId: 'com.spotify.client' },
+        label: 'Spotify',
+        appName: 'Spotify',
+      },
     ]);
   });
 

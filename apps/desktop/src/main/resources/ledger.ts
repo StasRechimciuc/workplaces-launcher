@@ -42,6 +42,8 @@ const ResourceSchema = z.object({
    * the untracked, app-name-based path tell they mean the same app.
    */
   label: z.string(),
+  /** ResourceSpec.appName — absent for ledgers written before it existed. */
+  appName: z.string().optional(),
   owners: z.array(OwnerSchema),
   /**
    * True only when this app opened it. Decision 1: something the user
@@ -126,6 +128,7 @@ export interface NewResource {
   kind: string;
   identityKey: string;
   label: string;
+  appName?: string;
   owner: ResourceOwner;
   createdByApp: boolean;
   handle: Record<string, unknown> | null;
@@ -142,6 +145,7 @@ export function addResource(
     kind: input.kind,
     identityKey: input.identityKey,
     label: input.label,
+    ...(input.appName === undefined ? {} : { appName: input.appName }),
     owners: [input.owner],
     createdByApp: input.createdByApp,
     handle: input.handle,

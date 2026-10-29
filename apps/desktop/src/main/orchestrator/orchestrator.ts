@@ -16,12 +16,13 @@ import { getMacAppName, isExcludedFromAutoClose } from './tool-identity';
 import { isAppRunning, quitApp, waitForAppRunning } from '../platform/macos/process-control';
 import { isIntentActive, setIntentActive } from './workspace-activity-store';
 import { identityKeyFor } from '../resources/kind-registry';
+import { VSCODE_WINDOW_KIND } from '../resources/kinds/vscode-window-spec';
 import { releaseWorkspace, resourcesOwnedBy } from '../resources/ledger';
 import type { ResourceLedgerStore } from '../resources/ledger-store';
 import { getLedgerStore } from '../resources/runtime';
 import {
   adoptRunning,
-  isLabelOwned,
+  isAppOwned,
   locks,
   openTrackedStep,
   ownsResources,
@@ -225,6 +226,11 @@ function appLevelSteps(
   if (!store || !isIntentActive(part.config.id)) return part.untracked;
   const unowned = part.tracked
     .filter((t) => resourcesOwnedBy(store.get(), part.config.id, t.step.id).length === 0)
+    // Never VS Code: the app-level close quits every VS Code window,
+    // including ones the user opened for other projects — and without a
+    // tracked window, VS Code is left open (WCs/WC__window-tracking.md,
+    // slice 6's no-extension decision).
+    .filter((t) => !t.specs.some((spec) => spec.kind === VSCODE_WINDOW_KIND))
     .map((t) => t.step);
   return [...part.untracked, ...unowned];
 }
@@ -457,7 +463,7 @@ export async function switchToWorkspace(
         leftOpen.push({ appName, reason: 'excluded' });
         continue;
       }
-      if (store && isLabelOwned(store, appName)) {
+      if (store && isAppOwned(store, appName)) {
         leftOpen.push({ appName, reason: 'still-used' });
         continue;
       }
@@ -486,8 +492,10 @@ export async function switchToWorkspace(
       // half regardless of whether its containers are actually
       // running. Intent is the correct, and only available, signal for
       // "does this config's own Docker teardown need to run."
+      // App-level steps only: a tracked Compose stack was already
+      // handled through the ledger above.
       if (!hasUnresolvedFailure && isIntentActive(other.config.id)) {
-        for (const step of other.config.steps) {
+        for (const step of appLevelSteps(store, other)) {
           const ok = await teardownDockerStepIfEnabled(step, closed, leftOpen);
           if (!ok) dockerOk = false;
         }
@@ -571,7 +579,7 @@ export async function closeWorkspace(
         leftOpen.push({ appName, reason: 'excluded' });
         continue;
       }
-      if (otherNeeds.has(appName) || (store && isLabelOwned(store, appName))) {
+      if (otherNeeds.has(appName) || (store && isAppOwned(store, appName))) {
         leftOpen.push({ appName, reason: 'still-used' });
         continue;
       }

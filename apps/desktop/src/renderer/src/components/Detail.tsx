@@ -97,7 +97,7 @@ function describeLeftOpen(entry: LeftOpenEntry): string {
     case 'needs-permission':
       return `Couldn't close ${entry.appName} — it needs Accessibility access${detail}`;
     case 'kept-running':
-      return `${entry.appName} asked to stay open${entry.detail ? ` (${entry.detail})` : ''}.`;
+      return `Left ${entry.appName} running${entry.detail ? ` (${entry.detail})` : ''}.`;
     case 'not-ours':
       return `Left ${entry.appName} running (it was already open before this workspace).`;
     case 'excluded':

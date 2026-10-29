@@ -13,6 +13,8 @@ import {
 import { getPlatformLauncher } from '../platform';
 import { expandHome, isAcceptableToolPath } from '../lib/paths';
 import { resolveAppLaunchTarget } from './resolve-app-path';
+import { readBundleId } from '../platform/macos/bundle-id';
+import { vscodeWindowResource } from '../resources/kinds/vscode-window-spec';
 
 /**
  * One terminal's config — `commands` only, matching docs/build-shell.md's
@@ -140,6 +142,17 @@ export const vscodeTool: ToolPlugin<VSCodeStepParams> = {
       durationMs: Date.now() - startedAt,
       ...(result.success ? {} : { code: ERROR_CODES.APP_LAUNCH_FAILED.code }),
     };
+  },
+
+  // One tracked window per step (resources/kinds/vscode-window-kind.ts):
+  // Close closes just this folder's window, through the companion
+  // extension. Tracked only with a saved .app path — the bundle id tells
+  // VS Code, Insiders and Cursor apart.
+  async resources(params) {
+    const resolved = await resolveAppLaunchTarget('vscode', VSCODE_APP_NAME, params.appPath);
+    if (!resolved.ok || !resolved.target.endsWith('.app')) return [];
+    const bundleId = await readBundleId(resolved.target);
+    return bundleId ? [vscodeWindowResource(bundleId, params.path)] : [];
   },
 
   async teardown(): Promise<StepResult> {

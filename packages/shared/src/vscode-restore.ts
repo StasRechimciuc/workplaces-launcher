@@ -44,7 +44,7 @@ const PENDING_RESTORE_TTL_MS = 5 * 60 * 1000;
  * Electron's own XDG_CONFIG_HOME nuances) — acceptable now, worth
  * re-verifying against real Electron output when either is prioritized.
  */
-function getAppDataRootDir(): string {
+export function getAppDataRootDir(): string {
   switch (process.platform) {
     case 'win32':
       return join(process.env['APPDATA'] ?? join(homedir(), 'AppData', 'Roaming'), PRODUCT_NAME);
@@ -208,7 +208,7 @@ export async function readPendingVscodeRestore(
  * key is already a correct per-window key, with no extra id scheme
  * needed and no risk of two open windows' files colliding.
  */
-export const CURRENT_WINDOW_STATE_VERSION = 1 as const;
+export const CURRENT_WINDOW_STATE_VERSION = 2 as const;
 
 /**
  * How often the extension refreshes its "I'm still open" file while
@@ -247,11 +247,38 @@ function getCurrentWindowStateFilePath(absoluteFolderPath: string): string {
 // currently open (listOpenWindowFolders below), not just confirm a
 // single candidate it already has a path for, and a hash can't be
 // reversed back into the path that produced it.
-const CurrentWindowStateSchema = z.object({
-  version: z.literal(CURRENT_WINDOW_STATE_VERSION),
-  folderPath: z.string(),
-  updatedAt: z.string(),
-});
+/**
+ * v2 adds what per-window resource tracking needs (WCs/
+ * WC__window-tracking.md, slice 6): `sessionId` (vscode.env.sessionId —
+ * unique per window, so a window closed and the folder reopened is a
+ * different window), `activatedAt` (when this window's extension
+ * started), `appRoot` (which VS Code-family app, e.g. Insiders) and
+ * `folderCount` (multi-root windows are never tracked). v1 files, from
+ * an older extension, still parse — they just can't be tracked.
+ */
+const CurrentWindowStateSchema = z.union([
+  z.object({ version: z.literal(1), folderPath: z.string(), updatedAt: z.string() }),
+  z.object({
+    version: z.literal(2),
+    folderPath: z.string(),
+    updatedAt: z.string(),
+    sessionId: z.string().min(1),
+    activatedAt: z.string(),
+    appRoot: z.string(),
+    folderCount: z.number().int().nonnegative(),
+  }),
+]);
+
+/** One live window, as its heartbeat reports it. */
+export type WindowHeartbeat = z.infer<typeof CurrentWindowStateSchema>;
+
+/** What a v2 heartbeat adds about its window — see CurrentWindowStateSchema. */
+export interface WindowIdentityDetails {
+  sessionId: string;
+  activatedAt: string;
+  appRoot: string;
+  folderCount: number;
+}
 
 /**
  * Called by the extension on activation and on its heartbeat timer.
@@ -259,26 +286,26 @@ const CurrentWindowStateSchema = z.object({
  * recognized by detection (it falls back to a generic 'app' step),
  * never a broken extension.
  */
-export async function writeCurrentWindowState(absoluteFolderPath: string): Promise<void> {
+export async function writeCurrentWindowState(
+  absoluteFolderPath: string,
+  details: WindowIdentityDetails,
+): Promise<void> {
   const dir = getCurrentWindowStateDir();
   await mkdir(dir, { recursive: true });
   const filePath = getCurrentWindowStateFilePath(absoluteFolderPath);
-  const entry = {
+  const entry: WindowHeartbeat = {
     version: CURRENT_WINDOW_STATE_VERSION,
     folderPath: absoluteFolderPath,
     updatedAt: new Date().toISOString(),
+    ...details,
   };
   await writeFileAtomic(filePath, JSON.stringify(entry));
 }
 
 export type CurrentWindowStateResult =
-  | { status: 'open'; updatedAt: string }
-  | { status: 'stale' }
-  | { status: 'none' };
+  { status: 'open'; updatedAt: string } | { status: 'stale' } | { status: 'none' };
 
-function parseCurrentWindowStateFile(
-  raw: string,
-): { folderPath: string; updatedAt: string } | undefined {
+function parseCurrentWindowStateFile(raw: string): WindowHeartbeat | undefined {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -336,6 +363,15 @@ export async function readCurrentWindowState(
  * once), so no further de-duplication is needed.
  */
 export async function listOpenWindowFolders(): Promise<string[]> {
+  return (await listWindowHeartbeats()).map((beat) => beat.folderPath);
+}
+
+/**
+ * Every live (non-stale) window's heartbeat — what per-window resource
+ * tracking reads to find, bind and check a VS Code window. Same
+ * fail-soft contract as listOpenWindowFolders.
+ */
+export async function listWindowHeartbeats(): Promise<WindowHeartbeat[]> {
   let files: string[];
   try {
     files = await readdir(getCurrentWindowStateDir());
@@ -343,7 +379,7 @@ export async function listOpenWindowFolders(): Promise<string[]> {
     return [];
   }
 
-  const folders: string[] = [];
+  const beats: WindowHeartbeat[] = [];
   for (const file of files) {
     if (!file.endsWith('.json')) continue;
     let raw: string;
@@ -354,10 +390,10 @@ export async function listOpenWindowFolders(): Promise<string[]> {
     }
     const entry = parseCurrentWindowStateFile(raw);
     if (entry && isFreshHeartbeat(entry.updatedAt)) {
-      folders.push(entry.folderPath);
+      beats.push(entry);
     }
   }
-  return folders;
+  return beats;
 }
 
 /**

@@ -5,6 +5,14 @@ import { getResourceKind, registerResourceKind } from './kind-registry';
 import { createAppKind } from './kinds/app-kind';
 import { releaseUnknownWorkspaces, removeResource, updateResource } from './ledger';
 import { createResourceLedgerStore, type ResourceLedgerStore } from './ledger-store';
+import { createComposeKind } from './kinds/compose-kind';
+import {
+  bundlePathOfAppRoot,
+  createVscodeWindowKind,
+  defaultCommandDeps,
+  type VscodeWindowDeps,
+} from './kinds/vscode-window-kind';
+import { readBundleId } from '../platform/macos/bundle-id';
 
 /**
  * The live resource ledger, or null when tracking is off: not macOS,
@@ -34,6 +42,8 @@ export async function initResourceTracking(configs: readonly WorkspaceConfig[]):
   if (process.platform !== 'darwin') return;
   try {
     registerResourceKind(createAppKind(getWlHelper()));
+    registerResourceKind(createComposeKind());
+    registerResourceKind(createVscodeWindowKind(vscodeWindowDeps()));
     const store = createResourceLedgerStore();
     const loaded = store.load(await readBootSessionUuid());
     if (!loaded.ok) {
@@ -74,4 +84,30 @@ export async function reconcileOpeningRecords(store: ResourceLedgerStore): Promi
       store.update((l) => removeResource(l, resource.id));
     }
   }
+}
+
+/**
+ * The VS Code window kind's real dependencies: the shared heartbeat and
+ * command files, plus bundle ids (cached — an appRoot's bundle never
+ * changes while it's installed) and the helper's is-running check.
+ */
+function vscodeWindowDeps(): VscodeWindowDeps {
+  const bundleIds = new Map<string, Promise<string | null>>();
+  return {
+    ...defaultCommandDeps,
+    bundleIdOfAppRoot: (appRoot) => {
+      const bundlePath = bundlePathOfAppRoot(appRoot);
+      if (!bundlePath) return Promise.resolve(null);
+      let cached = bundleIds.get(bundlePath);
+      if (!cached) {
+        cached = readBundleId(bundlePath);
+        bundleIds.set(bundlePath, cached);
+      }
+      return cached;
+    },
+    isAppRunning: async (bundleId) => {
+      const response = await getWlHelper().request('isRunning', { bundleId });
+      return response.ok ? response.result.running : null;
+    },
+  };
 }

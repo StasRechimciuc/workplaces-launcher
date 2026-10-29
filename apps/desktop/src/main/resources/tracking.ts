@@ -24,7 +24,7 @@ import {
 } from './ledger';
 import type { ResourceLedgerStore } from './ledger-store';
 import { getLedgerStore } from './runtime';
-import type { ResourceKindPlugin } from './types';
+import type { ResourceHandle, ResourceKindPlugin } from './types';
 
 /**
  * Restore / Close / Switch / Retry for TRACKED steps, over the
@@ -139,6 +139,7 @@ export async function openTrackedStep(
           kind: spec.kind,
           identityKey: identityKeyFor(spec),
           label: spec.label,
+          ...(spec.appName === undefined ? {} : { appName: spec.appName }),
           owner,
           createdByApp: true,
           handle: null,
@@ -154,7 +155,7 @@ export async function openTrackedStep(
     const result = mustRun ? await run() : { ...REUSED_RESULT, durationMs: 0 };
 
     for (const { spec, kind, id, snapshot } of pending) {
-      const captured = await kind.capture(spec.identity, snapshot);
+      const captured = await kind.capture(spec.identity, snapshot, spec.options);
       if (captured.found) {
         store.update((l) =>
           updateResource(l, id, {
@@ -190,17 +191,33 @@ async function findLiveResource(
       continue;
     }
     const state = await kind.check(resource.handle, spec.identity);
-    if (state.state === 'alive' || state.state === 'unknown') return resource;
+    if (state.state === 'alive' || state.state === 'unknown') {
+      if (state.state === 'alive' && state.handle) recordHandle(store, resource.id, state.handle);
+      return resource;
+    }
     store.update((l) => removeResource(l, resource.id));
   }
   return undefined;
 }
 
+/** Saves a handle a check refined (e.g. a window bound on first sight). */
+function recordHandle(
+  store: ResourceLedgerStore,
+  resourceId: string,
+  handle: ResourceHandle,
+): void {
+  store.update((l) =>
+    findResource(l, resourceId) ? updateResource(l, resourceId, { handle }) : l,
+  );
+}
+
 export interface CloseReport {
   closed: string[];
   leftOpen: LeftOpenEntry[];
-  /** Something this app should have closed is still open (failed / needs permission). */
+  /** Something this app should have closed is still open (failed / needs permission / refused). */
   hadFailure: boolean;
+  /** Resources that declined to close — their releasing owners get their claims back. */
+  refused: string[];
 }
 
 export interface CloseContext {
@@ -227,19 +244,21 @@ export async function releaseAndClose(
   context: CloseContext,
   stepIds?: ReadonlySet<string>,
 ): Promise<CloseReport> {
-  const affected = resourcesOwnedBy(store.get(), workspaceId)
-    .filter(
-      (r) =>
-        stepIds === undefined ||
-        r.owners.some((o) => o.workspaceId === workspaceId && stepIds.has(o.stepId)),
-    )
-    .map((r) => r.id);
+  const released = (o: ResourceOwner): boolean =>
+    o.workspaceId === workspaceId && (stepIds === undefined || stepIds.has(o.stepId));
+  const releasedOwners = new Map(
+    resourcesOwnedBy(store.get(), workspaceId)
+      .filter((r) => r.owners.some(released))
+      .map((r) => [r.id, r.owners.filter(released)] as const),
+  );
+  const affected = [...releasedOwners.keys()];
   store.update((l) => releaseWorkspace(l, workspaceId, stepIds));
   const report = await closeOwnerless(store, affected, context);
+  restoreClaims(store, report.refused, releasedOwners);
   if (context.reportStillClaimed) {
     for (const id of affected) {
       const resource = findResource(store.get(), id);
-      if (!resource || resource.owners.length === 0) continue;
+      if (!resource || resource.owners.length === 0 || report.refused.includes(id)) continue;
       report.leftOpen.push({
         appName: resource.label,
         reason: 'still-used',
@@ -248,6 +267,19 @@ export async function releaseAndClose(
     }
   }
   return report;
+}
+
+/** A refused close gives the claims released for it back — the workspace stays active. */
+function restoreClaims(
+  store: ResourceLedgerStore,
+  refused: readonly string[],
+  releasedOwners: ReadonlyMap<string, readonly ResourceOwner[]>,
+): void {
+  for (const id of refused) {
+    for (const owner of releasedOwners.get(id) ?? []) {
+      store.update((l) => (findResource(l, id) ? addOwner(l, id, owner) : l));
+    }
+  }
 }
 
 /**
@@ -264,7 +296,7 @@ export async function closeOwnerless(
   resourceIds: readonly string[],
   context: CloseContext,
 ): Promise<CloseReport> {
-  const report: CloseReport = { closed: [], leftOpen: [], hadFailure: false };
+  const report: CloseReport = { closed: [], leftOpen: [], hadFailure: false, refused: [] };
   for (const id of resourceIds) {
     const snapshot = findResource(store.get(), id);
     if (!snapshot) continue;
@@ -281,12 +313,21 @@ export async function closeOwnerless(
         drop();
         return;
       }
-      if (context.untrackedAppNamesInUse.has(resource.label)) {
-        report.leftOpen.push({ appName: resource.label, reason: 'still-used' });
-        drop();
-        return;
-      }
       const kind = getResourceKind(resource.kind);
+      // Quitting a whole app also takes down everything else inside it:
+      // held back while an untracked step elsewhere uses the app, or
+      // another owned resource (a VS Code window) lives in it.
+      if (kind?.closesWholeApp && resource.appName !== undefined) {
+        const appName = resource.appName;
+        const usedInside = store
+          .get()
+          .resources.some((r) => r.id !== id && r.owners.length > 0 && r.appName === appName);
+        if (context.untrackedAppNamesInUse.has(appName) || usedInside) {
+          report.leftOpen.push({ appName: resource.label, reason: 'still-used' });
+          drop();
+          return;
+        }
+      }
       if (!kind || resource.handle === null) {
         // Nothing left to identify it by (reboot, or a kind this build
         // doesn't have) — it can't be closed, and it's no one's now.
@@ -309,6 +350,18 @@ export async function closeOwnerless(
             detail: outcome.detail,
           });
           drop();
+          return;
+        case 'refused':
+          // Kept, and claimed again by whoever released it (the caller
+          // restores that) — so Close stays available once the user has
+          // dealt with it.
+          report.leftOpen.push({
+            appName: resource.label,
+            reason: 'kept-running',
+            detail: outcome.detail,
+          });
+          report.refused.push(id);
+          report.hadFailure = true;
           return;
         case 'needs-permission':
         case 'failed':
@@ -338,7 +391,7 @@ export async function reconcileRemovedSteps(
   context: () => Promise<CloseContext>,
 ): Promise<CloseReport> {
   const removed = removedStepIds(store, config);
-  if (removed.size === 0) return { closed: [], leftOpen: [], hadFailure: false };
+  if (removed.size === 0) return { closed: [], leftOpen: [], hadFailure: false, refused: [] };
   return releaseAndClose(store, config.id, await context(), removed);
 }
 
@@ -372,9 +425,17 @@ export async function previewStepRemoval(
       (o) => o.workspaceId === workspaceId && o.stepId === stepId,
     );
     if (!onlyThisStep || !resource.createdByApp || resource.handle === null) continue;
-    if (context.untrackedAppNamesInUse.has(resource.label)) continue;
     const kind = getResourceKind(resource.kind);
     if (!kind) continue;
+    if (kind.closesWholeApp && resource.appName !== undefined) {
+      const appName = resource.appName;
+      const usedInside = store
+        .get()
+        .resources.some(
+          (r) => r.id !== resource.id && r.owners.length > 0 && r.appName === appName,
+        );
+      if (context.untrackedAppNamesInUse.has(appName) || usedInside) continue;
+    }
     const identity = JSON.parse(resource.identityKey) as ResourceSpec['identity'];
     const state = await kind.check(resource.handle, identity);
     if (state.state === 'alive' || state.state === 'unknown') labels.push(resource.label);
@@ -399,7 +460,9 @@ export async function releaseStepForRetry(
     .filter((r) => getResourceKind(r.kind)?.openIsIdempotent === false)
     .map((r) => r.id);
   for (const id of ids) store.update((l) => removeOwner(l, id, owner));
-  return closeOwnerless(store, ids, context);
+  const report = await closeOwnerless(store, ids, context);
+  restoreClaims(store, report.refused, new Map(ids.map((id) => [id, [owner]])));
+  return report;
 }
 
 /**
@@ -419,6 +482,8 @@ export async function revalidateOwned(store: ResourceLedgerStore): Promise<void>
     const state = await kind.check(resource.handle, identity);
     if (state.state === 'gone' || state.state === 'drifted') {
       store.update((l) => (findResource(l, resource.id) ? removeResource(l, resource.id) : l));
+    } else if (state.state === 'alive' && state.handle) {
+      recordHandle(store, resource.id, state.handle);
     }
   }
 }
@@ -428,9 +493,14 @@ export function ownsResources(store: ResourceLedgerStore, workspaceId: string): 
   return isWorkspaceActive(store.get(), workspaceId);
 }
 
-/** Whether any workspace currently owns a resource with this label (app name). */
-export function isLabelOwned(store: ResourceLedgerStore, label: string): boolean {
-  return store.get().resources.some((r) => r.label === label && r.owners.length > 0);
+/**
+ * Whether any workspace currently owns a resource that lives in this
+ * app (by app-level name) — the app-level path never quits such an app.
+ */
+export function isAppOwned(store: ResourceLedgerStore, appName: string): boolean {
+  return store
+    .get()
+    .resources.some((r) => r.owners.length > 0 && (r.appName ?? r.label) === appName);
 }
 
 /**
@@ -462,6 +532,7 @@ export async function adoptRunning(
               kind: spec.kind,
               identityKey: identityKeyFor(spec),
               label: spec.label,
+              ...(spec.appName === undefined ? {} : { appName: spec.appName }),
               owner,
               createdByApp: false,
               handle,

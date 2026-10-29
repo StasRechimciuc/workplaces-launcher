@@ -6,6 +6,19 @@ import {
   readPendingVscodeRestore,
   writeCurrentWindowState,
 } from '@workspace-launcher/shared/vscode-restore';
+import {
+  deleteWindowCommand,
+  readWindowCommands,
+  WINDOW_COMMAND_POLL_MS,
+  writeWindowCommandAck,
+} from '@workspace-launcher/shared/vscode-window-commands';
+import { handleWindowCommand } from './window-commands';
+
+// When this window's extension started — reported in the heartbeat (so
+// the desktop app can tell a window it just opened from one that was
+// already there) and the floor below which commands are ignored as
+// stale. Set once, in activate().
+let activatedAt = new Date();
 
 /**
  * Re-entrancy guard — onDidChangeWindowState can fire in quick bursts
@@ -168,7 +181,15 @@ function reportCurrentWindowState(): void {
   if (!folder) {
     return;
   }
-  void writeCurrentWindowState(folder.uri.fsPath).catch((err: unknown) => {
+  // sessionId is unique per window (and per launch of it), which is
+  // what lets the desktop app address this exact window — see
+  // vscode-window-commands.ts.
+  void writeCurrentWindowState(folder.uri.fsPath, {
+    sessionId: vscode.env.sessionId,
+    activatedAt: activatedAt.toISOString(),
+    appRoot: vscode.env.appRoot,
+    folderCount: vscode.workspace.workspaceFolders?.length ?? 0,
+  }).catch((err: unknown) => {
     // Best-effort by design (see writeCurrentWindowState's own doc
     // comment) — a failed heartbeat just means this window won't be
     // recognized by detection this time; never worth interrupting the
@@ -182,7 +203,43 @@ function reportCurrentWindowState(): void {
   });
 }
 
+/**
+ * Acts on commands the desktop app addressed to this window (today:
+ * "close", when the user closes the workspace that opened it). Polled
+ * rather than watched: a 1.5s delay is invisible next to a window
+ * closing, and polling can't miss a change the way an fs watch can.
+ */
+let isHandlingCommands = false;
+
+async function pollWindowCommands(): Promise<void> {
+  if (isHandlingCommands) return;
+  isHandlingCommands = true;
+  try {
+    for (const command of await readWindowCommands(vscode.env.sessionId, activatedAt)) {
+      await handleWindowCommand(command, {
+        folderCount: vscode.workspace.workspaceFolders?.length ?? 0,
+        hasUnsavedChanges: () => vscode.workspace.textDocuments.some((doc) => doc.isDirty),
+        closeWindow: async () => {
+          await vscode.commands.executeCommand('workbench.action.closeWindow');
+        },
+        claim: deleteWindowCommand,
+        answer: writeWindowCommandAck,
+      });
+    }
+  } catch (err) {
+    console.error(
+      `Workspace Launcher: failed to handle a command from the app (${
+        err instanceof Error ? err.message : String(err)
+      }).`,
+    );
+  } finally {
+    isHandlingCommands = false;
+  }
+}
+
 export function activate(context: vscode.ExtensionContext): void {
+  activatedAt = new Date();
+
   context.subscriptions.push(
     vscode.commands.registerCommand('workspaceLauncher.ping', () => {
       void vscode.window.showInformationMessage('Workspace Launcher extension is active.');
@@ -198,6 +255,9 @@ export function activate(context: vscode.ExtensionContext): void {
   reportCurrentWindowState();
   const heartbeat = setInterval(reportCurrentWindowState, CURRENT_WINDOW_STATE_HEARTBEAT_MS);
   context.subscriptions.push({ dispose: () => clearInterval(heartbeat) });
+
+  const commandPoll = setInterval(() => void pollWindowCommands(), WINDOW_COMMAND_POLL_MS);
+  context.subscriptions.push({ dispose: () => clearInterval(commandPoll) });
 
   // Manual escape hatch: covers a window already open AND already
   // focused at the exact moment the desktop app staged a restore — it
@@ -231,17 +291,19 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 }
 
-export function deactivate(): void {
+export function deactivate(): Promise<void> | undefined {
   // Best-effort only — NOT guaranteed to run on a crash or force-quit,
   // same as any Node process's exit hooks. The heartbeat's own TTL
   // (vscode-restore.ts's CURRENT_WINDOW_STATE_HEARTBEAT_MS-derived
   // staleness check) is the real safety net for that case; this is only
   // tidiness for the ordinary close/reload path, so detection doesn't
   // have to wait out the TTL for a window that closed cleanly.
+  // Returned, not fire-and-forget: VS Code waits (briefly) for it, and
+  // the desktop app treats the file disappearing as "this window
+  // closed" — see vscode-window-kind.ts's close.
   const folder = vscode.workspace.workspaceFolders?.[0];
-  if (folder) {
-    void deleteCurrentWindowState(folder.uri.fsPath).catch(() => {
-      // Nothing left to report to by the time deactivate() runs.
-    });
-  }
+  if (!folder) return undefined;
+  return deleteCurrentWindowState(folder.uri.fsPath).catch(() => {
+    // Nothing left to report to by the time deactivate() runs.
+  });
 }

@@ -149,7 +149,12 @@ async function runWorkspaceHoldingLock(
 
   const allConfigs = options.allConfigs;
   if (store && allConfigs) {
-    const claims = staleClaims(store, config.id, currentKeys(tracked));
+    const claims = staleClaims(
+      store,
+      config.id,
+      currentKeys(tracked),
+      unresolvedStepIds(config, tracked),
+    );
     if (claims.length > 0) {
       const report = await releaseClaims(
         store,
@@ -201,6 +206,19 @@ export async function retryStep(
       ),
     });
     logReport(`clearing "${step.type}" before retrying it`, report);
+    if (report.hadFailure) {
+      // Re-running now would open a second copy next to the one that
+      // didn't close — or quietly "reuse" it, which isn't a retry.
+      const problems = report.leftOpen
+        .filter((e) => e.reason !== 'still-used' && e.reason !== 'not-ours')
+        .map((e) => `${e.appName}${e.detail ? ` (${e.detail})` : ''}`);
+      return {
+        success: false,
+        message: `Couldn't close ${problems.join(', ') || 'the previous attempt'} before retrying — close it, then retry again.`,
+        durationMs: 0,
+        code: ERROR_CODES.STEP_FAILED.code,
+      };
+    }
     return openTrackedStep(store, config.id, trackedStep, (liveResourceKeys) =>
       runStep(step, config.id, liveResourceKeys),
     );
@@ -330,11 +348,29 @@ function currentKeys(tracked: readonly TrackedStep[]): Map<string, Set<string>> 
   );
 }
 
+/**
+ * Steps that came out untracked this time — for a tracked kind, its
+ * resources couldn't be resolved just now — see staleClaims.
+ */
+function unresolvedStepIds(config: WorkspaceConfig, tracked: readonly TrackedStep[]): Set<string> {
+  const resolved = new Set(tracked.map((t) => t.step.id));
+  return new Set(config.steps.filter((step) => !resolved.has(step.id)).map((step) => step.id));
+}
+
+/**
+ * App names an untracked step still uses — in other workspaces, and in
+ * this one too (`config`, as it is now): a stale claim on an app is
+ * never quit while one of this workspace's own app-level steps uses it.
+ */
 async function otherWorkspacesAppNames(
   config: WorkspaceConfig,
   allConfigs: readonly WorkspaceConfig[],
 ): Promise<Set<string>> {
-  return untrackedAppNamesInUse(await partition(allConfigs.filter((c) => c.id !== config.id)));
+  const others = await partition(allConfigs.filter((c) => c.id !== config.id));
+  const [own] = await partition([config]);
+  const names = await untrackedAppNamesInUse(others);
+  for (const name of appNamesOf(own!.untracked)) names.add(name);
+  return names;
 }
 
 /**
@@ -352,9 +388,13 @@ export async function previewStepsChange(
   if (!store) return [];
   const { tracked } = await resolveTrackedSteps(proposed);
   return locks.withLocks([workspaceLockKey(proposed.id)], async () =>
-    previewClaimRelease(store, staleClaims(store, proposed.id, currentKeys(tracked)), {
-      untrackedAppNamesInUse: await otherWorkspacesAppNames(proposed, allConfigs),
-    }),
+    previewClaimRelease(
+      store,
+      staleClaims(store, proposed.id, currentKeys(tracked), unresolvedStepIds(proposed, tracked)),
+      {
+        untrackedAppNamesInUse: await otherWorkspacesAppNames(proposed, allConfigs),
+      },
+    ),
   );
 }
 
@@ -375,7 +415,12 @@ export async function applyStepsChange(
   if (!store) return { closed: [], leftOpen: [], stepResults: [] };
   return locks.withLocks([workspaceLockKey(config.id)], async () => {
     const { tracked } = await resolveTrackedSteps(config);
-    const claims = staleClaims(store, config.id, currentKeys(tracked));
+    const claims = staleClaims(
+      store,
+      config.id,
+      currentKeys(tracked),
+      unresolvedStepIds(config, tracked),
+    );
     const report = await releaseClaims(
       store,
       claims,
@@ -463,7 +508,7 @@ export async function switchToWorkspace(
     const targetSpecs = targetPart.tracked.flatMap((t) => t.specs);
     const targetAppNames = new Set([
       ...appNamesOf(targetPart.untracked),
-      ...targetSpecs.map((spec) => spec.label),
+      ...targetSpecs.map((spec) => spec.appName ?? spec.label),
     ]);
     const runningAppNames = await runningAppNameMap(parts.flatMap((p) => appLevelSteps(store, p)));
     // Decided before anything is released: owning resources is part of
@@ -719,7 +764,12 @@ async function runStep(
       // since 0 is falsy.
       typeof result.durationMs === 'number' ? result.durationMs : Date.now() - startedAt;
 
-    if (result.success) {
+    // A run that skipped resources already open did less than a real
+    // open: its (much shorter) duration would drag the adaptive timeout
+    // below what a real open needs — a 65ms "reused" terminal run made
+    // the next real 4s open time out at 5s.
+    const reusedSome = liveResourceKeys !== undefined && liveResourceKeys.size > 0;
+    if (result.success && !reusedSome) {
       // macOS only, and only for the step types that map to a real app
       // name (tool-identity.ts) — measures real app-launch time on top
       // of this instant-return durationMs, by polling for the app to

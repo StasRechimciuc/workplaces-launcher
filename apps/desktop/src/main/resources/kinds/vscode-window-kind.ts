@@ -52,16 +52,19 @@ export interface VscodeWindowDeps {
   isAppRunning: (bundleId: string) => Promise<boolean | null>;
   sendClose: (sessionId: string) => Promise<string>;
   readAck: typeof readWindowCommandAck;
+  /** Takes back an unanswered command; false if the window had already claimed it. */
+  withdraw: (commandId: string) => Promise<boolean>;
   cleanUp: (commandId: string) => Promise<void>;
 }
 
 export const defaultCommandDeps: Pick<
   VscodeWindowDeps,
-  'listHeartbeats' | 'sendClose' | 'readAck' | 'cleanUp'
+  'listHeartbeats' | 'sendClose' | 'readAck' | 'withdraw' | 'cleanUp'
 > = {
   listHeartbeats: listWindowHeartbeats,
   sendClose: (sessionId) => writeWindowCommand(sessionId, 'close'),
   readAck: readWindowCommandAck,
+  withdraw: deleteWindowCommand,
   cleanUp: async (id) => {
     await deleteWindowCommand(id);
     await deleteWindowCommandAck(id);
@@ -77,10 +80,16 @@ const ACTIVATION_SLACK_MS = 2_000;
 
 export function createVscodeWindowKind(
   deps: VscodeWindowDeps,
-  options: { ackTimeoutMs?: number; closeTimeoutMs?: number; pollMs?: number } = {},
+  options: {
+    ackTimeoutMs?: number;
+    closeTimeoutMs?: number;
+    claimedGraceMs?: number;
+    pollMs?: number;
+  } = {},
 ): ResourceKindPlugin {
   const ackTimeoutMs = options.ackTimeoutMs ?? 8_000;
   const closeTimeoutMs = options.closeTimeoutMs ?? 5_000;
+  const claimedGraceMs = options.claimedGraceMs ?? 3_000;
   const pollMs = options.pollMs ?? 250;
 
   /** Live, trackable (v2, single-folder, same app) windows on this folder. */
@@ -167,10 +176,19 @@ export function createVscodeWindowKind(
       const sessionId = handle.sessionId;
       const commandId = await deps.sendClose(sessionId);
       try {
-        const { value: ack } = await pollUntil(() => deps.readAck(commandId), {
+        let { value: ack } = await pollUntil(() => deps.readAck(commandId), {
           intervalMs: pollMs,
           timeoutMs: ackTimeoutMs,
         });
+        // No answer in time: withdrawn, so the window never acts on it
+        // late — unless the window already claimed it, and is about to
+        // answer.
+        if (!ack && !(await deps.withdraw(commandId))) {
+          ({ value: ack } = await pollUntil(() => deps.readAck(commandId), {
+            intervalMs: pollMs,
+            timeoutMs: claimedGraceMs,
+          }));
+        }
         if (!ack) {
           return {
             outcome: 'failed',

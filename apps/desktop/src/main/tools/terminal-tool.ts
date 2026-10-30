@@ -207,7 +207,9 @@ export const terminalTool: ToolPlugin<TerminalStepParams> = {
 function terminalSpecs(terminals: readonly { cwd: string; commands: string[] }[]): ResourceSpec[] {
   const seen = new Map<string, number>();
   return terminals.map((entry) => {
-    const key = JSON.stringify([entry.cwd, entry.commands]);
+    // Counted on the identity itself (its directory normalized), so the
+    // same folder written two ways is still two terminals.
+    const key = identityKeyFor(terminalWindowResource(entry.cwd, entry.commands, 0));
     const occurrence = seen.get(key) ?? 0;
     seen.set(key, occurrence + 1);
     return terminalWindowResource(entry.cwd, entry.commands, occurrence);

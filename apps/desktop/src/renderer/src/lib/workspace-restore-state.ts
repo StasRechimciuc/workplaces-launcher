@@ -1,4 +1,4 @@
-import type { LeftOpenEntry, StepResult } from '@workspace-launcher/shared';
+import type { ApplyStepsChangeResult, LeftOpenEntry, StepResult } from '@workspace-launcher/shared';
 import { getRestoreResultCounts } from './restore-result-treatment';
 
 /**
@@ -20,6 +20,10 @@ import { getRestoreResultCounts } from './restore-result-treatment';
  * after steps were added, removed or reordered since. A step added
  * after the restore has no result; a removed step's result is dropped
  * (see resultsForSteps).
+ *
+ * `applyError`: a saved step edit whose apply to what's running
+ * (closing what it left behind, re-running changed steps) failed — the
+ * edit itself is saved; shown until the next change, Restore or Close.
  */
 export interface WorkspaceRestoreState {
   isRestoring: boolean;
@@ -30,6 +34,7 @@ export interface WorkspaceRestoreState {
   stepIdsAtRestore: string[] | null;
   activityLog: { closed: string[]; leftOpen: LeftOpenEntry[] } | null;
   retryingIndex: number | null;
+  applyError: string | null;
 }
 
 /** Module-level, not an inline literal per call — every workspace that
@@ -45,6 +50,7 @@ export const DEFAULT_RESTORE_STATE: WorkspaceRestoreState = {
   stepIdsAtRestore: null,
   activityLog: null,
   retryingIndex: null,
+  applyError: null,
 };
 
 export type WorkspaceRestoreOutcome = 'success' | 'partial' | 'failed' | 'none';
@@ -117,4 +123,25 @@ export function withStepResults(
     }
   }
   return { restoreResults: results, stepIdsAtRestore: ids };
+}
+
+/**
+ * What applying a saved step edit (orchestrator.ts's applyStepsChange)
+ * changes in a workspace's restore state — from Detail's quick edit and
+ * the Edit form alike: what it closed or left open, the fresh results
+ * of the steps it re-ran, or why the apply itself failed.
+ */
+export function withStepsChangeOutcome(
+  prev: WorkspaceRestoreState,
+  outcome: { report: ApplyStepsChangeResult } | { error: string },
+): Partial<WorkspaceRestoreState> {
+  if ('error' in outcome) return { applyError: outcome.error };
+  const { closed, leftOpen, stepResults } = outcome.report;
+  return {
+    applyError: null,
+    ...(closed.length > 0 || leftOpen.length > 0 ? { activityLog: { closed, leftOpen } } : {}),
+    ...(stepResults.length > 0
+      ? { ...withStepResults(prev, stepResults), restoredAt: prev.restoredAt ?? Date.now() }
+      : {}),
+  };
 }

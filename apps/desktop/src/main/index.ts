@@ -142,10 +142,16 @@ if (gotSingleInstanceLock) {
   let isQuittingFromTray = false;
   let tray: Tray | null = null;
 
+  // Set once startup has registered the IPC handlers and created the
+  // main window — a window made any earlier would have no IPC behind it.
+  let isStarted = false;
+
   // Someone tried to launch a second instance — focus the existing
-  // window instead of letting a second process start.
+  // window instead of letting a second process start. Still starting
+  // up (loading and reconciling the ledger): startup's own window is
+  // about to appear, so there's nothing to do.
   app.on('second-instance', () => {
-    showOrCreateMainWindow();
+    if (isStarted) showOrCreateMainWindow();
   });
 
   /**
@@ -232,6 +238,7 @@ if (gotSingleInstanceLock) {
       await initResourceTracking((await loadAllWorkspaceConfigs()).configs);
       registerIpcHandlers();
       createMainWindow();
+      isStarted = true;
 
       tray = new Tray(getTrayIconPath());
       tray.setToolTip(PRODUCT_NAME);

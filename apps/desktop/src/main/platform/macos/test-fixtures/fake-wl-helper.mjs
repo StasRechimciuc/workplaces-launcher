@@ -14,6 +14,8 @@
 //
 // `normal` methods: echo (result = params), pid (result = process.pid),
 // fail (helper error 'not-found'), slow (answers after params.delayMs),
+// block (holds the whole process for params.delayMs, then answers —
+// like the real helper's serial main thread mid-capture),
 // crash (exits 3 without answering), silent (never answers), garbage
 // (a junk line, then the answer), split (the answer written in two
 // chunks), batch (the answer and a stray unknown-id response in one
@@ -59,6 +61,11 @@ function respond({ id, method, params }) {
       return send({ id, ok: false, error: { code: 'not-found', message: 'no such window' } });
     case 'slow':
       return setTimeout(() => send({ id, ok: true, result: 'late' }), params.delayMs);
+    case 'block': {
+      const until = Date.now() + params.delayMs;
+      while (Date.now() < until);
+      return send({ id, ok: true, result: 'unblocked' });
+    }
     case 'crash':
       return process.exit(3);
     case 'silent':

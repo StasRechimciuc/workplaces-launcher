@@ -9,8 +9,11 @@
 // helper, and on the other architecture every window feature would
 // fail at runtime instead of at build time.
 //
-// Skips the compile when the binary is newer than every source file,
-// so `npm run dev` doesn't pay for two full compiles on every start.
+// Skips the compile when the binary is newer than every source file
+// and than the Sources folder itself (whose mtime changes when a file
+// is added, deleted or renamed — a deletion leaves nothing newer to
+// notice otherwise), so `npm run dev` doesn't pay for two full
+// compiles on every start.
 // Pass --force to rebuild regardless. Exits non-zero, loudly, on any
 // failure — `package:mac` runs this first and must not continue
 // without a helper (verify-helper.cjs checks the packaged app too).
@@ -56,6 +59,7 @@ function mtimeOrZero(path) {
 
 const newestSource = Math.max(
   ...sources.map(mtimeOrZero),
+  mtimeOrZero(sourcesDir),
   mtimeOrZero(fileURLToPath(import.meta.url)),
 );
 if (!process.argv.includes('--force') && mtimeOrZero(output) > newestSource) {

@@ -8,7 +8,7 @@ import type { TerminalCommandResult, TerminalEntryResult } from '@workspace-laun
 import { runCommand } from '../../lib/shell-exec';
 import { expandHome } from '../../lib/paths';
 import { pollUntil } from '../../lib/poll-until';
-import { terminalSessionPaths } from './terminal-session';
+import { removeTerminalSessionFiles, terminalSessionPaths } from './terminal-session';
 
 /**
  * Safe to embed in a single-quoted shell string — the only quoting
@@ -90,6 +90,18 @@ function findFirstSentinelFailure(
     }
   }
   return undefined;
+}
+
+/** Every one of the `commandCount` commands has reported exit code 0. */
+function allCommandsSucceeded(content: string, commandCount: number): boolean {
+  const succeeded = new Set(
+    completeLines(content)
+      .map((line) => SENTINEL_LINE_RE.exec(line.trim()))
+      .filter((m): m is RegExpExecArray => m !== null && m[1] !== 'cd' && m[2] === '0')
+      .map((m) => Number(m[1])),
+  );
+  for (let i = 0; i < commandCount; i++) if (!succeeded.has(i)) return false;
+  return true;
 }
 
 /**
@@ -257,11 +269,20 @@ async function waitForEarlyCommandFailure(
   // delay.
   const defaultTimeoutMs =
     commandCount === 0 ? TERMINAL_CD_ONLY_POLL_TIMEOUT_MS : TERMINAL_COMMAND_POLL_TIMEOUT_MS;
+  // Ends as soon as there's a failure — or once every command has
+  // already finished successfully (`echo hi`): nothing left to fail.
   const { value } = await pollUntil(
-    async () => findFirstSentinelFailure(await readSentinelSafely(sentinelPath)) ?? undefined,
+    async () => {
+      const content = await readSentinelSafely(sentinelPath);
+      const failure = findFirstSentinelFailure(content);
+      if (failure) return { failure };
+      return commandCount > 0 && allCommandsSucceeded(content, commandCount)
+        ? { failure: undefined }
+        : undefined;
+    },
     { intervalMs, timeoutMs: pollOptions.timeoutMs ?? defaultTimeoutMs },
   );
-  return value;
+  return value?.failure;
 }
 
 /**
@@ -428,12 +449,19 @@ export const macosLauncher: PlatformLauncher = {
     // bounded regardless of how many commands a terminal entry has.
     const outputLogPath = join(tmpdir(), `workspace-launcher-terminal-${id}.out`);
     const safeOutputLog = singleQuote(outputLogPath);
+    const session = marker === undefined ? undefined : { marker, ...terminalSessionPaths(marker) };
     const commandLines = commands.flatMap((command, i) => [
       `echo ${singleQuote(`$ ${command}`)}`,
       `echo "###OUT:${i}###" >> ${safeOutputLog}`,
       `{ ${command}; echo "${i}:$?" >> ${safeSentinel}; } 2>&1 | tee -a ${safeOutputLog}`,
+      // Tracked: Ctrl+C on a command stops the ones after it too — the
+      // INT handler below only sets this flag.
+      ...(session ? ['(( wl_interrupted )) && return'] : []),
     ]);
-    const session = marker === undefined ? undefined : { marker, ...terminalSessionPaths(marker) };
+    // Clears the marker from the title before the window is handed to
+    // the user's shell: a window that's theirs must never be found by
+    // marker again (the title would otherwise outlive the script).
+    const handOver = session ? `printf '\\e]0;\\a'; exec "$SHELL" -l` : 'exec "$SHELL" -l';
     const lines = [
       '#!/bin/zsh -l',
       // Self-deletes immediately — the interpreter already has the
@@ -453,16 +481,17 @@ export const macosLauncher: PlatformLauncher = {
       // first — before `cd` or any command can set a title of its own —
       // so the app can tell which new window is this one; then the
       // shell's tty and pid, which is how its processes are found and
-      // stopped again. Ctrl+C on a command returns to the re-run wait
-      // below instead of ending the script: a handler (not an ignore,
-      // which children would inherit) keeps the commands' own Ctrl+C
-      // behavior intact.
+      // stopped again. Ctrl+C on a command stops it and the commands
+      // after it, then returns to the re-run wait below instead of
+      // ending the script: a handler (not an ignore, which children
+      // would inherit) only sets a flag, so the commands' own Ctrl+C
+      // behavior stays intact, and wl_run checks the flag after each.
       ...(session
         ? [
             `printf '\\e]0;%s\\a' ${singleQuote(session.marker)}`,
             `print -r -- "$TTY $$" > ${singleQuote(session.info)}`,
             `echo running > ${singleQuote(session.state)}`,
-            "trap 'true' INT",
+            "trap 'wl_interrupted=1' INT",
           ]
         : []),
       // Terminal.app's own behavior when it opens a .command file (via
@@ -478,7 +507,7 @@ export const macosLauncher: PlatformLauncher = {
       // A failed `cd` is as real a failure as any command dying — it
       // now writes its own sentinel line (label "cd") instead of only
       // being visible as text in a terminal window nothing is reading.
-      `cd ${safeCwd} || { echo "cd into the configured directory failed."; echo "cd:1" >> ${safeSentinel}; exec "$SHELL" -l; }`,
+      `cd ${safeCwd} || { echo "cd into the configured directory failed."; echo "cd:1" >> ${safeSentinel}; ${handOver}; }`,
       // Each command is echoed as its own, separately-escaped
       // `echo '$ <command>'` line before it actually runs — a plain
       // shell script never echoes its own commands by default, so
@@ -524,7 +553,7 @@ export const macosLauncher: PlatformLauncher = {
             // this same window; any keypress hands it to the user, from
             // then on theirs and never closed by the app.
             'wl_run() {',
-            '  :',
+            '  wl_interrupted=0',
             ...commandLines.map((line) => `  ${line}`),
             '}',
             'wl_run',
@@ -536,7 +565,7 @@ export const macosLauncher: PlatformLauncher = {
             '    if read -s -t 1 -k 1; then',
             `      echo shell > ${singleQuote(session.state)}`,
             '      trap - INT',
-            '      exec "$SHELL" -l',
+            `      ${handOver}`,
             '    fi',
             '  done',
             `  rm -f -- ${singleQuote(session.rerun)}`,
@@ -547,6 +576,11 @@ export const macosLauncher: PlatformLauncher = {
         : [...commandLines, 'exec "$SHELL" -l']),
     ];
 
+    // A previous window of this same terminal (same marker) may have
+    // left its files behind — taken over, or closed by hand. Gone
+    // before this one starts, so nothing reads that window's shell as
+    // this one's.
+    if (session) await removeTerminalSessionFiles(session.marker);
     try {
       await writeFile(scriptPath, `${lines.join('\n')}\n`, { mode: 0o755 });
     } catch (err) {

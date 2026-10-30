@@ -20,6 +20,7 @@ function env(overrides: Partial<WindowCommandEnv> = {}): WindowCommandEnv & { ca
     }),
     claim: vi.fn(async () => {
       calls.push('claim');
+      return true;
     }),
     answer: vi.fn(async (_id, status, reason) => {
       calls.push(`answer:${status}${reason ? `:${reason}` : ''}`);
@@ -39,6 +40,17 @@ describe('handleWindowCommand', () => {
     const e = env({ hasUnsavedChanges: () => true });
     await handleWindowCommand(command, e);
     expect(e.calls).toEqual(['claim', 'answer:refused:unsaved']);
+  });
+
+  it('never acts on a request the app already took back', async () => {
+    const e = env({
+      claim: vi.fn(async () => {
+        e.calls.push('claim');
+        return false;
+      }),
+    });
+    await handleWindowCommand(command, e);
+    expect(e.calls).toEqual(['claim']);
   });
 
   it('never closes a multi-root window', async () => {

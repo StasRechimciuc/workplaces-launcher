@@ -1,3 +1,4 @@
+import { homedir } from 'node:os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ERROR_CODES } from '@workspace-launcher/shared';
 import { terminalTool } from './terminal-tool';
@@ -358,6 +359,19 @@ describe('terminalTool', () => {
       await runPromise;
 
       expect(order).toEqual(['a-start', 'a-end', 'b-start']);
+    });
+  });
+
+  describe('resources', () => {
+    it('counts the same folder written two ways as two terminals, not one', async () => {
+      const specs = await terminalTool.resources!({
+        terminals: [
+          { cwd: '~/app', commands: ['npm run dev'] },
+          { cwd: `${homedir()}/app/`, commands: ['npm run dev'] },
+        ],
+      });
+      expect(specs.map((s) => s.identity['occurrence'])).toEqual([0, 1]);
+      expect(specs[0]!.identity['cwd']).toBe(specs[1]!.identity['cwd']);
     });
   });
 

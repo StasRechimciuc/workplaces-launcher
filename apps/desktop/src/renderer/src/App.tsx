@@ -18,6 +18,7 @@ import { useAccessibilityStatus } from './lib/useAccessibilityStatus';
 import {
   DEFAULT_RESTORE_STATE,
   getWorkspaceRestoreOutcome,
+  withStepsChangeOutcome,
   type WorkspaceRestoreState,
 } from './lib/workspace-restore-state';
 
@@ -375,6 +376,10 @@ export function App(): JSX.Element {
           setCreateModalOpen(false);
           setEditingWorkspace(null);
           void refreshWorkspaces(config.id);
+        }}
+        onStepsChangeApplied={(workspaceId, outcome) => {
+          updateRestoreState(workspaceId, (prev) => withStepsChangeOutcome(prev, outcome));
+          void refreshWorkspaces();
         }}
         onShowErrorCode={setErrorsModalCode}
       />

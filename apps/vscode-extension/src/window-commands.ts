@@ -10,7 +10,8 @@ import type {
  * editor.
  *
  * The command is claimed (deleted) before anything else, so a second
- * poll tick can never act on it twice. A window never closes itself
+ * poll tick can never act on it twice — and one that's already gone
+ * (the app withdrew it after waiting too long) is never acted on. A window never closes itself
  * with unsaved changes, or with several folders open (it can't be the
  * one window a workspace step tracks); it says why instead.
  */
@@ -18,7 +19,8 @@ export interface WindowCommandEnv {
   folderCount: number;
   hasUnsavedChanges: () => boolean;
   closeWindow: () => Promise<void>;
-  claim: (id: string) => Promise<void>;
+  /** True if this window claimed it; false if it was already gone. */
+  claim: (id: string) => Promise<boolean>;
   answer: (
     id: string,
     status: WindowCommandAck['status'],
@@ -30,7 +32,7 @@ export async function handleWindowCommand(
   command: WindowCommand,
   env: WindowCommandEnv,
 ): Promise<void> {
-  await env.claim(command.id);
+  if (!(await env.claim(command.id))) return;
   if (env.folderCount !== 1) {
     await env.answer(command.id, 'refused', 'multi-root');
     return;

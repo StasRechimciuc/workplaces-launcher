@@ -1,3 +1,6 @@
+import { spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -72,12 +75,27 @@ describe('WlHelperClient', () => {
     });
   });
 
-  it('matches concurrent requests to their own responses, whatever order they arrive in', async () => {
+  it('writes one request at a time, each answered with its own response', async () => {
     const { client } = makeClient(['normal']);
-    const slow = call(client, 'slow', { delayMs: 150 });
-    const fast = call(client, 'echo', { n: 2 });
+    const order: string[] = [];
+    const slow = call(client, 'slow', { delayMs: 150 }).then((r) => (order.push('slow'), r));
+    const fast = call(client, 'echo', { n: 2 }).then((r) => (order.push('fast'), r));
     await expect(fast).resolves.toEqual({ ok: true, result: { n: 2 } });
     await expect(slow).resolves.toEqual({ ok: true, result: 'late' });
+    expect(order).toEqual(['slow', 'fast']);
+  });
+
+  it('never times out, or presumes hung, requests queued behind a long one', async () => {
+    const { client, logs } = makeClient(['normal'], { hungAfterTimeouts: 2 });
+    await call(client, 'echo', {});
+    // A capture-like wait of 400ms, with three short-timeout requests behind it.
+    const long = call(client, 'block', { delayMs: 400 }, 2000);
+    const queued = [1, 2, 3].map((n) => call(client, 'echo', { n }, 100));
+    await expect(long).resolves.toEqual({ ok: true, result: 'unblocked' });
+    await expect(Promise.all(queued)).resolves.toEqual(
+      [1, 2, 3].map((n) => ({ ok: true, result: { n } })),
+    );
+    expect(logs.some((l) => l.includes('presuming it hung'))).toBe(false);
   });
 
   it('passes helper-reported errors through unchanged', async () => {
@@ -201,6 +219,60 @@ describe('WlHelperClient', () => {
     });
     const second = await call(client, 'echo');
     expect(!second.ok && second.error.code).toBe('unavailable');
+  });
+
+  it('retries a spawn that failed without starting (no pipes, no exit event), never rejecting', async () => {
+    let attempts = 0;
+    const flaky = ((command: string, args: string[], options: object) => {
+      attempts++;
+      if (attempts > 1) return spawn(command, args, options);
+      // What Node returns out of file descriptors: no pid, no pipes,
+      // an 'error' and never an 'exit'.
+      const failed = Object.assign(new EventEmitter(), {
+        pid: undefined,
+        stdin: null,
+        stdout: null,
+        stderr: null,
+        kill: () => false,
+      });
+      setImmediate(() =>
+        failed.emit('error', Object.assign(new Error('spawn EMFILE'), { code: 'EMFILE' })),
+      );
+      return failed;
+    }) as unknown as typeof spawn;
+    const { client, logs } = makeClient(['normal'], { spawnProcess: flaky });
+    await expect(call(client, 'echo', { n: 1 }, 3000)).resolves.toEqual({
+      ok: true,
+      result: { n: 1 },
+    });
+    expect(attempts).toBe(2);
+    expect(logs.some((l) => l.includes('restarting'))).toBe(true);
+  });
+
+  it('retries a spawn error that leaves no process (EAGAIN) instead of staying stuck starting', async () => {
+    let attempts = 0;
+    const flaky = ((command: string, args: string[], options: object) => {
+      attempts++;
+      if (attempts > 1) return spawn(command, args, options);
+      // Pipes, but no process behind them: an 'error' and never an 'exit'.
+      const failed = Object.assign(new EventEmitter(), {
+        pid: undefined,
+        stdin: new PassThrough(),
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+        kill: () => false,
+      });
+      setImmediate(() =>
+        failed.emit('error', Object.assign(new Error('spawn EAGAIN'), { code: 'EAGAIN' })),
+      );
+      return failed;
+    }) as unknown as typeof spawn;
+    const { client } = makeClient(['normal'], { spawnProcess: flaky });
+    await expect(call(client, 'echo', { n: 2 }, 3000)).resolves.toEqual({
+      ok: true,
+      result: { n: 2 },
+    });
+    expect(attempts).toBe(2);
   });
 
   it('reports a missing binary as unavailable instead of retrying forever', async () => {

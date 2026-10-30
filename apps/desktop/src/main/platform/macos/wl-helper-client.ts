@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'node:child_process';
 
 /**
  * Client for the persistent native helper (native/wl-helper — see
@@ -21,6 +21,13 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
  *
  * Everything else ('not-trusted', 'not-found', 'ambiguous',
  * 'ax-timeout', …) is the helper's own error code, passed through.
+ *
+ * One request at a time: the helper handles requests serially, so the
+ * next one is written only once the one in flight is answered (or has
+ * timed out), and a request's timeout runs from when it's written. A
+ * request queued behind a long one (a window capture waits up to 10s)
+ * is never failed for that wait, nor counted towards presuming the
+ * helper hung.
  *
  * Lifecycle: spawned on the first request, not at app start. After a
  * crash it's restarted with exponential backoff (requests made
@@ -103,6 +110,8 @@ export interface WlHelperClientOptions {
   /** Consecutive timeouts with no output at all before the helper is presumed hung. */
   hungAfterTimeouts?: number;
   log?: (message: string) => void;
+  /** How the helper process is spawned — a seam for tests. */
+  spawnProcess?: typeof spawn;
 }
 
 /** Matches native/wl-helper/Sources/Protocol.swift's protocolVersion. */
@@ -120,7 +129,9 @@ interface PendingRequest {
   line: string;
   method: string;
   written: boolean;
-  timer: NodeJS.Timeout;
+  timeoutMs: number;
+  /** null while queued behind the request in flight — armed again once written. */
+  timer: NodeJS.Timeout | null;
   resolve: (response: HelperResponse<unknown>) => void;
 }
 
@@ -130,7 +141,7 @@ export class WlHelperClient {
   private readonly options: Required<WlHelperClientOptions>;
   private state: State = 'idle';
   private unavailableReason = '';
-  private child: ChildProcessWithoutNullStreams | null = null;
+  private child: ChildProcess | null = null;
   private readonly pending = new Map<number, PendingRequest>();
   private nextId = 1;
   private stdoutBuffer = '';
@@ -150,6 +161,7 @@ export class WlHelperClient {
       stableAfterMs: 10_000,
       hungAfterTimeouts: 3,
       log: (message) => console.error(`[wl-helper] ${message}`),
+      spawnProcess: spawn,
       ...options,
     };
   }
@@ -168,15 +180,17 @@ export class WlHelperClient {
     const line = `${JSON.stringify({ id, method, params })}\n`;
 
     return new Promise((resolve) => {
-      const timer = setTimeout(() => this.onTimeout(id, timeoutMs), timeoutMs);
-      this.pending.set(id, {
+      const request: PendingRequest = {
         id,
         line,
         method,
         written: false,
-        timer,
+        timeoutMs,
+        timer: null,
         resolve: resolve as (response: HelperResponse<unknown>) => void,
-      });
+      };
+      this.pending.set(id, request);
+      this.arm(request);
       if (this.state === 'ready') {
         this.flush();
       } else if (this.state === 'idle') {
@@ -202,9 +216,9 @@ export class WlHelperClient {
     this.state = 'starting';
     this.stdoutBuffer = '';
 
-    let child: ChildProcessWithoutNullStreams;
+    let spawned: ChildProcess;
     try {
-      child = spawn(this.options.command, this.options.args, {
+      spawned = this.options.spawnProcess(this.options.command, this.options.args, {
         stdio: ['pipe', 'pipe', 'pipe'],
         shell: false,
       });
@@ -212,9 +226,9 @@ export class WlHelperClient {
       this.markUnavailable(`Couldn't start the window helper: ${errorMessage(err)}`);
       return;
     }
-    this.child = child;
+    this.child = spawned;
 
-    child.on('error', (err: NodeJS.ErrnoException) => {
+    spawned.on('error', (err: NodeJS.ErrnoException) => {
       // A binary that isn't there (or isn't executable) won't appear by
       // restarting — fail fast instead of backing off forever.
       if (err.code === 'ENOENT' || err.code === 'EACCES') {
@@ -224,7 +238,21 @@ export class WlHelperClient {
         return;
       }
       this.options.log(`process error: ${err.message}`);
+      // A process that never started (EMFILE, EAGAIN, …) emits no
+      // 'exit': handled as a crash here instead, so it's retried with
+      // backoff rather than left 'starting' forever.
+      if (spawned.pid === undefined) {
+        this.onExit(spawned, null, null, `failed to start: ${err.code ?? err.message}`);
+      }
     });
+    // Out of file descriptors, a spawn comes back without its pipes
+    // (its 'error' says why) — nothing to talk to, so it's a crash too.
+    if (!spawned.stdin || !spawned.stdout || !spawned.stderr) {
+      queueMicrotask(() => this.onExit(spawned, null, null, 'started without its pipes'));
+      return;
+    }
+    const child = spawned as ChildProcessWithoutNullStreams;
+
     child.stdin.on('error', (err) => {
       // EPIPE when the helper died mid-write — 'exit' handles recovery.
       this.options.log(`stdin error: ${err.message}`);
@@ -296,6 +324,7 @@ export class WlHelperClient {
         failure('protocol', `Malformed response to ${request.method}: ${line.slice(0, 200)}`),
       );
     }
+    this.flush();
   }
 
   private onReady(child: ChildProcessWithoutNullStreams, version: unknown): void {
@@ -315,9 +344,10 @@ export class WlHelperClient {
   }
 
   private onExit(
-    child: ChildProcessWithoutNullStreams,
+    child: ChildProcess,
     code: number | null,
     signal: NodeJS.Signals | null,
+    spawnFailure?: string,
   ): void {
     if (child !== this.child) return;
     this.child = null;
@@ -325,7 +355,7 @@ export class WlHelperClient {
     this.clearStableTimer();
     if (this.state === 'unavailable') return;
 
-    const how = signal ? `signal ${signal}` : `code ${String(code)}`;
+    const how = spawnFailure ?? (signal ? `signal ${signal}` : `code ${String(code)}`);
     for (const request of [...this.pending.values()]) {
       if (request.written) {
         this.settle(
@@ -334,6 +364,9 @@ export class WlHelperClient {
         );
       }
     }
+    // The rest wait for the restart — each bounded by its own timeout
+    // again, with nothing in flight ahead of it.
+    for (const request of this.pending.values()) this.arm(request);
 
     const delay = Math.min(
       this.options.initialBackoffMs * 2 ** this.restartAttempts,
@@ -355,14 +388,24 @@ export class WlHelperClient {
     }, delay);
   }
 
-  private onTimeout(id: number, timeoutMs: number): void {
+  /** Starts a request's timeout, unless it's already running. */
+  private arm(request: PendingRequest): void {
+    if (request.timer) return;
+    request.timer = setTimeout(() => this.onTimeout(request.id), request.timeoutMs);
+  }
+
+  private onTimeout(id: number): void {
     const request = this.pending.get(id);
     if (!request) return;
+    request.timer = null;
+    // Queued behind the request in flight on a running helper: its own
+    // time hasn't started — the timeout starts over once it's written.
+    if (!request.written && this.state === 'ready') return;
     this.settle(
       request,
       failure(
         'timeout',
-        `The window helper didn't answer ${request.method} within ${timeoutMs}ms.`,
+        `The window helper didn't answer ${request.method} within ${request.timeoutMs}ms.`,
       ),
     );
     if (!request.written) return;
@@ -378,20 +421,32 @@ export class WlHelperClient {
       // a process that's about to die.
       this.state = 'starting';
       this.child.kill('SIGKILL');
+      return;
     }
+    this.flush();
   }
 
+  /**
+   * Writes the next queued request once nothing is in flight — the
+   * helper answers one at a time, so a request's timeout only runs
+   * while the helper is actually on it.
+   */
   private flush(): void {
-    if (this.state !== 'ready' || !this.child) return;
-    for (const request of this.pending.values()) {
-      if (request.written) continue;
-      request.written = true;
-      this.child.stdin.write(request.line);
-    }
+    if (this.state !== 'ready' || !this.child?.stdin) return;
+    const requests = [...this.pending.values()];
+    if (requests.some((r) => r.written)) return;
+    const next = requests[0];
+    if (!next) return;
+    next.written = true;
+    if (next.timer) clearTimeout(next.timer);
+    next.timer = null;
+    this.arm(next);
+    this.child.stdin.write(next.line);
   }
 
   private settle(request: PendingRequest, response: HelperResponse<unknown>): void {
-    clearTimeout(request.timer);
+    if (request.timer) clearTimeout(request.timer);
+    request.timer = null;
     this.pending.delete(request.id);
     // Helper-reported errors are routine results the caller handles;
     // only the client's own failures are logged here.
@@ -415,7 +470,7 @@ export class WlHelperClient {
     const child = this.child;
     this.child = null;
     if (child && child.exitCode === null && child.signalCode === null) {
-      child.stdin.end();
+      child.stdin?.end();
       // EOF is the helper's cue to exit; this only covers one that doesn't.
       setTimeout(() => {
         if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');

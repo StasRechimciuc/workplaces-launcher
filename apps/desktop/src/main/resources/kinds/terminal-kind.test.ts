@@ -13,7 +13,11 @@ let windowState: 'alive' | 'gone' | 'blocked' = 'alive';
 let closeOutcome: 'closed' | 'blocked' | 'still-open' = 'closed';
 let shellStartedAt: number | null = 1000;
 let session: TerminalSessionState | null = 'running';
-let info: { tty: string; shellPid: number } | null = { tty: '/dev/ttys004', shellPid: 500 };
+let info: { tty: string; shellPid: number; writtenAt: number } | null = {
+  tty: '/dev/ttys004',
+  shellPid: 500,
+  writtenAt: Date.now() + 60_000,
+};
 let captureOk = true;
 /** The marked window shows up in Accessibility only once Terminal is brought forward. */
 let visibleAfterActivate = true;
@@ -101,7 +105,7 @@ const kind = createTerminalKind(
       return downOk ? { success: true, message: '' } : { success: false, message: 'down failed' };
     },
   },
-  { captureTimeoutMs: 50, graceMs: 30, tiltGraceMs: 30 },
+  { captureTimeoutMs: 50, infoTimeoutMs: 50, graceMs: 30, tiltGraceMs: 30 },
 );
 
 const handle = {
@@ -119,7 +123,8 @@ beforeEach(() => {
   closeOutcome = 'closed';
   shellStartedAt = 1000;
   session = 'running';
-  info = { tty: '/dev/ttys004', shellPid: 500 };
+  // Written after any snapshot a test takes — a fresh window's info.
+  info = { tty: '/dev/ttys004', shellPid: 500, writtenAt: Date.now() + 60_000 };
   captureOk = true;
   alive = new Set([500, 501, 502]);
   signals.length = 0;
@@ -151,9 +156,22 @@ describe('terminal kind', () => {
     });
   });
 
+  it('never takes a previous window’s leftover session info for this one’s shell', async () => {
+    info = { tty: '/dev/ttys009', shellPid: 600, writtenAt: Date.now() - 60_000 };
+    const snapshot = await kind.snapshot(spec.identity);
+    await expect(kind.capture(spec.identity, snapshot)).resolves.toMatchObject({
+      found: false,
+      reason: expect.stringContaining('shell'),
+    });
+    // Nor after a crash: only info written since the open started counts.
+    await expect(kind.reconcileOpening!(spec.identity, Date.now() - 1_000)).resolves.toMatchObject({
+      found: false,
+    });
+  });
+
   it('still tracks a terminal whose window opened on a desktop it can’t see, by its shell', async () => {
     captureOk = false;
-    await expect(kind.capture(spec.identity, [])).resolves.toEqual({
+    await expect(kind.capture(spec.identity, await kind.snapshot(spec.identity))).resolves.toEqual({
       found: true,
       handle: { ...handle, windowId: null },
       preexisting: false,
@@ -163,7 +181,9 @@ describe('terminal kind', () => {
   it('says why when even the shell never reported', async () => {
     captureOk = false;
     info = null;
-    await expect(kind.capture(spec.identity, [])).resolves.toMatchObject({
+    await expect(
+      kind.capture(spec.identity, await kind.snapshot(spec.identity)),
+    ).resolves.toMatchObject({
       found: false,
       reason: expect.stringContaining('shell'),
     });
@@ -259,7 +279,11 @@ describe('terminal kind', () => {
 
     it('records how to stop it when its step is a Tilt one', async () => {
       const tiltSpec = terminalWindowResource('~/app', ['tilt up'], 0, tilt);
-      const captured = await kind.capture(tiltSpec.identity, [], tiltSpec.options);
+      const captured = await kind.capture(
+        tiltSpec.identity,
+        await kind.snapshot(tiltSpec.identity),
+        tiltSpec.options,
+      );
       expect(captured).toMatchObject({ found: true, handle: { tilt } });
     });
 

@@ -120,7 +120,12 @@ export function applyBootSession(ledger: Ledger, current: string | null): Ledger
   return {
     ...ledger,
     bootSessionUuid: current,
-    resources: ledger.resources.map((r) => ({ ...r, handle: null })),
+    // An unfinished open from before a reboot can't be reconciled:
+    // everything running now started after it, so "started after the
+    // record" would claim the user's own apps (a login item) as ours.
+    resources: ledger.resources
+      .filter((r) => r.state !== 'opening')
+      .map((r) => ({ ...r, handle: null })),
   };
 }
 

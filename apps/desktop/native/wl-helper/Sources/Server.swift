@@ -41,6 +41,7 @@ final class Server {
       let data = line.data(using: .utf8),
       let request = (try? JSONSerialization.jsonObject(with: data)) as? JSONObject,
       let idNumber = request["id"] as? NSNumber, CFGetTypeID(idNumber) != CFBooleanGetTypeID(),
+      idNumber.doubleValue == Double(idNumber.int64Value),
       let method = request["method"] as? String
     else {
       // No usable id to answer against — reported as a protocol event

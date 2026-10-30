@@ -32,8 +32,16 @@ struct WindowInfo {
 /// it at all (findings S1/S2) — which is why the helper is a persistent
 /// process rather than one spawned per call: these references only
 /// live in the process that created them.
+private struct HeldWindow {
+  let pid: pid_t
+  /// The process's kernel start time when the reference was taken — a
+  /// reused pid is a different process.
+  let startedAt: Int64?
+  let element: AXUIElement
+}
+
 final class WindowRegistry {
-  private var held: [CGWindowID: (pid: pid_t, element: AXUIElement)] = [:]
+  private var held: [CGWindowID: HeldWindow] = [:]
   /// Windows whose held reference stopped resolving. That's the
   /// definitive "closed" signal, and it has to be remembered: the
   /// system window list keeps a just-closed window for a while (seen
@@ -95,7 +103,7 @@ final class WindowRegistry {
             message: "\(settled.count) new \(bundleId) windows appeared (\(ids)); none was captured")
         }
         if let (window, element) = settled.first {
-          held[window.id] = (window.pid, element)
+          hold(window.id, pid: window.pid, element)
           return window
         }
       }
@@ -210,6 +218,7 @@ final class WindowRegistry {
   /// fresh lookup among the process's current Accessibility windows —
   /// which is held from then on.
   private func element(pid: pid_t, windowId: CGWindowID) throws -> AXUIElement? {
+    pruneDeadOwners()
     guard !gone.contains(windowId) else { return nil }
     if let entry = held[windowId], entry.pid == pid {
       if try isValid(entry.element) { return entry.element }
@@ -221,8 +230,25 @@ final class WindowRegistry {
     guard let found = try axWindows(pid).first(where: { windowIdOf($0) == windowId }) else {
       return nil
     }
-    held[windowId] = (pid, found)
+    hold(windowId, pid: pid, found)
     return found
+  }
+
+  private func hold(_ windowId: CGWindowID, pid: pid_t, _ element: AXUIElement) {
+    held[windowId] = HeldWindow(pid: pid, startedAt: processStartTime(pid), element: element)
+  }
+
+  /// A window whose process has exited (or whose pid now belongs to a
+  /// different process) is gone. Checked before its held reference is
+  /// used: a reference into a dead process doesn't report itself
+  /// invalid — every message to it just times out, which would read as
+  /// "not answering" forever instead of "gone".
+  private func pruneDeadOwners() {
+    for (windowId, entry) in held
+    where !processAlive(entry.pid) || processStartTime(entry.pid) != entry.startedAt {
+      held[windowId] = nil
+      gone.insert(windowId)
+    }
   }
 
   /// In the system window list but not reachable through

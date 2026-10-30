@@ -7,6 +7,7 @@ import {
   type WorkspaceConfig,
 } from '@workspace-launcher/shared';
 import { writeFileAtomic } from '@workspace-launcher/shared/write-file-atomic';
+import { KeyedLock } from '../lib/keyed-lock';
 
 /**
  * Where workspace config JSON files actually live on disk, via
@@ -52,51 +53,84 @@ export async function loadAllWorkspaceConfigs(): Promise<LoadWorkspacesResult> {
 
   for (const file of jsonFiles) {
     try {
-      const raw = await readFile(join(dir, file), 'utf-8');
-      const { migrated, value } = migrateWorkspaceConfig(JSON.parse(raw));
-      const parsed = parseWorkspaceConfig(value);
-      if (!parsed.success) {
-        errors[file] = parsed.error;
+      const loaded = await loadConfigFile(dir, file);
+      if (!loaded.ok) {
+        errors[file] = loaded.error;
         continue;
       }
-      // Persisted before the config is used at all: a migration adds
-      // freshly generated step ids, which have to be the same on the
-      // next load or every tracked resource loses its step. A config
-      // that can't be written back is skipped with a loud error rather
-      // than run with ids that would change under it. The original is
-      // kept alongside first (`<file>.v1.bak`, never overwritten, and
-      // ignored by the *.json scan above), so an upgrade can always be
-      // undone by hand — an older build can't read the new format.
-      if (migrated) {
-        try {
-          await writeFile(join(dir, `${file}.v1.bak`), raw, { flag: 'wx' }).catch(
-            (err: NodeJS.ErrnoException) => {
-              if (err.code !== 'EEXIST') throw err;
-            },
-          );
-          await writeFileAtomic(join(dir, file), JSON.stringify(parsed.config, null, 2));
-        } catch (err) {
-          errors[file] =
-            `Upgraded this workspace's file format but couldn't save it: ${err instanceof Error ? err.message : String(err)}`;
-          continue;
-        }
-      }
-
-      const existingFile = fileById.get(parsed.config.id);
+      const existingFile = fileById.get(loaded.config.id);
       if (existingFile) {
         errors[file] =
-          `Duplicate workspace id "${parsed.config.id}" (already loaded from ${existingFile}) — skipped.`;
+          `Duplicate workspace id "${loaded.config.id}" (already loaded from ${existingFile}) — skipped.`;
         continue;
       }
 
-      fileById.set(parsed.config.id, file);
-      configs.push(parsed.config);
+      fileById.set(loaded.config.id, file);
+      configs.push(loaded.config);
     } catch (err) {
       errors[file] = err instanceof Error ? err.message : String(err);
     }
   }
 
   return { configs, errors };
+}
+
+type LoadedConfig = { ok: true; config: WorkspaceConfig } | { ok: false; error: string };
+
+/** One migration per file at a time — see loadConfigFile. */
+const migrationLock = new KeyedLock();
+
+/**
+ * One config file, migrated to the current format if it's older.
+ *
+ * Persisted before the config is used at all: a migration adds freshly
+ * generated step ids, which have to be the same on the next load or
+ * every tracked resource loses its step. So it runs once per file, under
+ * a lock, re-reading the file inside it — two loads at once (a restore
+ * and the workspace list) both get the ids the first one wrote, never
+ * each their own. A config that can't be written back is skipped with a
+ * loud error rather than run with ids that would change under it. The
+ * original is kept alongside first (`<file>.v1.bak`, never overwritten,
+ * and ignored by the *.json scan), so an upgrade can always be undone
+ * by hand — an older build can't read the new format.
+ */
+async function loadConfigFile(dir: string, file: string): Promise<LoadedConfig> {
+  const path = join(dir, file);
+  const first = await readConfigFile(path);
+  if (!first.migrated) return first.loaded;
+  return migrationLock.withLocks([path], async () => {
+    const current = await readConfigFile(path);
+    if (!current.migrated || !current.loaded.ok) return current.loaded;
+    try {
+      await writeFile(join(dir, `${file}.v1.bak`), current.raw, { flag: 'wx' }).catch(
+        (err: NodeJS.ErrnoException) => {
+          if (err.code !== 'EEXIST') throw err;
+        },
+      );
+      await writeFileAtomic(path, JSON.stringify(current.loaded.config, null, 2));
+    } catch (err) {
+      return {
+        ok: false,
+        error: `Upgraded this workspace's file format but couldn't save it: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+    return current.loaded;
+  });
+}
+
+async function readConfigFile(
+  path: string,
+): Promise<{ raw: string; migrated: boolean; loaded: LoadedConfig }> {
+  const raw = await readFile(path, 'utf-8');
+  const { migrated, value } = migrateWorkspaceConfig(JSON.parse(raw));
+  const parsed = parseWorkspaceConfig(value);
+  return {
+    raw,
+    migrated,
+    loaded: parsed.success
+      ? { ok: true, config: parsed.config }
+      : { ok: false, error: parsed.error },
+  };
 }
 
 /**

@@ -64,7 +64,10 @@ async function findAppsByDisplayName(productFamilyName: string): Promise<AppCand
   // security boundary — the query itself is passed as a single argv
   // element to mdfind (shell:false), never shell-interpolated.
   const escaped = productFamilyName.replace(/(["\\])/g, '\\$1');
-  const query = `kMDItemContentType == 'com.apple.application-bundle' && kMDItemDisplayName == '*${escaped}*'c`;
+  // Installers match the name too ("Install Spotify.app" left in
+  // Downloads) but aren't the app — excluded by bundle id
+  // (com.spotify.client.installer).
+  const query = `kMDItemContentType == 'com.apple.application-bundle' && kMDItemDisplayName == '*${escaped}*'c && kMDItemCFBundleIdentifier != '*installer*'c`;
 
   const result = await runCommand('mdfind', [query], { timeoutMs: COMMAND_TIMEOUT_MS });
   if (!result.success) {

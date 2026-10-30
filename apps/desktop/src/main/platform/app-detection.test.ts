@@ -12,7 +12,13 @@ function mdfindSuccess(stdout: string): { success: true; stdout: string; stderr:
   return { success: true, stdout, stderr: '' };
 }
 
-const shellFailure = { success: false as const, message: 'failed', stdout: '', stderr: '', code: 1 };
+const shellFailure = {
+  success: false as const,
+  message: 'failed',
+  stdout: '',
+  stderr: '',
+  code: 1,
+};
 
 beforeEach(() => {
   mockedRunCommand.mockReset();
@@ -53,13 +59,11 @@ describe('scanInstalledApps', () => {
     ]);
   });
 
-  it('returns every match, not a single silently-picked winner — e.g. an installer stub alongside the real app', async () => {
+  it('returns every match, not a single silently-picked winner — e.g. a second copy left in Downloads', async () => {
     mockedRunCommand.mockImplementation(async (_cmd, args) => {
       const query = String(args?.[0]);
       if (query.includes('Spotify')) {
-        return mdfindSuccess(
-          '/Users/stas/Downloads/Install Spotify.app\n/Applications/Spotify.app\n',
-        );
+        return mdfindSuccess('/Users/stas/Downloads/Spotify.app\n/Applications/Spotify.app\n');
       }
       return mdfindSuccess('');
     });
@@ -67,9 +71,19 @@ describe('scanInstalledApps', () => {
     const result = await scanInstalledApps();
 
     expect(result.spotify).toEqual([
-      { path: '/Users/stas/Downloads/Install Spotify.app', displayName: 'Install Spotify' },
+      { path: '/Users/stas/Downloads/Spotify.app', displayName: 'Spotify' },
       { path: '/Applications/Spotify.app', displayName: 'Spotify' },
     ]);
+  });
+
+  it('never offers an installer ("Install Spotify.app") as a copy of the app', async () => {
+    mockedRunCommand.mockResolvedValue(mdfindSuccess(''));
+
+    await scanInstalledApps();
+
+    for (const call of mockedRunCommand.mock.calls) {
+      expect(String(call[1]?.[0])).toContain("kMDItemCFBundleIdentifier != '*installer*'c");
+    }
   });
 
   it('treats a failed mdfind call as zero candidates, not an error', async () => {
@@ -94,7 +108,9 @@ describe('scanInstalledApps', () => {
 
     const result = await scanInstalledApps();
 
-    expect(result.chrome).toEqual([{ path: '/Applications/Google Chrome.app', displayName: 'Google Chrome' }]);
+    expect(result.chrome).toEqual([
+      { path: '/Applications/Google Chrome.app', displayName: 'Google Chrome' },
+    ]);
   });
 
   it('passes the query as a single argv element, never shell-interpolated', async () => {

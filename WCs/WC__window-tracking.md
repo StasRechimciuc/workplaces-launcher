@@ -729,6 +729,32 @@ Same pass: the sidebar's status badge is solid red for a step that
 Detail strip shows that step half green / half red (founder,
 2026-10-29) — make the two agree.
 
+Follow-up (founder, 2026-10-30): global keyboard support for every
+dialog and modal (confirmations, Edit form, Save current, etc.) — Esc
+cancels/closes, Enter runs the primary button (confirm / submit / save).
+One shared behavior in the dialog component, not per-dialog wiring
+(StepChangeConfirm already passes onEnterKey; make that the default).
+
+Follow-up (founder, 2026-10-30) — local Kubernetes cluster handling,
+plan through /judge: closing a Tilt step runs `tilt down`, which empties
+the cluster but leaves the cluster itself (kind/k3d/minikube) running —
+and two projects with rich clusters running at once is too heavy when
+switching. Idea: a Docker step knows its cluster (detected from the
+Tiltfile / kubectl context, or picked); Restore starts it if stopped,
+Close/Switch with stop-on-close stops it (keeps its state, fast to
+resume) unless another workspace still uses it. Ownership question to
+settle: today a cluster the user created is "theirs" and never touched.
+
+Follow-up (founder, 2026-10-30) — redesign the Save current workspace
+view: the modal is too narrow to read what was detected (long paths,
+commands, several terminals and windows stacked in expand-in-place
+rows). Needs a wider, scannable layout — plan through /judge.
+
+Follow-up (founder, 2026-10-30): while a workspace is restoring,
+closing or switching, the ⋯ menu next to Restore/Close (Edit, Delete,
+etc.) is still clickable — disable it for the duration, like the
+Restore/Close button itself.
+
 **Important open product question (founder, 2026-10-29):** users
 shouldn't silently run without what the app needs. Idea: a first-run
 setup tour that gets everything enabled up front — Accessibility, the

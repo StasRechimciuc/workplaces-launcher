@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { appDisplayName, ERROR_CODES, isToolAppKey } from '@workspace-launcher/shared';
 import type {
+  ApplyStepsChangeResult,
   CreateWorkspaceResult,
   UpdateWorkspaceResult,
   WorkspaceConfig,
@@ -58,6 +59,13 @@ interface WorkspaceFormModalProps {
   onClose: () => void;
   /** Fires on a successful save in either mode. */
   onSaved: (config: WorkspaceConfig) => void;
+  /** After an edit is saved: how applying it to what's running went
+   * (orchestrator.ts's applyStepsChange) — shown on the workspace's own
+   * view, like a quick edit's. */
+  onStepsChangeApplied: (
+    workspaceId: string,
+    outcome: { report: ApplyStepsChangeResult } | { error: string },
+  ) => void;
   /** Opens ErrorsModal (App.tsx-owned) targeting a specific error code
    * — the save-error banner's "Learn more about this error" link. */
   onShowErrorCode: (code: string) => void;
@@ -254,6 +262,7 @@ export function WorkspaceFormModal({
   workspaces,
   onClose,
   onSaved,
+  onStepsChangeApplied,
   onShowErrorCode,
 }: WorkspaceFormModalProps): JSX.Element {
   const nextKeyRef = useRef(0);
@@ -262,6 +271,7 @@ export function WorkspaceFormModal({
     initialDrafts(nextKeyRef),
   );
   const [isSaving, setIsSaving] = useState(false);
+  const checkingChangeRef = useRef(false);
   const [saveError, setSaveError] = useState<{
     message: string;
     code?: string;
@@ -482,6 +492,10 @@ export function WorkspaceFormModal({
       removeTool(key);
       return;
     }
+    // One question at a time: a second ✕ while this one is being
+    // checked would race it for the confirmation.
+    if (checkingChangeRef.current) return;
+    checkingChangeRef.current = true;
     const stepId = draft.id;
     let closes: string[];
     try {
@@ -499,6 +513,8 @@ export function WorkspaceFormModal({
         });
       }
       return;
+    } finally {
+      checkingChangeRef.current = false;
     }
     if (!isMountedRef.current) return;
     if (closes.length === 0) {
@@ -616,12 +632,16 @@ export function WorkspaceFormModal({
       await save(false);
       return;
     }
+    if (isSaving) return;
+    // Busy from the check on, so a second click can't save twice.
+    setIsSaving(true);
     setSaveError(null);
     let closes: string[];
     try {
       closes = await window.api.previewStepsChange(editingWorkspace.id, steps);
     } catch (err) {
       if (isMountedRef.current) {
+        setIsSaving(false);
         setSaveError({
           message: err instanceof Error ? err.message : String(err),
           code: ERROR_CODES.SYSTEM_UNEXPECTED.code,
@@ -632,6 +652,7 @@ export function WorkspaceFormModal({
     if (!isMountedRef.current) return;
     const unconfirmed = closes.filter((label) => !confirmedCloses.has(label));
     if (unconfirmed.length > 0) {
+      setIsSaving(false);
       setPendingChange({ action: 'save', closes: unconfirmed });
       return;
     }
@@ -676,16 +697,18 @@ export function WorkspaceFormModal({
    * After a successful save: what removed or changed steps held is
    * released (closed with `close` — confirmed), and changed steps run
    * again with their new settings (orchestrator.ts's applyStepsChange).
-   * The workspace is already saved by then, so a failure here is logged
-   * rather than shown as a save failure.
+   * The workspace is already saved by then, so how it went — including
+   * a failure — is reported on the workspace's own view, never as a
+   * save failure.
    */
   async function applySavedChange(workspaceId: string, close: boolean): Promise<void> {
     try {
-      await window.api.applyStepsChange(workspaceId, close);
+      const report = await window.api.applyStepsChange(workspaceId, close);
+      onStepsChangeApplied(workspaceId, { report });
     } catch (err) {
-      console.error(
-        `Couldn't apply the saved changes: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      onStepsChangeApplied(workspaceId, {
+        error: `Saved, but couldn't apply the change to what's running: ${err instanceof Error ? err.message : String(err)}`,
+      });
     }
   }
 

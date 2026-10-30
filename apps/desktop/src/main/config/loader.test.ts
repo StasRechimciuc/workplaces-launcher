@@ -78,6 +78,15 @@ describe('loadAllWorkspaceConfigs', () => {
       );
     });
 
+    it('gives two loads at once the same step ids — the ones written to disk', async () => {
+      await writeConfig('ws-old.json', v1);
+      const [a, b] = await Promise.all([loadAllWorkspaceConfigs(), loadAllWorkspaceConfigs()]);
+      const onDisk = JSON.parse(await readFile(join(workspacesDir(), 'ws-old.json'), 'utf-8'));
+      const diskIds = onDisk.steps.map((s: { id: string }) => s.id);
+      expect(a.configs[0]?.steps.map((s) => s.id)).toEqual(diskIds);
+      expect(b.configs[0]?.steps.map((s) => s.id)).toEqual(diskIds);
+    });
+
     it('skips the workspace loudly when the upgraded file can’t be saved', async () => {
       await writeConfig('ws-old.json', v1);
       // A read-only directory: the atomic write's temp file can't be created.

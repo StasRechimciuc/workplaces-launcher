@@ -4,6 +4,10 @@
 // (ERR_REQUIRE_ESM) on anything newer. Don't bump this past 8.x
 // without also changing the main process's build output to ESM.
 import Store from 'electron-store';
+import {
+  TERMINAL_COMMAND_POLL_TIMEOUT_MS,
+  TERMINAL_SCRIPT_START_TIMEOUT_MS,
+} from '../platform/macos/launcher';
 
 interface StepTimingHistoryShape {
   /** Tool type -> most recent successful run durations (ms), oldest first. */
@@ -53,6 +57,18 @@ export const MIN_ADAPTIVE_TIMEOUT_MS = 5000;
 export const DOCKER_MIN_ADAPTIVE_TIMEOUT_MS = 4 * 60 * 1000;
 
 /**
+ * A terminal's own worst case, per terminal in the step: opening one
+ * waits up to TERMINAL_SCRIPT_START_TIMEOUT_MS for Terminal to start
+ * its script, then TERMINAL_COMMAND_POLL_TIMEOUT_MS for an early
+ * failure (macos/launcher.ts) — plus a second of margin. A tighter
+ * timeout cut real opens off: a usual ~4s open learned a ~5-6s limit,
+ * a slower Terminal start then "timed out" with its window open but
+ * never recorded (found 2026-10-30).
+ */
+export const TERMINAL_OPEN_WORST_CASE_MS =
+  TERMINAL_SCRIPT_START_TIMEOUT_MS + TERMINAL_COMMAND_POLL_TIMEOUT_MS + 1000;
+
+/**
  * Generous first-run ceiling for any tool type with no history yet.
  * Real steps can legitimately take a long time (Docker/Tilt
  * cold-building several containers, a slow VPN-gated registry pull) —
@@ -89,8 +105,13 @@ function timingHistoryKey(type: string, params: Record<string, unknown>): string
   return type;
 }
 
-function minAdaptiveTimeoutMsFor(key: string): number {
-  return key.startsWith('docker:') ? DOCKER_MIN_ADAPTIVE_TIMEOUT_MS : MIN_ADAPTIVE_TIMEOUT_MS;
+function minAdaptiveTimeoutMsFor(key: string, params: Record<string, unknown>): number {
+  if (key.startsWith('docker:')) return DOCKER_MIN_ADAPTIVE_TIMEOUT_MS;
+  if (key === 'terminal') {
+    const terminals = Array.isArray(params['terminals']) ? params['terminals'].length : 1;
+    return Math.max(1, terminals) * TERMINAL_OPEN_WORST_CASE_MS;
+  }
+  return MIN_ADAPTIVE_TIMEOUT_MS;
 }
 
 /**
@@ -109,7 +130,10 @@ export function getStepTimeoutMs(type: string, params: Record<string, unknown>):
     return DEFAULT_STEP_TIMEOUT_MS;
   }
   const average = samples.reduce((sum, ms) => sum + ms, 0) / samples.length;
-  return Math.max(minAdaptiveTimeoutMsFor(key), Math.round(average * TIMEOUT_BUFFER_MULTIPLIER));
+  return Math.max(
+    minAdaptiveTimeoutMsFor(key, params),
+    Math.round(average * TIMEOUT_BUFFER_MULTIPLIER),
+  );
 }
 
 /**

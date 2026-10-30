@@ -6,6 +6,7 @@ import {
   getTypicalStepDurationMs,
   MIN_ADAPTIVE_TIMEOUT_MS,
   recordSuccessfulStepDuration,
+  TERMINAL_OPEN_WORST_CASE_MS,
 } from './step-timing-history';
 
 // electron-store needs a real Electron `app` to resolve its storage
@@ -50,6 +51,14 @@ describe('step-timing-history', () => {
     // average 10000 * 1.5 buffer = 15000 (well above the floor, so the
     // real multiplier logic — not the floor — is what this asserts).
     expect(getStepTimeoutMs('terminal', NO_PARAMS)).toBe(15000);
+  });
+
+  it('never cuts a terminal step off before its own terminals could have opened', () => {
+    // 'terminal' has a 15s learned limit by now (above); two terminals
+    // can legitimately take longer, so the floor wins.
+    const two = { terminals: [{}, {}] };
+    expect(getStepTimeoutMs('terminal', two)).toBe(2 * TERMINAL_OPEN_WORST_CASE_MS);
+    expect(TERMINAL_OPEN_WORST_CASE_MS).toBe(11_500);
   });
 
   it('keeps only the most recent 10 samples, dropping older ones', () => {

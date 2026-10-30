@@ -9,7 +9,11 @@ import { vscodeWindowResource } from './vscode-window-spec';
 const APP_ROOT = '/Applications/Visual Studio Code.app/Contents/Resources/app';
 let beats: WindowHeartbeat[] = [];
 let vscodeRunning: boolean | null = true;
-let answer: WindowCommandAck['status'] | 'silent' = 'ok';
+let answer: WindowCommandAck['status'] | 'silent' | 'late' = 'ok';
+/** 'late': the window claimed the command, and answers only after the app's wait. */
+let lateAckAfter = 0;
+const withdrawn: string[] = [];
+const cleaned: string[] = [];
 let answerReason: WindowCommandAck['reason'] | undefined;
 const sent: string[] = [];
 
@@ -24,13 +28,25 @@ const kind = createVscodeWindowKind(
         beats = beats.filter((b) => b.version !== 2 || b.sessionId !== sessionId);
       return 'cmd-1';
     },
-    readAck: async (id) =>
-      answer === 'silent'
-        ? undefined
-        : { version: 1, id, status: answer, ...(answerReason ? { reason: answerReason } : {}) },
-    cleanUp: async () => {},
+    readAck: async (id) => {
+      if (answer === 'silent') return undefined;
+      if (answer === 'late') {
+        if (Date.now() < lateAckAfter) return undefined;
+        beats = [];
+        return { version: 1, id, status: 'ok' };
+      }
+      return { version: 1, id, status: answer, ...(answerReason ? { reason: answerReason } : {}) };
+    },
+    // A silent window never claimed it, so it can be taken back; a late one already has.
+    withdraw: async (id) => {
+      withdrawn.push(id);
+      return answer === 'silent';
+    },
+    cleanUp: async (id) => {
+      cleaned.push(id);
+    },
   },
-  { ackTimeoutMs: 50, closeTimeoutMs: 50, pollMs: 5 },
+  { ackTimeoutMs: 50, closeTimeoutMs: 50, claimedGraceMs: 200, pollMs: 5 },
 );
 
 const spec = vscodeWindowResource('com.microsoft.VSCode', '/work/app/');
@@ -58,6 +74,8 @@ beforeEach(() => {
   answer = 'ok';
   answerReason = undefined;
   sent.length = 0;
+  withdrawn.length = 0;
+  cleaned.length = 0;
 });
 
 async function opened(): Promise<Record<string, unknown>> {
@@ -150,6 +168,17 @@ describe('vscode window kind', () => {
     });
     answer = 'silent';
     await expect(kind.close(handle)).resolves.toMatchObject({ outcome: 'failed' });
+    // Taken back, so the window can never act on it late.
+    expect(withdrawn).toEqual(['cmd-1']);
+  });
+
+  it('waits for the answer of a window that claimed the request just before the timeout', async () => {
+    const handle = await opened();
+    beats = [beat('s-new', Date.now() + 100)];
+    answer = 'late';
+    lateAckAfter = Date.now() + 100;
+    await expect(kind.close(handle)).resolves.toEqual({ outcome: 'closed' });
+    expect(cleaned).toEqual(['cmd-1']);
   });
 });
 

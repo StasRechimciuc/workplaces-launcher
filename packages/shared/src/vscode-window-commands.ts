@@ -115,9 +115,14 @@ export async function readWindowCommands(
   return commands;
 }
 
-/** Either side: removes a command (the extension claiming it, or the app giving up). Idempotent. */
-export async function deleteWindowCommand(id: string): Promise<void> {
-  await unlinkIfPresent(commandPath(id));
+/**
+ * Either side: removes a command — the extension claiming it, or the
+ * app withdrawing it. True only for the side that removed it: a command
+ * the extension claimed can't be withdrawn any more, and one the app
+ * withdrew is never acted on. Idempotent.
+ */
+export async function deleteWindowCommand(id: string): Promise<boolean> {
+  return unlinkIfPresent(commandPath(id));
 }
 
 /** Extension side: answers a command it claimed. */
@@ -153,10 +158,13 @@ export async function deleteWindowCommandAck(id: string): Promise<void> {
   await unlinkIfPresent(ackPath(id));
 }
 
-async function unlinkIfPresent(path: string): Promise<void> {
+/** True if it removed the file; false if it was already gone. */
+async function unlinkIfPresent(path: string): Promise<boolean> {
   try {
     await unlink(path);
+    return true;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    return false;
   }
 }

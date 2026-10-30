@@ -6,6 +6,7 @@ import {
   type WorkspaceRestoreState,
   resultsForSteps,
   withStepResults,
+  withStepsChangeOutcome,
 } from './workspace-restore-state';
 
 function withResults(results: WorkspaceRestoreState['restoreResults']): WorkspaceRestoreState {
@@ -130,5 +131,50 @@ describe('withStepResults', () => {
         { stepId: 'a', result: r('a') },
       ]),
     ).toEqual({ restoreResults: [r('a')], stepIdsAtRestore: ['a'] });
+  });
+});
+
+describe('withStepsChangeOutcome', () => {
+  const ok = (message: string) => ({ success: true, message, durationMs: 1 });
+
+  it('shows what was closed or left open, and folds in the re-run results', () => {
+    const patch = withStepsChangeOutcome(
+      {
+        ...DEFAULT_RESTORE_STATE,
+        applyError: 'old',
+        restoreResults: [ok('a')],
+        stepIdsAtRestore: ['a'],
+      },
+      {
+        report: {
+          closed: ['Terminal (npm run dev)'],
+          leftOpen: [{ appName: 'Spotify', reason: 'failed', detail: 'nope' }],
+          stepResults: [{ stepId: 'a', result: ok('a again') }],
+        },
+      },
+    );
+    expect(patch).toMatchObject({
+      applyError: null,
+      activityLog: {
+        closed: ['Terminal (npm run dev)'],
+        leftOpen: [{ appName: 'Spotify', reason: 'failed', detail: 'nope' }],
+      },
+      restoreResults: [ok('a again')],
+      stepIdsAtRestore: ['a'],
+    });
+  });
+
+  it('leaves the activity log and results alone when nothing happened', () => {
+    expect(
+      withStepsChangeOutcome(DEFAULT_RESTORE_STATE, {
+        report: { closed: [], leftOpen: [], stepResults: [] },
+      }),
+    ).toEqual({ applyError: null });
+  });
+
+  it('records why the apply itself failed, without touching the rest', () => {
+    expect(withStepsChangeOutcome(DEFAULT_RESTORE_STATE, { error: 'boom' })).toEqual({
+      applyError: 'boom',
+    });
   });
 });

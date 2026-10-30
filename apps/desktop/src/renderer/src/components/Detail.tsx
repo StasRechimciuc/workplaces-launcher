@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   LeftOpenEntry,
   WorkspaceStepInput,
@@ -21,7 +21,7 @@ import { useProjectFilesDetection } from '../lib/useProjectFilesDetection';
 import { PROJECT_PATH_STEP_TYPES, getProjectPathSuggestion } from '../lib/project-path-suggestion';
 import {
   resultsForSteps,
-  withStepResults,
+  withStepsChangeOutcome,
   type WorkspaceRestoreState,
 } from '../lib/workspace-restore-state';
 import { TimelineStep } from './TimelineStep';
@@ -153,7 +153,11 @@ export function Detail({
     () => new Map(currentResults.map((r) => [r.step.id, r.result])),
     [currentResults],
   );
-  const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
+  // By step id, not position: removing a step above the open one must
+  // not hand its draft to whichever step slides into its place.
+  const [expandedStepId, setExpandedStepId] = useState<string | null>(null);
+  const expandedPosition = workspace.tools.findIndex((t) => t.id === expandedStepId);
+  const expandedIndex = expandedPosition === -1 ? null : expandedPosition;
   const [restoreError, setRestoreError] = useState<DisplayError | null>(null);
   const [progress, setProgress] = useState<RestoreProgressEvent | null>(null);
   // Per-step live status during an in-flight restore, keyed by index —
@@ -183,9 +187,21 @@ export function Detail({
   // that would close something, waiting for the user's answer.
   const [pendingChange, setPendingChange] = useState<
     | { action: 'remove'; stepId: string; closes: string[] }
-    | { action: 'save'; index: number; params: Record<string, unknown>; closes: string[] }
+    | { action: 'save'; stepId: string; params: Record<string, unknown>; closes: string[] }
     | null
   >(null);
+  // The steps as last saved — ahead of `workspace` between a save and
+  // the list refresh it triggers, so a change made right after another
+  // builds on it instead of bringing back what it removed.
+  const savedStepsRef = useRef<
+    readonly { id: string; type: string; params: Record<string, unknown> }[]
+  >(workspace.tools);
+  useEffect(() => {
+    savedStepsRef.current = workspace.tools;
+  }, [workspace.tools]);
+  // One step change (preview → save → apply) at a time: a second ✕ or
+  // Save while one is in flight is ignored rather than raced.
+  const stepChangeBusyRef = useRef(false);
   const recentFolders = useMemo(() => getRecentProjectPaths(allWorkspaces), [allWorkspaces]);
   const recentCommands = useMemo(() => getRecentCommands(allWorkspaces), [allWorkspaces]);
   // Independently instantiated from WorkspaceFormModal's own instance —
@@ -207,7 +223,8 @@ export function Detail({
   const isMac = window.api.platform === 'darwin';
 
   function handleToggleStep(i: number): void {
-    setExpandedIndex((current) => (current === i ? null : i));
+    const id = workspace.tools[i]?.id ?? null;
+    setExpandedStepId((current) => (current === id ? null : id));
     setDraftParams(null);
     setSaveStepError(null);
   }
@@ -227,46 +244,61 @@ export function Detail({
    */
   async function handleSaveStep(i: number): Promise<boolean> {
     if (draftParams === null) return true; // nothing to save is not a failure
+    const stepId = workspace.tools[i]?.id;
+    if (stepId === undefined || stepChangeBusyRef.current) return false;
     const params = draftParams;
-    const steps = stepsWithParams(i, params);
+    stepChangeBusyRef.current = true;
+    setIsSavingStep(true);
     setSaveStepError(null);
-    let closes: string[];
     try {
-      closes = await window.api.previewStepsChange(workspace.id, steps);
+      const closes = await window.api.previewStepsChange(
+        workspace.id,
+        stepsWithParams(stepId, params),
+      );
+      if (closes.length > 0) {
+        setPendingChange({ action: 'save', stepId, params, closes });
+        return false;
+      }
+      return await saveStep(stepId, params, false);
     } catch (err) {
       setSaveStepError({
         message: err instanceof Error ? err.message : String(err),
         code: ERROR_CODES.SYSTEM_UNEXPECTED.code,
       });
       return false;
+    } finally {
+      stepChangeBusyRef.current = false;
+      setIsSavingStep(false);
     }
-    if (closes.length > 0) {
-      setPendingChange({ action: 'save', index: i, params, closes });
-      return false;
-    }
-    return saveStep(i, params, false);
   }
 
-  function stepsWithParams(i: number, params: Record<string, unknown>): WorkspaceStepInput[] {
+  function currentSteps(): WorkspaceStepInput[] {
+    return savedStepsRef.current.map((t) => ({ id: t.id, type: t.type, params: t.params }));
+  }
+
+  function stepsWithParams(stepId: string, params: Record<string, unknown>): WorkspaceStepInput[] {
+    const steps = currentSteps();
     return replaceStepParams(
-      workspace.tools.map((t) => ({ id: t.id, type: t.type, params: t.params })),
-      i,
+      steps,
+      steps.findIndex((t) => t.id === stepId),
       params,
     );
   }
 
+  /** Saves the step's new params, then applies the saved change. */
   async function saveStep(
-    i: number,
+    stepId: string,
     params: Record<string, unknown>,
     close: boolean,
   ): Promise<boolean> {
+    if (!savedStepsRef.current.some((t) => t.id === stepId)) return false;
     setIsSavingStep(true);
     setSaveStepError(null);
     try {
       const result = await window.api.updateWorkspace({
         id: workspace.id,
         name: workspace.name,
-        steps: stepsWithParams(i, params),
+        steps: stepsWithParams(stepId, params),
       });
       if (!result.success) {
         setSaveStepError({
@@ -277,9 +309,7 @@ export function Detail({
         return false;
       }
       setDraftParams(null);
-      await applySavedChange(close);
-      onQuickEditSaved(result.config);
-      return true;
+      recordSaved(result.config);
     } catch (err) {
       setSaveStepError({
         message: err instanceof Error ? err.message : String(err),
@@ -289,25 +319,35 @@ export function Detail({
     } finally {
       setIsSavingStep(false);
     }
+    await applySavedChange(close);
+    return true;
+  }
+
+  /** A save went through: what later changes build on, and the list refresh. */
+  function recordSaved(config: WorkspaceConfig): void {
+    savedStepsRef.current = config.steps;
+    onQuickEditSaved(config);
   }
 
   /**
    * After a saved edit: what removed/changed steps held is released
    * (closed only with `close` — confirmed), and changed steps run again
    * with their new settings; their fresh results replace their old
-   * ones. See orchestrator.ts's applyStepsChange.
+   * ones. See orchestrator.ts's applyStepsChange. The edit is already
+   * saved, so a failure here is shown as the apply's own, never undoing
+   * it. Recorded in App's per-workspace restore state, which stays valid
+   * if this view has gone in the meantime.
    */
   async function applySavedChange(close: boolean): Promise<void> {
-    const report = await window.api.applyStepsChange(workspace.id, close);
-    if (!isMountedRef.current) return;
-    if (report.closed.length > 0 || report.leftOpen.length > 0) {
-      onUpdateRestoreState({ activityLog: { closed: report.closed, leftOpen: report.leftOpen } });
-    }
-    if (report.stepResults.length > 0) {
-      onUpdateRestoreState((prev) => ({
-        ...withStepResults(prev, report.stepResults),
-        restoredAt: prev.restoredAt ?? Date.now(),
-      }));
+    try {
+      const report = await window.api.applyStepsChange(workspace.id, close);
+      onUpdateRestoreState((prev) => withStepsChangeOutcome(prev, { report }));
+    } catch (err) {
+      const error = `Saved, but couldn't apply the change to what's running: ${err instanceof Error ? err.message : String(err)}`;
+      onUpdateRestoreState((prev) => withStepsChangeOutcome(prev, { error }));
+    } finally {
+      // What closed changes which workspaces are active.
+      onWorkspaceActivityChanged();
     }
   }
 
@@ -324,16 +364,21 @@ export function Detail({
    */
   async function handleRemoveStep(i: number): Promise<void> {
     const tool = workspace.tools[i];
-    if (!tool) return;
+    if (!tool || stepChangeBusyRef.current) return;
+    stepChangeBusyRef.current = true;
+    setRemovingIndex(i);
     setRemoveStepError(null);
-    let closes: string[];
     try {
-      closes = await window.api.previewStepsChange(
+      const closes = await window.api.previewStepsChange(
         workspace.id,
-        workspace.tools
-          .filter((t) => t.id !== tool.id)
-          .map((t) => ({ id: t.id, type: t.type, params: t.params })),
+        currentSteps().filter((t) => t.id !== tool.id),
       );
+      if (!isMountedRef.current) return;
+      if (closes.length > 0) {
+        setPendingChange({ action: 'remove', stepId: tool.id, closes });
+        return;
+      }
+      await removeStep(tool.id, false);
     } catch (err) {
       if (isMountedRef.current) {
         setRemoveStepError({
@@ -341,14 +386,10 @@ export function Detail({
           code: ERROR_CODES.SYSTEM_UNEXPECTED.code,
         });
       }
-      return;
+    } finally {
+      stepChangeBusyRef.current = false;
+      if (isMountedRef.current) setRemovingIndex(null);
     }
-    if (!isMountedRef.current) return;
-    if (closes.length > 0) {
-      setPendingChange({ action: 'remove', stepId: tool.id, closes });
-      return;
-    }
-    await removeStep(tool.id, false);
   }
 
   /**
@@ -361,29 +402,23 @@ export function Detail({
     if (i === -1) return;
     setRemovingIndex(i);
     setRemoveStepError(null);
-    const steps = workspace.tools
-      .filter((t) => t.id !== stepId)
-      .map((t) => ({ id: t.id, type: t.type, params: t.params }));
     try {
       const result = await window.api.updateWorkspace({
         id: workspace.id,
         name: workspace.name,
-        steps,
+        steps: currentSteps().filter((t) => t.id !== stepId),
       });
-      if (!isMountedRef.current) return;
       if (!result.success) {
-        setRemoveStepError({ message: result.error, code: result.code });
+        if (isMountedRef.current) setRemoveStepError({ message: result.error, code: result.code });
         return;
       }
-      await applySavedChange(close);
-      if (!isMountedRef.current) return;
-      if (expandedIndex === i) {
-        setExpandedIndex(null);
+      if (isMountedRef.current && expandedStepId === stepId) {
+        setExpandedStepId(null);
         setDraftParams(null);
         setSaveStepError(null);
       }
       // Refreshes the workspace list too, active badges included.
-      onQuickEditSaved(result.config);
+      recordSaved(result.config);
     } catch (err) {
       if (isMountedRef.current) {
         setRemoveStepError({
@@ -391,10 +426,22 @@ export function Detail({
           code: ERROR_CODES.SYSTEM_UNEXPECTED.code,
         });
       }
+      return;
     } finally {
-      if (isMountedRef.current) {
-        setRemovingIndex(null);
-      }
+      if (isMountedRef.current) setRemovingIndex(null);
+    }
+    await applySavedChange(close);
+  }
+
+  /** The confirmation's answer: one step change at a time, like its first half. */
+  async function confirmPendingChange(change: NonNullable<typeof pendingChange>): Promise<void> {
+    if (stepChangeBusyRef.current) return;
+    stepChangeBusyRef.current = true;
+    try {
+      if (change.action === 'remove') await removeStep(change.stepId, true);
+      else await saveStep(change.stepId, change.params, true);
+    } finally {
+      stepChangeBusyRef.current = false;
     }
   }
 
@@ -430,6 +477,7 @@ export function Detail({
       stepIdsAtRestore: null,
       activityLog: null,
       retryingIndex: null,
+      applyError: null,
     });
     setRestoreError(null);
     setProgress(null);
@@ -489,6 +537,7 @@ export function Detail({
       restoredAt: null,
       stepIdsAtRestore: null,
       activityLog: null,
+      applyError: null,
     });
     setRestoreError(null);
     try {
@@ -518,7 +567,7 @@ export function Detail({
    * alone; only activityLog is relevant here.
    */
   async function handleClose(): Promise<void> {
-    onUpdateRestoreState({ isClosing: true, activityLog: null });
+    onUpdateRestoreState({ isClosing: true, activityLog: null, applyError: null });
     setRestoreError(null);
     try {
       const result = await window.api.closeWorkspace(workspace.id);
@@ -840,6 +889,16 @@ export function Detail({
           />
         </div>
       )}
+      {restoreState.applyError !== null && (
+        <div className="mb-4.5 flex items-center gap-2 rounded-sm border border-border bg-bg-elevated px-2.5 py-2 text-[12.5px] text-text-muted">
+          <Icon name="x" size={13} className="text-danger" />
+          <ErrorCode
+            message={restoreState.applyError}
+            code={ERROR_CODES.SYSTEM_UNEXPECTED.code}
+            onLearnMore={onShowErrorCode}
+          />
+        </div>
+      )}
 
       <div className="flex flex-col">
         {workspace.tools.map((tool, i) => {
@@ -870,7 +929,7 @@ export function Detail({
             typeof effectiveParams['directory'] === 'string' ? effectiveParams['directory'] : '';
           return (
             <TimelineStep
-              key={i}
+              key={tool.id}
               tool={tool}
               index={i}
               isLast={i === workspace.tools.length - 1}
@@ -925,8 +984,7 @@ export function Detail({
         onConfirm={() => {
           const change = pendingChange;
           setPendingChange(null);
-          if (change?.action === 'remove') void removeStep(change.stepId, true);
-          if (change?.action === 'save') void saveStep(change.index, change.params, true);
+          if (change) void confirmPendingChange(change);
         }}
       />
     </main>

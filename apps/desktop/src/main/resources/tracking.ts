@@ -310,7 +310,17 @@ export async function closeOwnerless(
   context: CloseContext,
 ): Promise<CloseReport> {
   const report: CloseReport = { closed: [], leftOpen: [], hadFailure: false, refused: [] };
-  for (const id of resourceIds) {
+  // Whole-app quits go last, so a window inside the app that refuses
+  // to close (unsaved changes) is known before its app would be quit.
+  const closesWholeApp = (id: string): boolean => {
+    const resource = findResource(store.get(), id);
+    return resource !== undefined && getResourceKind(resource.kind)?.closesWholeApp === true;
+  };
+  const ordered = [
+    ...resourceIds.filter((id) => !closesWholeApp(id)),
+    ...resourceIds.filter(closesWholeApp),
+  ];
+  for (const id of ordered) {
     const snapshot = findResource(store.get(), id);
     if (!snapshot) continue;
     await locks.withLocks([identityLockKey(snapshot.kind, snapshot.identityKey)], async () => {
@@ -332,9 +342,19 @@ export async function closeOwnerless(
       // another owned resource (a VS Code window) lives in it.
       if (kind?.closesWholeApp && resource.appName !== undefined) {
         const appName = resource.appName;
+        // Still in use: owned, kept for the workspace being switched
+        // to, or refused to close just now (its claim is restored after
+        // this batch).
         const usedInside = store
           .get()
-          .resources.some((r) => r.id !== id && r.owners.length > 0 && r.appName === appName);
+          .resources.some(
+            (r) =>
+              r.id !== id &&
+              r.appName === appName &&
+              (r.owners.length > 0 ||
+                context.keepIdentityKeys?.has(r.identityKey) === true ||
+                report.refused.includes(r.id)),
+          );
         if (context.untrackedAppNamesInUse.has(appName) || usedInside) {
           report.leftOpen.push({ appName: resource.label, reason: 'still-used' });
           drop();
@@ -406,18 +426,23 @@ export interface Claim {
  * keeping the claim would only leak it.
  *
  * `currentKeys` is each tracked step's current identity keys; a step
- * missing from it (removed, or no longer tracked) has no valid claims.
+ * missing from it has no valid claims — unless it's in `unresolved`:
+ * a step that still exists but came out untracked this time (VS Code's
+ * bundle couldn't be read, say). Its claims are kept: closing what
+ * it's about to use on a passing lookup failure is worse than a leak.
  */
 export function staleClaims(
   store: ResourceLedgerStore,
   workspaceId: string,
   currentKeys: ReadonlyMap<string, ReadonlySet<string>>,
+  unresolved: ReadonlySet<string> = new Set(),
 ): Claim[] {
   return resourcesOwnedBy(store.get(), workspaceId).flatMap((resource) =>
     resource.owners
       .filter(
         (o) =>
           o.workspaceId === workspaceId &&
+          !unresolved.has(o.stepId) &&
           !(currentKeys.get(o.stepId)?.has(resource.identityKey) ?? false),
       )
       .map((owner) => ({ resourceId: resource.id, owner })),

@@ -88,6 +88,15 @@ describe('compose kind', () => {
     });
   });
 
+  it('counts a stack with a finished one-shot container as running', async () => {
+    projects = [
+      { Name: 'app', Status: 'exited(1), running(3)', ConfigFiles: '/work/app/compose.yaml' },
+    ];
+    await expect(kind.capture(spec.identity, [], spec.options)).resolves.toMatchObject({
+      found: true,
+    });
+  });
+
   it('ignores stopped projects and other directories', async () => {
     projects = [
       { Name: 'app', Status: 'exited(2)', ConfigFiles: '/work/app/compose.yaml' },

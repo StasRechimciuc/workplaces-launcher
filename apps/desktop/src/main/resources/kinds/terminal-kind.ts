@@ -63,6 +63,12 @@ const TiltOptionsSchema = z.object({
 
 type TerminalHandle = z.infer<typeof HandleSchema>;
 
+/** What snapshot() records before the open: when, and the windows already there. */
+const SnapshotSchema = z.object({
+  takenAt: z.number(),
+  windowIds: z.array(z.number().int()),
+});
+
 export interface TerminalKindDeps {
   helper: Pick<WlHelperClient, 'request'>;
   readInfo: typeof readTerminalSessionInfo;
@@ -110,9 +116,15 @@ const TILT_DOWN_TIMEOUT_MS = 60_000;
 
 export function createTerminalKind(
   deps: TerminalKindDeps,
-  options: { captureTimeoutMs?: number; graceMs?: number; tiltGraceMs?: number } = {},
+  options: {
+    captureTimeoutMs?: number;
+    infoTimeoutMs?: number;
+    graceMs?: number;
+    tiltGraceMs?: number;
+  } = {},
 ): ResourceKindPlugin {
   const captureTimeoutMs = options.captureTimeoutMs ?? 8_000;
+  const infoTimeoutMs = options.infoTimeoutMs ?? 3_000;
   const graceMs = options.graceMs ?? HANGUP_GRACE_MS;
   const tiltGraceMs = options.tiltGraceMs ?? TILT_INTERRUPT_GRACE_MS;
 
@@ -127,12 +139,17 @@ export function createTerminalKind(
     return response.ok ? response.result.startedAt : undefined;
   }
 
-  /** Captures `marker`'s window among those not in `before`, plus its shell. */
+  /**
+   * Captures `marker`'s window among those not in `before`, plus its
+   * shell — from session info written at or after `since`, never a
+   * previous window's leftover.
+   */
   async function captureMarked(
     marker: string,
     before: number[],
     cwd: string,
     tilt: TerminalHandle['tilt'],
+    since: number,
   ): Promise<{ found: true; handle: TerminalHandle } | { found: false; reason: string }> {
     const window = await deps.helper.request(
       'captureNewWindow',
@@ -147,10 +164,10 @@ export function createTerminalKind(
     const appPid = window.ok ? window.result.pid : await terminalPid();
     if (appPid === null) return { found: false, reason: "Terminal isn't running" };
     const { value: info } = await pollUntil(
-      () => deps.readInfo(marker).then((i) => i ?? undefined),
+      () => deps.readInfo(marker).then((i) => (i !== null && i.writtenAt >= since ? i : undefined)),
       {
         intervalMs: 100,
-        timeoutMs: 3_000,
+        timeoutMs: infoTimeoutMs,
       },
     );
     if (!info) return { found: false, reason: "its script didn't report its shell" };
@@ -239,13 +256,17 @@ export function createTerminalKind(
     closesWholeApp: false,
 
     async snapshot() {
+      const takenAt = Date.now();
       const listing = await deps.helper.request('listWindows', { bundleId: TERMINAL_BUNDLE_ID });
-      return listing.ok ? listing.result.map((w) => w.windowId) : [];
+      return { takenAt, windowIds: listing.ok ? listing.result.map((w) => w.windowId) : [] };
     },
 
-    async capture(identity, snapshot, rawOptions) {
+    async capture(identity, rawSnapshot, rawOptions) {
       const marker = markerOf(identity);
-      const before = Array.isArray(snapshot) ? (snapshot as number[]) : [];
+      const snapshot = SnapshotSchema.safeParse(rawSnapshot);
+      const before = snapshot.success ? snapshot.data.windowIds : [];
+      // Without a snapshot time, only what was written from now on counts.
+      const since = snapshot.success ? snapshot.data.takenAt : Date.now();
       const tilt = TiltOptionsSchema.safeParse(rawOptions);
       const result = await captureMarked(
         marker,
@@ -254,17 +275,18 @@ export function createTerminalKind(
         tilt.success
           ? { downCommand: tilt.data.downCommand, stopOnClose: tilt.data.stopOnClose }
           : undefined,
+        since,
       );
       return result.found ? { found: true, handle: result.handle, preexisting: false } : result;
     },
 
-    async reconcileOpening(identity) {
+    async reconcileOpening(identity, since) {
       // A crash between opening and capturing: the marker in its title
       // still says which window it was.
       // The Tilt options aren't recorded until capture: a reconciled Tilt
       // terminal closes like a plain one (its processes stopped).
       const marker = markerOf(identity);
-      const result = await captureMarked(marker, [], String(identity['cwd']), undefined);
+      const result = await captureMarked(marker, [], String(identity['cwd']), undefined, since);
       return result.found ? { found: true, handle: result.handle, preexisting: false } : result;
     },
 

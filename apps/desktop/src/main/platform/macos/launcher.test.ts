@@ -251,6 +251,23 @@ describe('macosLauncher', () => {
       );
     });
 
+    it('finishes as soon as every command has succeeded, without waiting out the failure window', async () => {
+      stat.mockResolvedValueOnce({ isDirectory: () => true } as never);
+      writeFile.mockResolvedValueOnce(undefined);
+      runCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
+      readFile.mockResolvedValue('started\n0:0\n1:0\n' as never);
+
+      const startedAt = Date.now();
+      const result = await openTerminalWithPollOptions('/Users/stas/x', ['echo a', 'echo b'], {
+        intervalMs: 1,
+        timeoutMs: 5_000,
+        startTimeoutMs: 1_000,
+      });
+
+      expect(result.success).toBe(true);
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
+    });
+
     it('writes the exact tracked-terminal script: marker title, session files, re-run loop', async () => {
       stat.mockResolvedValueOnce({ isDirectory: () => true } as never);
       writeFile.mockResolvedValueOnce(undefined);
@@ -264,6 +281,14 @@ describe('macosLauncher', () => {
       });
 
       const session = join(tmpdir(), `workspace-launcher-session-${marker}`);
+      // A previous window's leftover session files are gone before this one starts.
+      const unlinked = vi.mocked(fsPromises.unlink).mock;
+      expect(unlinked.calls.map(([path]) => path)).toEqual(
+        expect.arrayContaining([`${session}.info`, `${session}.state`, `${session}.rerun`]),
+      );
+      expect(Math.max(...unlinked.invocationCallOrder.slice(0, 3))).toBeLessThan(
+        writeFile.mock.invocationCallOrder[0]!,
+      );
       const [, contents] = writeFile.mock.calls[0]!;
       expect(contents).toBe(
         [
@@ -273,14 +298,15 @@ describe('macosLauncher', () => {
           `printf '\\e]0;%s\\a' '${marker}'`,
           `print -r -- "$TTY $$" > '${session}.info'`,
           `echo running > '${session}.state'`,
-          "trap 'true' INT",
+          "trap 'wl_interrupted=1' INT",
           'clear',
-          `cd '/Users/stas/projects/x' || { echo "cd into the configured directory failed."; echo "cd:1" >> '${sentinelPath}'; exec "$SHELL" -l; }`,
+          `cd '/Users/stas/projects/x' || { echo "cd into the configured directory failed."; echo "cd:1" >> '${sentinelPath}'; printf '\\e]0;\\a'; exec "$SHELL" -l; }`,
           'wl_run() {',
-          '  :',
+          '  wl_interrupted=0',
           `  echo '$ npm run dev'`,
           `  echo "###OUT:0###" >> '${outputLogPath}'`,
           `  { npm run dev; echo "0:$?" >> '${sentinelPath}'; } 2>&1 | tee -a '${outputLogPath}'`,
+          '  (( wl_interrupted )) && return',
           '}',
           'wl_run',
           'while true; do',
@@ -291,7 +317,7 @@ describe('macosLauncher', () => {
           '    if read -s -t 1 -k 1; then',
           `      echo shell > '${session}.state'`,
           '      trap - INT',
-          '      exec "$SHELL" -l',
+          `      printf '\\e]0;\\a'; exec "$SHELL" -l`,
           '    fi',
           '  done',
           `  rm -f -- '${session}.rerun'`,

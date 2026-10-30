@@ -20,7 +20,7 @@ import * as processControl from '../platform/macos/process-control';
 import * as activityStore from './workspace-activity-store';
 import { registerTool } from '../tools/registry';
 import { registerResourceKind } from '../resources/kind-registry';
-import { addResource, emptyLedger, resourcesOwnedBy } from '../resources/ledger';
+import { addResource, applyBootSession, emptyLedger, resourcesOwnedBy } from '../resources/ledger';
 import { ResourceLedgerStore } from '../resources/ledger-store';
 import { reconcileOpeningRecords, setLedgerStore } from '../resources/runtime';
 import type { CloseOutcome, ResourceHandle, ResourceKindPlugin } from '../resources/types';
@@ -198,6 +198,52 @@ registerTool({
     })),
 } as ToolPlugin);
 
+// A window living inside the app "Code" (a VS Code window): quitting
+// that app would take it down too.
+registerTool({
+  type: 't-codewindow',
+  validate: (params) => ({ valid: true, data: params }),
+  async run(params) {
+    const { name } = params as { name: string };
+    runs.push(name);
+    world.set(name, [...(world.get(name) ?? []), nextInstance++]);
+    return { success: true, message: 'opened', durationMs: 1 };
+  },
+  teardown: async () => ({ success: true, message: '', durationMs: 0 }),
+  resources: async (params) => [
+    {
+      kind: 'fake-window',
+      identity: { name: (params as { name: string }).name },
+      label: (params as { name: string }).name,
+      appName: 'Code',
+    },
+  ],
+} as ToolPlugin);
+
+/** When set, 't-flaky' can't resolve its resources this time (a passing lookup failure). */
+let unresolvable = false;
+registerTool({
+  type: 't-flaky',
+  validate: (params) => ({ valid: true, data: params }),
+  async run(params) {
+    const { name } = params as { name: string };
+    runs.push(name);
+    if ((world.get(name) ?? []).length === 0) world.set(name, [nextInstance++]);
+    return { success: true, message: 'opened', durationMs: 1 };
+  },
+  teardown: async () => ({ success: true, message: '', durationMs: 0 }),
+  resources: async (params) =>
+    unresolvable
+      ? []
+      : [
+          {
+            kind: 'fake-window',
+            identity: { name: (params as { name: string }).name },
+            label: (params as { name: string }).name,
+          },
+        ],
+} as ToolPlugin);
+
 registerTool({
   type: 'app',
   validate: (params) => ({ valid: true, data: params }),
@@ -238,6 +284,7 @@ beforeEach(() => {
   runs.length = 0;
   finished.clear();
   reruns.length = 0;
+  unresolvable = false;
   store = memoryStore();
   setLedgerStore(store);
   (activityStore as unknown as { __reset: () => void }).__reset();
@@ -282,6 +329,17 @@ describe('restore', () => {
       success: true,
       message: 'Already open — re-ran its commands there.',
     });
+  });
+
+  it('never learns a launch time from a run that reused what was already open', async () => {
+    const timing = await import('./step-timing-history');
+    vi.mocked(timing.recordSuccessfulStepDuration).mockClear();
+    const a = ws('A', [{ type: 't-multi', params: { names: ['t1', 't2'] } }]);
+    await runWorkspace(a);
+    world.set('t2', []);
+    await runWorkspace(a);
+    expect(runs).toEqual(['t1', 't2', 't2']);
+    expect(timing.recordSuccessfulStepDuration).toHaveBeenCalledTimes(1);
   });
 
   it('opens only the terminals of a step that aren’t open any more', async () => {
@@ -425,6 +483,23 @@ describe('close', () => {
     expect(store.get().resources).toEqual([]);
   });
 
+  it('never quits an app while a window inside it refused to close', async () => {
+    const a = ws('A', [
+      { type: 't-app', params: { name: 'Code' } },
+      { type: 't-codewindow', params: { name: 'proj' } },
+    ]);
+    await runWorkspace(a);
+    closeOutcome.set('proj', 'refused');
+    const result = await closeWorkspace(a, [a]);
+    expect(closes).toEqual(['proj']);
+    expect(result.leftOpen).toEqual(
+      expect.arrayContaining([
+        { appName: 'proj', reason: 'kept-running', detail: 'refused for test' },
+        { appName: 'Code', reason: 'still-used' },
+      ]),
+    );
+  });
+
   it('keeps a failed close in the ledger and the workspace marked active', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const a = ws('A', [{ type: 't-window', params: { name: 'term' } }]);
@@ -466,7 +541,44 @@ describe('switch', () => {
   });
 });
 
+describe('switch, a window handed over inside an app', () => {
+  it('never quits the app a handed-over window lives in', async () => {
+    const b = ws('B', [
+      { type: 't-app', params: { name: 'Code' } },
+      { type: 't-codewindow', params: { name: 'proj' } },
+    ]);
+    const a = ws('A', [{ type: 't-codewindow', params: { name: 'proj' } }]);
+    await runWorkspace(b);
+    await switchToWorkspace(a, [a, b]);
+    expect(closes).not.toContain('Code');
+    expect(world.get('proj')).toHaveLength(1);
+    expect(resourcesOwnedBy(store.get(), 'A').map((r) => r.label)).toEqual(['proj']);
+  });
+});
+
+describe('a step that can’t be resolved this time', () => {
+  it('keeps its claim instead of closing what it’s about to use', async () => {
+    const a = ws('A', [{ type: 't-flaky', params: { name: 'win' } }]);
+    await runWorkspace(a, { allConfigs: [a] });
+    unresolvable = true;
+    await runWorkspace(a, { allConfigs: [a] });
+    expect(closes).toEqual([]);
+    expect(resourcesOwnedBy(store.get(), 'A').map((r) => r.label)).toEqual(['win']);
+  });
+});
+
 describe('retry', () => {
+  it('fails instead of silently reusing when the old copy couldn’t be closed', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const a = ws('A', [{ type: 't-window', params: { name: 'term', fail: true } }]);
+    await runWorkspace(a);
+    closeOutcome.set('term', 'failed');
+    const result = await retryStep(a, 0);
+    expect(result).toMatchObject({ success: false, message: expect.stringContaining('term') });
+    expect(runs).toEqual(['term']);
+    errorSpy.mockRestore();
+  });
+
   it('closes the step’s own window and opens a fresh one — never two side by side', async () => {
     const a = ws('A', [{ type: 't-window', params: { name: 'term', fail: true } }]);
     await runWorkspace(a);
@@ -652,6 +764,13 @@ describe('startup reconcile of unfinished opens', () => {
       }),
     ]);
     errorSpy.mockRestore();
+  });
+
+  it('drops unfinished opens after a reboot — never claims what started since as ours', () => {
+    withOpening('login-item');
+    const rebooted = applyBootSession(store.get(), 'boot-2');
+    expect(rebooted.resources).toEqual([]);
+    expect(applyBootSession(store.get(), 'boot-1').resources).toHaveLength(1);
   });
 
   it('starts from an empty ledger in a fresh boot session', () => {

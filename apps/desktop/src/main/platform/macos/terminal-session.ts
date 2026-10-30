@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFile, unlink, writeFile } from 'node:fs/promises';
+import { readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -12,6 +12,11 @@ import { join } from 'node:path';
  * whose.
  *
  * - `.info`  — written once at start: the shell's tty and pid.
+ *
+ * The marker comes from the terminal's identity, so a later window of
+ * the same terminal reuses these names: openTerminal deletes them
+ * before it opens one, and the time `.info` was written tells a fresh
+ * one from a previous window's leftover.
  * - `.state` — `running` while its commands run, `done` once they've
  *   all finished (the script then waits for a re-run or a keypress),
  *   `shell` once the user pressed a key and took the window over.
@@ -44,18 +49,26 @@ export function terminalSessionPaths(marker: string): {
 
 export type TerminalSessionState = 'running' | 'done' | 'shell';
 
-/** The shell's tty and pid, once the script has written them; null before (or if unreadable). */
+/**
+ * The shell's tty and pid, once the script has written them, and when
+ * it did (`writtenAt`, epoch ms); null before (or if unreadable).
+ */
 export async function readTerminalSessionInfo(
   marker: string,
-): Promise<{ tty: string; shellPid: number } | null> {
+): Promise<{ tty: string; shellPid: number; writtenAt: number } | null> {
+  const path = terminalSessionPaths(marker).info;
   let raw: string;
+  let writtenAt: number;
   try {
-    raw = await readFile(terminalSessionPaths(marker).info, 'utf-8');
+    [raw, writtenAt] = await Promise.all([
+      readFile(path, 'utf-8'),
+      stat(path).then((s) => s.mtimeMs),
+    ]);
   } catch {
     return null;
   }
   const match = /^(\/dev\/ttys\d+) (\d+)\s*$/.exec(raw);
-  return match ? { tty: match[1]!, shellPid: Number(match[2]) } : null;
+  return match ? { tty: match[1]!, shellPid: Number(match[2]), writtenAt } : null;
 }
 
 export async function readTerminalSessionState(

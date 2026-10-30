@@ -79,7 +79,9 @@ async function listRunning(): Promise<Listing> {
   }
   const running = new Map<string, string[]>();
   for (const row of parsed.data) {
-    if (!row.Status.startsWith('running')) continue;
+    // A combined status, sorted by state: "exited(1), running(3)" is a
+    // stack with a finished one-shot container (a migration) — running.
+    if (!/\brunning\(/.test(row.Status)) continue;
     const dirs = row.ConfigFiles.split(',')
       .map((file) => file.trim())
       .filter((file) => file.length > 0)

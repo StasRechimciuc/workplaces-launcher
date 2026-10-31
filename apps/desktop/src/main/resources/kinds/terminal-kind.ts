@@ -235,6 +235,17 @@ export function createTerminalKind(
     return value ?? null;
   }
 
+  async function focus(raw: ResourceHandle): Promise<string | null> {
+    const parsed = HandleSchema.safeParse(raw);
+    if (!parsed.success) return 'unreadable record';
+    const handle = parsed.data;
+    const pid = (await terminalPid()) ?? handle.pid;
+    const windowId = await locateWindow(handle, pid);
+    if (windowId === null) return "couldn't find its window";
+    const focused = await deps.helper.request('focusWindow', { pid, windowId });
+    return focused.ok ? null : focused.error.message;
+  }
+
   async function stopProcesses(handle: TerminalHandle): Promise<void> {
     const descendants = (await deps.descendantsOf(handle.shellPid)) ?? [];
     const targets = [...descendants, handle.shellPid];
@@ -300,6 +311,8 @@ export function createTerminalKind(
       const { session: _session, ...state } = await checkHandle(handle);
       return state;
     },
+
+    focus,
 
     async revive(handle) {
       const state = await checkHandle(handle);

@@ -45,6 +45,7 @@ import {
   retryStep,
   runWorkspace,
   switchToWorkspace,
+  focusWorkspace,
 } from '../orchestrator/orchestrator';
 import { withOrchestratorBusy } from '../orchestrator/orchestrator-busy';
 import {
@@ -176,8 +177,9 @@ export async function restoreWorkspaceWithFocus(
   win: BrowserWindow | null,
 ): Promise<StepResult[]> {
   const session = startRestoreFocusSession(win);
+  let results: StepResult[];
   try {
-    return await restoreWorkspace(workspaceId, (progress) => {
+    results = await restoreWorkspace(workspaceId, (progress) => {
       // A destroyed webContents (the window closed mid-restore) makes
       // .send() throw synchronously — that must never propagate into
       // the orchestrator's step loop and abort a restore that's still
@@ -202,6 +204,10 @@ export async function restoreWorkspaceWithFocus(
   } finally {
     session.end();
   }
+  // After the app lets go of the front: the restored workspace's own
+  // windows come up over it (and over everything else).
+  await focusWorkspace(await resolveWorkspaceConfig(workspaceId as string));
+  return results;
 }
 
 /**
@@ -332,7 +338,9 @@ export async function switchWorkspace(workspaceId: unknown): Promise<SwitchResul
       return { stepResults: await runWorkspace(target), closed: [], leftOpen: [] };
     }
     const allConfigs = await resolveAllWorkspaceConfigs();
-    return switchToWorkspace(target, allConfigs);
+    const result = await switchToWorkspace(target, allConfigs);
+    await focusWorkspace(target);
+    return result;
   });
 }
 

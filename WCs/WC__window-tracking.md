@@ -839,6 +839,29 @@ window or have the same name (rename on hand-over; keep names unique
 among open windows); whether Chrome's "Leave site?" dialog is visible
 to Accessibility so its site can be named (else a generic message).
 
+## Phase 5 notes: focus (founder decision, 2026-10-31, revised)
+
+- No Focus button, no separate focus shortcut. **Restore brings the
+  restored workspace's own windows to the front** (un-minimized) —
+  whether it opened them now or they were already open ("Already
+  open — reused" now visibly does something). Button and a
+  workspace's hotkey behave the same. Other workspaces' windows are
+  left as they are.
+- Spike (2026-10-31): the background helper's activation is accepted
+  — Calculator came in front of Terminal in ~0.1s. Calculator's window
+  doesn't support AX raise, so raising is now best effort (activation
+  still brings the app's main window up).
+- **Built (2026-10-31), uncommitted:** an optional `focus` on the kind
+  contract — terminal (found by marker if needed), browser window
+  (found again by name if needed), VS Code (opens its folder again,
+  which raises that window — only when it's open, never opening one);
+  apps and Compose stacks have none. `focusWorkspace` runs after every
+  Restore (button and hotkey, once the app's own pin is released) and
+  after Switch, in step order with VS Code last; failures are logged.
+- Follow-up: `dockerTool > teardown > reports a durationMs…` is a timing
+  test that occasionally fails under the full suite's load (passes
+  alone) — make it robust.
+
 ## Status
 
 Idea approved, research + spike done, Stage 2 plan approved

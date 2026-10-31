@@ -16,12 +16,17 @@ const withdrawn: string[] = [];
 const cleaned: string[] = [];
 let answerReason: WindowCommandAck['reason'] | undefined;
 const sent: string[] = [];
+const openedFolders: string[] = [];
 
 const kind = createVscodeWindowKind(
   {
     listHeartbeats: async () => beats,
     bundleIdOfAppRoot: async (root) => (root === APP_ROOT ? 'com.microsoft.VSCode' : 'other'),
     isAppRunning: async () => vscodeRunning,
+    openFolder: async (_bundleId, folder) => {
+      openedFolders.push(folder);
+      return null;
+    },
     sendClose: async (sessionId) => {
       sent.push(sessionId);
       if (answer === 'ok')
@@ -74,6 +79,7 @@ beforeEach(() => {
   answer = 'ok';
   answerReason = undefined;
   sent.length = 0;
+  openedFolders.length = 0;
   withdrawn.length = 0;
   cleaned.length = 0;
 });
@@ -139,6 +145,21 @@ describe('vscode window kind', () => {
     await expect(kind.check(handle, spec.identity)).resolves.toMatchObject({ state: 'unknown' });
     vscodeRunning = false;
     await expect(kind.check(handle, spec.identity)).resolves.toEqual({ state: 'gone' });
+  });
+
+  it('brings its open window forward by opening its folder — VS Code raises that window', async () => {
+    const handle = await opened();
+    beats = [beat('s-new', Date.now() + 100)];
+    await expect(kind.focus!(handle)).resolves.toBeNull();
+    expect(openedFolders).toEqual(['/work/app']);
+  });
+
+  it('never opens a window that isn’t open any more just to bring it forward', async () => {
+    const handle = { ...(await opened()), sessionId: 's-1' };
+    beats = [];
+    vscodeRunning = false;
+    await expect(kind.focus!(handle)).resolves.toContain("isn't open");
+    expect(openedFolders).toEqual([]);
   });
 
   it('closes just its window through the extension', async () => {

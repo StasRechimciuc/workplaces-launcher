@@ -74,6 +74,8 @@ const helper = {
         return { ok: true, result: { state: windowState, reachable: true } };
       case 'isRunning':
         return { ok: true, result: { running: true, pids: [77], apps: [] } };
+      case 'focusWindow':
+        return { ok: true, result: { activated: true, via: 'activate' } };
       case 'closeWindow':
         if (closeUnreachableOnce && !activated) {
           return { ok: false, error: { code: 'unreachable', message: 'on another desktop' } };
@@ -231,6 +233,14 @@ describe('terminal kind', () => {
     session = 'done';
     await expect(kind.revive!(handle)).resolves.toBe(true);
     expect(reruns).toEqual([marker]);
+  });
+
+  it('brings its window forward — finding it by marker first when it opened elsewhere', async () => {
+    await expect(kind.focus!(handle)).resolves.toBeNull();
+    expect(requests.at(-1)).toMatchObject({ method: 'focusWindow', params: { windowId: 42 } });
+    await expect(kind.focus!({ ...handle, windowId: null })).resolves.toBeNull();
+    expect(requests.at(-1)).toMatchObject({ method: 'focusWindow', params: { windowId: 43 } });
+    expect(signals).toEqual([]);
   });
 
   it('stops the processes first (deepest first, then the shell), then closes the window', async () => {

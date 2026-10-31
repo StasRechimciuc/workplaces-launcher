@@ -398,6 +398,19 @@ export function createBrowserWindowKind(
         : { state: 'alive', handle: located.handle };
     },
 
+    async focus(raw) {
+      const recorded = parseBrowserWindowHandle(raw);
+      if (!recorded) return 'unreadable record';
+      const located = await locate(recorded);
+      if (located.state === 'unknown') return located.reason;
+      if (located.state === 'gone') return 'its window is gone';
+      const focused = await deps.helper.request('focusWindow', {
+        pid: located.handle.pid,
+        windowId: located.handle.windowId,
+      });
+      return focused.ok ? null : focused.error.message;
+    },
+
     async close(raw): Promise<CloseOutcome> {
       const recorded = parseBrowserWindowHandle(raw);
       if (!recorded) return { outcome: 'already-gone' };

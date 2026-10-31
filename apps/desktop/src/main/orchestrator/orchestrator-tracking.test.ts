@@ -8,6 +8,7 @@ import type {
 import {
   applyStepsChange,
   closeWorkspace,
+  focusWorkspace,
   getActiveWorkspaceIds,
   markWorkspaceDetectedActive,
   previewStepsChange,
@@ -59,6 +60,9 @@ const closes: string[] = [];
 const runs: string[] = [];
 /** Window instances whose commands have finished — what revive re-runs in place. */
 const finished = new Set<string>();
+/** Windows brought forward, in order; names in `cantFocus` say why they couldn't. */
+const focused: string[] = [];
+const cantFocus = new Set<string>();
 const reruns: string[] = [];
 
 function makeKind(
@@ -90,6 +94,17 @@ function makeKind(
       const now = running(identity);
       return now.length > 0 ? { name: key(identity), instance: now[0] } : null;
     },
+    // Like the real kinds: windows can be brought forward, whole apps can't.
+    ...(closesWholeApp
+      ? {}
+      : {
+          async focus(handle: ResourceHandle) {
+            const name = String(handle['name']);
+            if (cantFocus.has(name)) return 'not reachable';
+            focused.push(name);
+            return null;
+          },
+        }),
     async check(handle: ResourceHandle) {
       return (world.get(String(handle['name'])) ?? []).includes(handle['instance'] as number)
         ? { state: 'alive' }
@@ -131,6 +146,8 @@ function makeKind(
 
 registerResourceKind(makeKind('fake-app', true, true));
 registerResourceKind(makeKind('fake-window', false, false));
+// Stands in for VS Code windows: brought forward last, so they end on top.
+registerResourceKind(makeKind('vscode-window', false, false));
 
 /**
  * A step that opens one resource of `kind` named `params.name`. Its
@@ -170,6 +187,7 @@ function trackedTool(type: string, kind: string): ToolPlugin<{ name: string; fai
 
 registerTool(trackedTool('t-app', 'fake-app') as ToolPlugin);
 registerTool(trackedTool('t-window', 'fake-window') as ToolPlugin);
+registerTool(trackedTool('t-vscode', 'vscode-window') as ToolPlugin);
 // A tracked step whose type the app-level path also knows by name
 // (tool-identity.ts maps 'spotify' to "Spotify") — for the upgrade case.
 registerTool(trackedTool('spotify', 'fake-app') as ToolPlugin);
@@ -283,6 +301,8 @@ beforeEach(() => {
   closes.length = 0;
   runs.length = 0;
   finished.clear();
+  focused.length = 0;
+  cantFocus.clear();
   reruns.length = 0;
   unresolvable = false;
   store = memoryStore();
@@ -579,6 +599,37 @@ describe('a step that can’t be resolved this time', () => {
     await runWorkspace(a, { allConfigs: [a] });
     expect(closes).toEqual([]);
     expect(resourcesOwnedBy(store.get(), 'A').map((r) => r.label)).toEqual(['win']);
+  });
+});
+
+describe('bringing a restored workspace forward', () => {
+  it('raises its own windows in step order, VS Code last — and nothing else', async () => {
+    const a = ws('A', [
+      { type: 't-vscode', params: { name: 'code' } },
+      { type: 't-window', params: { name: 'term' } },
+      { type: 't-app', params: { name: 'Spotify' } },
+      { type: 't-window', params: { name: 'chrome' } },
+    ]);
+    const b = ws('B', [{ type: 't-window', params: { name: 'other' } }]);
+    await runWorkspace(a);
+    await runWorkspace(b);
+    await focusWorkspace(a);
+    // The app (Spotify) has no window of its own to bring forward here.
+    expect(focused).toEqual(['term', 'chrome', 'code']);
+  });
+
+  it('carries on past a window it can’t bring forward', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const a = ws('A', [
+      { type: 't-window', params: { name: 'one' } },
+      { type: 't-window', params: { name: 'two' } },
+    ]);
+    await runWorkspace(a);
+    cantFocus.add('one');
+    await focusWorkspace(a);
+    expect(focused).toEqual(['two']);
+    expect(errors).toHaveBeenCalledWith(expect.stringContaining("Couldn't bring one forward"));
+    errors.mockRestore();
   });
 });
 

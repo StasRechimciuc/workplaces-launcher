@@ -16,7 +16,7 @@ import { getStepTimeoutMs, recordSuccessfulStepDuration } from './step-timing-hi
 import { getMacAppName, isExcludedFromAutoClose } from './tool-identity';
 import { isAppRunning, quitApp, waitForAppRunning } from '../platform/macos/process-control';
 import { isIntentActive, setIntentActive } from './workspace-activity-store';
-import { identityKeyFor } from '../resources/kind-registry';
+import { getResourceKind, identityKeyFor } from '../resources/kind-registry';
 import { VSCODE_WINDOW_KIND } from '../resources/kinds/vscode-window-spec';
 import { releaseWorkspace, resourcesOwnedBy } from '../resources/ledger';
 import type { ResourceLedgerStore } from '../resources/ledger-store';
@@ -167,6 +167,42 @@ async function runWorkspaceHoldingLock(
   }
 
   return results;
+}
+
+/**
+ * Brings a just-restored workspace's own windows to the front (Phase 5)
+ * — whether this Restore opened them or they were already open, so
+ * Restore always ends on the workspace the user asked for. Only its own
+ * windows: other workspaces' are left as they are; resources without a
+ * window (apps, Compose stacks) have nothing to bring forward. In step
+ * order with VS Code last, so its window ends on top. Best effort: a
+ * window that can't be brought forward is logged, never a failure.
+ */
+export async function focusWorkspace(config: WorkspaceConfig): Promise<void> {
+  const store = getLedgerStore();
+  if (!store) return;
+  const stepOrder = new Map(config.steps.map((step, i) => [step.id, i]));
+  const rank = (resource: ReturnType<typeof resourcesOwnedBy>[number]): number => {
+    const first = Math.min(
+      ...resource.owners
+        .filter((o) => o.workspaceId === config.id)
+        .map((o) => stepOrder.get(o.stepId) ?? Number.MAX_SAFE_INTEGER),
+    );
+    return resource.kind === VSCODE_WINDOW_KIND ? config.steps.length + first : first;
+  };
+  const owned = [...resourcesOwnedBy(store.get(), config.id)].sort((a, b) => rank(a) - rank(b));
+  for (const resource of owned) {
+    const kind = getResourceKind(resource.kind);
+    if (!kind?.focus || resource.handle === null) continue;
+    try {
+      const why = await kind.focus(resource.handle);
+      if (why) console.error(`Couldn't bring ${resource.label} forward: ${why}`);
+    } catch (err) {
+      console.error(
+        `Couldn't bring ${resource.label} forward: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
 }
 
 /**

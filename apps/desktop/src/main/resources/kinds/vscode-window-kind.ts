@@ -10,6 +10,7 @@ import {
   writeWindowCommand,
 } from '@workspace-launcher/shared/vscode-window-commands';
 import { pollUntil } from '../../lib/poll-until';
+import { runCommand } from '../../lib/shell-exec';
 import type { CloseOutcome, HandleState, ResourceHandle, ResourceKindPlugin } from '../types';
 import { normalizeDirectory } from './compose-spec';
 import { VSCODE_WINDOW_KIND } from './vscode-window-spec';
@@ -51,6 +52,12 @@ export interface VscodeWindowDeps {
   /** Whether any instance of the app is running (helper isRunning). null = couldn't tell. */
   isAppRunning: (bundleId: string) => Promise<boolean | null>;
   sendClose: (sessionId: string) => Promise<string>;
+  /**
+   * Opens `folder` in the app — for an already-open window, VS Code
+   * brings that window up (how it's focused: no window id is tracked).
+   * Resolves to why it couldn't, or null.
+   */
+  openFolder: (bundleId: string, folder: string) => Promise<string | null>;
   readAck: typeof readWindowCommandAck;
   /** Takes back an unanswered command; false if the window had already claimed it. */
   withdraw: (commandId: string) => Promise<boolean>;
@@ -59,9 +66,13 @@ export interface VscodeWindowDeps {
 
 export const defaultCommandDeps: Pick<
   VscodeWindowDeps,
-  'listHeartbeats' | 'sendClose' | 'readAck' | 'withdraw' | 'cleanUp'
+  'listHeartbeats' | 'sendClose' | 'readAck' | 'withdraw' | 'cleanUp' | 'openFolder'
 > = {
   listHeartbeats: listWindowHeartbeats,
+  openFolder: async (bundleId, folder) => {
+    const result = await runCommand('open', ['-b', bundleId, folder]);
+    return result.success ? null : result.message;
+  },
   sendClose: (sessionId) => writeWindowCommand(sessionId, 'close'),
   readAck: readWindowCommandAck,
   withdraw: deleteWindowCommand,
@@ -166,6 +177,16 @@ export function createVscodeWindowKind(
     },
 
     check: (handle) => checkHandle(handle),
+
+    async focus(raw) {
+      // Only an open window: opening the folder of a closed one would
+      // open a new window, and bringing forward never opens anything.
+      const state = await checkHandle(raw);
+      if (state.state !== 'alive') return `its window isn't open (${state.state})`;
+      const handle = HandleSchema.safeParse(raw);
+      if (!handle.success) return 'unreadable record';
+      return deps.openFolder(handle.data.bundleId, handle.data.folder);
+    },
 
     async close(raw): Promise<CloseOutcome> {
       const state = await checkHandle(raw);

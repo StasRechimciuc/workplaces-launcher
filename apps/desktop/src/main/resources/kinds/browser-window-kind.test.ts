@@ -43,6 +43,7 @@ let scripting: 'ok' | 'denied';
 let goneIds: Set<number>;
 let closeOutcome: 'closed' | 'still-open';
 let closed: number[];
+let focused: number[];
 let sessions: BrowserSessions;
 const watched: string[] = [];
 
@@ -81,6 +82,9 @@ const helper = {
         };
       case 'isRunning':
         return { ok: true, result: { running, pids: running ? [77] : [], apps: [] } };
+      case 'focusWindow':
+        focused.push(params['windowId'] as number);
+        return { ok: true, result: { activated: true, via: 'activate' } };
       case 'closeWindow':
         closed.push(params['windowId'] as number);
         if (closeOutcome === 'closed') {
@@ -172,6 +176,7 @@ beforeEach(() => {
   goneIds = new Set();
   closeOutcome = 'closed';
   closed = [];
+  focused = [];
   watched.length = 0;
   sessions = new BrowserSessions({ read: () => undefined, write: () => {} });
   vi.restoreAllMocks();
@@ -381,6 +386,21 @@ describe('finding it again', () => {
     goneIds.add(42);
     windows.push(userWindow({ windowId: 8, scriptId: '800', urls: ['client x'] }));
     await expect(kind.check(handle, spec.identity)).resolves.toEqual({ state: 'gone' });
+  });
+});
+
+describe('bringing it forward', () => {
+  it('raises its own window — found again by name if Chrome restarted', async () => {
+    goneIds.add(42);
+    windows.push(stepWindow({ windowId: 99, scriptId: '999', name: 'Client X' }));
+    await expect(kind.focus!(handle)).resolves.toBeNull();
+    expect(focused).toEqual([99]);
+  });
+
+  it('touches nothing when its window is gone', async () => {
+    goneIds.add(42);
+    await expect(kind.focus!(handle)).resolves.toBe('its window is gone');
+    expect(focused).toEqual([]);
   });
 });
 

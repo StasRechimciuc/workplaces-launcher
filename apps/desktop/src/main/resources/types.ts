@@ -89,6 +89,14 @@ export interface ResourceKindPlugin {
    */
   revive?(handle: ResourceHandle): Promise<boolean>;
   /**
+   * Brings it to the front, un-minimized — after a Restore, so the
+   * restored workspace is what the user sees (Phase 5). Never opens,
+   * closes or re-runs anything. Optional: a resource without a window of
+   * its own (an app, a Compose stack) has nothing to bring forward.
+   * Resolves to why it couldn't, or null when it did.
+   */
+  focus?(handle: ResourceHandle): Promise<string | null>;
+  /**
    * At startup, for an 'opening' record left by a crash or a restart
    * mid-open: the instance that record was opening, if one is running
    * and provably started after `since` (the record's creation time).

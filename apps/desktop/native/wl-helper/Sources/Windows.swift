@@ -296,7 +296,13 @@ final class WindowRegistry {
         AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse),
         "un-minimize")
     }
-    try check(AXUIElementPerformAction(window, kAXRaiseAction as CFString), "raise")
+    // Some windows don't support raising (Calculator's, on macOS 26):
+    // activating the app below still brings its main window up — so only
+    // a real failure (no permission, an app not answering) is an error.
+    let raised = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+    if raised != .actionUnsupported && raised != .attributeUnsupported {
+      try check(raised, "raise")
+    }
     // Best effort: makes it the window the app itself treats as main,
     // so activation doesn't bring a different one of its windows up.
     _ = AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)

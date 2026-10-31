@@ -65,7 +65,7 @@ import {
 } from '../orchestrator/app-hotkeys-store';
 import { detectCurrentWorkspaceDraft } from '../orchestrator/workspace-detection';
 import { settingsStore } from '../settings/store';
-import { validateStepsWithRegisteredTools } from '../tools/validate-steps';
+import { validateStepsWithRegisteredTools, withoutBlankRows } from '../tools/validate-steps';
 import {
   deleteWorkspaceConfig,
   loadAllWorkspaceConfigs,
@@ -280,7 +280,7 @@ export async function previewWorkspaceStepsChange(
     version: CURRENT_WORKSPACE_CONFIG_VERSION,
     id: saved.id,
     name: saved.name,
-    steps: assignStepIds(steps),
+    steps: assignStepIds(withoutBlankRows(steps)),
   });
   if (!proposed.success) return [];
   return previewStepsChange(proposed.config, allConfigs);
@@ -384,7 +384,7 @@ export async function createWorkspace(input: unknown): Promise<CreateWorkspaceRe
     version: CURRENT_WORKSPACE_CONFIG_VERSION,
     id: randomUUID(),
     name,
-    steps: assignStepIds(steps),
+    steps: assignStepIds(withoutBlankRows(steps)),
   });
   if (!parsed.success) {
     return { success: false, error: parsed.error, code: ERROR_CODES.WORKSPACE_INVALID.code };
@@ -401,8 +401,32 @@ export async function createWorkspace(input: unknown): Promise<CreateWorkspaceRe
     };
   }
 
+  const taken = await nameTaken(parsed.config.name, parsed.config.id);
+  if (taken) return taken;
+
   await saveWorkspaceConfig(parsed.config);
   return { success: true, config: parsed.config };
+}
+
+/**
+ * Workspace names are unique, ignoring case and surrounding spaces: a
+ * workspace's browser window is named after it, and that name is how
+ * its window is told apart (resources/kinds/browser-window-kind.ts).
+ */
+async function nameTaken(
+  name: string,
+  ownId: string,
+): Promise<{ success: false; error: string; code: string } | null> {
+  const wanted = name.trim().toLowerCase();
+  const { configs } = await loadAllWorkspaceConfigs();
+  const other = configs.find((c) => c.id !== ownId && c.name.trim().toLowerCase() === wanted);
+  return other
+    ? {
+        success: false,
+        error: `Another workspace is already called "${other.name}" — choose a different name.`,
+        code: ERROR_CODES.WORKSPACE_NAME_TAKEN.code,
+      }
+    : null;
 }
 
 /**
@@ -433,7 +457,7 @@ export async function updateWorkspace(input: unknown): Promise<UpdateWorkspaceRe
     version: CURRENT_WORKSPACE_CONFIG_VERSION,
     id,
     name,
-    steps: assignStepIds(steps),
+    steps: assignStepIds(withoutBlankRows(steps)),
   });
   if (!parsed.success) {
     return { success: false, error: parsed.error, code: ERROR_CODES.WORKSPACE_INVALID.code };
@@ -449,6 +473,9 @@ export async function updateWorkspace(input: unknown): Promise<UpdateWorkspaceRe
       ...(validationFailure.fieldErrors ? { fieldErrors: validationFailure.fieldErrors } : {}),
     };
   }
+
+  const taken = await nameTaken(parsed.config.name, parsed.config.id);
+  if (taken) return taken;
 
   await saveWorkspaceConfig(parsed.config);
   return { success: true, config: parsed.config };

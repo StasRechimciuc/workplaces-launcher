@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CHROME_APP_NAME, ERROR_CODES } from '@workspace-launcher/shared';
 import { chromeTool } from './chrome-tool';
-import { getPlatformLauncher } from '../platform';
 import { resolveAppLaunchTarget } from './resolve-app-path';
-
-vi.mock('../platform', () => ({
-  getPlatformLauncher: vi.fn(),
-}));
+import { getPlatformLauncher } from '../platform';
+import { readBundleId } from '../platform/macos/bundle-id';
+import { getBrowserSessions } from '../resources/runtime';
+import { BrowserSessions } from '../resources/browser-sessions';
+import { identityKeyFor } from '../resources/kind-registry';
+import { placeholderUrl } from '../platform/browser-placeholder';
 
 // Real detection shells out to plutil/scans /Applications — never
 // exercised in a unit test, same precedent as every other filesystem/
@@ -15,27 +16,64 @@ vi.mock('../platform', () => ({
 vi.mock('./resolve-app-path', () => ({
   resolveAppLaunchTarget: vi.fn(),
 }));
+vi.mock('../platform', () => ({ getPlatformLauncher: vi.fn() }));
+vi.mock('../platform/macos/bundle-id', () => ({ readBundleId: vi.fn() }));
+vi.mock('electron-store', () => ({ default: class {} }));
+/** What the fake browser answers: running with these windows, or not running. */
+let browserWindowCounts: (number | 'not-running')[] = [];
+vi.mock('../resources/runtime', () => ({
+  getBrowserSessions: vi.fn(),
+  browserAdapterFor: () => ({
+    readWindows: async () => {
+      const next =
+        browserWindowCounts.length > 1
+          ? browserWindowCounts.shift()!
+          : (browserWindowCounts[0] ?? 1);
+      return next === 'not-running'
+        ? { ok: false, code: 'not-running', message: 'not running' }
+        : { ok: true, value: Array.from({ length: next }, () => ({})) };
+    },
+  }),
+}));
 
-const mockedGetPlatformLauncher = vi.mocked(getPlatformLauncher);
 const mockedResolveAppLaunchTarget = vi.mocked(resolveAppLaunchTarget);
+const openBrowserWindow = vi.fn();
 const openUrlInBrowserProfile = vi.fn();
+const CHROME = '/Applications/Google Chrome.app';
+
+let sessions: BrowserSessions;
 
 beforeEach(() => {
-  openUrlInBrowserProfile.mockReset();
-  mockedGetPlatformLauncher.mockReset();
-  mockedGetPlatformLauncher.mockReturnValue({
+  mockedResolveAppLaunchTarget.mockReset().mockResolvedValue({ ok: true, target: CHROME });
+  openBrowserWindow.mockReset().mockResolvedValue({ success: true, message: 'Opened.' });
+  openUrlInBrowserProfile.mockReset().mockResolvedValue({ success: true, message: 'Opened.' });
+  browserWindowCounts = [1];
+  vi.mocked(getPlatformLauncher).mockReturnValue({
     launchApp: vi.fn(),
     openInApp: vi.fn(),
     openUrlInBrowserProfile,
+    openBrowserWindow,
     openTerminal: vi.fn(),
     openFileDefault: vi.fn(),
     openUrlDefault: vi.fn(),
   });
-  mockedResolveAppLaunchTarget.mockReset().mockResolvedValue({
-    ok: true,
-    target: CHROME_APP_NAME,
-  });
+  vi.mocked(readBundleId).mockReset().mockResolvedValue('com.google.Chrome');
+  sessions = new BrowserSessions({ read: () => undefined, write: () => {} });
+  vi.mocked(getBrowserSessions).mockReturnValue(sessions);
 });
+
+const CTX = { workspaceName: 'Client X', stepId: 'step-1' };
+const RUN = { workspaceId: 'ws-1', stepId: 'step-1' };
+
+/** What the last run opened, as `open`'s arguments would spell it. */
+function openArgs(): string[] {
+  const [browser, profile, urls] = openBrowserWindow.mock.calls.at(-1)! as [
+    string,
+    string,
+    string[],
+  ];
+  return ['-n', '-a', browser, '--args', `--profile-directory=${profile}`, '--new-window', ...urls];
+}
 
 describe('chromeTool', () => {
   it('has type "chrome"', () => {
@@ -95,124 +133,138 @@ describe('chromeTool', () => {
     });
   });
 
-  describe('run', () => {
-    it('launches the profile with no url argument when urls is empty', async () => {
-      openUrlInBrowserProfile.mockResolvedValueOnce({
-        success: true,
-        message: 'Opened Google Chrome (profile: Work).',
+  describe('resources', () => {
+    it('declares the step’s own window, named after its workspace', async () => {
+      const [spec] = await chromeTool.resources!(
+        { profile: 'Profile 1', profileName: 'Work', urls: ['https://a.com'] },
+        CTX,
+      );
+      expect(spec).toEqual({
+        kind: 'browser-window',
+        identity: { bundleId: 'com.google.Chrome', profile: 'Profile 1', stepId: 'step-1' },
+        label: 'Google Chrome window (Work)',
+        appName: 'Google Chrome',
+        options: {
+          appName: 'Google Chrome',
+          windowName: 'Client X',
+          seedUrls: '["https://a.com"]',
+        },
       });
-
-      const result = await chromeTool.run({ profile: 'Work', urls: [] }, { workspaceId: 'ws-1' });
-
-      expect(openUrlInBrowserProfile).toHaveBeenCalledTimes(1);
-      expect(openUrlInBrowserProfile).toHaveBeenCalledWith('Google Chrome', 'Work');
-      expect(result.success).toBe(true);
     });
 
-    it('does not crash when urls is entirely absent from params (not just empty)', async () => {
-      // Regression test: a step saved before the urls textarea was ever
-      // touched is persisted as {profile: '...'} with no urls key at
-      // all — validate()'s zod default([]) only affects pass/fail, it
-      // never writes the defaulted value back into what run() receives.
-      openUrlInBrowserProfile.mockResolvedValueOnce({
-        success: true,
-        message: 'Opened Google Chrome (profile: Work).',
-      });
-
-      const result = await chromeTool.run(
-        { profile: 'Work' } as unknown as Parameters<typeof chromeTool.run>[0],
-        { workspaceId: 'ws-1' },
+    it('gives every step its own window — never one shared by two workspaces', async () => {
+      const [a] = await chromeTool.resources!({ profile: 'Default', urls: [] }, CTX);
+      const [b] = await chromeTool.resources!(
+        { profile: 'Default', urls: [] },
+        { workspaceName: 'Other', stepId: 'step-2' },
       );
+      expect(identityKeyFor(a!)).not.toBe(identityKeyFor(b!));
+    });
 
-      expect(openUrlInBrowserProfile).toHaveBeenCalledWith('Google Chrome', 'Work');
-      expect(result.success).toBe(true);
+    it('stays untracked when the browser’s bundle can’t be read', async () => {
+      vi.mocked(readBundleId).mockResolvedValueOnce(null);
+      await expect(chromeTool.resources!({ profile: 'Default', urls: [] }, CTX)).resolves.toEqual(
+        [],
+      );
+    });
+  });
+
+  describe('run', () => {
+    it('opens the step’s URLs in a new window of its profile — the first tab real, the rest loading on click', async () => {
+      const result = await chromeTool.run(
+        { profile: 'Profile 1', profileName: 'Work', urls: ['https://a.com', 'https://b.com'] },
+        RUN,
+      );
+      expect(openArgs()).toEqual([
+        '-n',
+        '-a',
+        CHROME,
+        '--args',
+        '--profile-directory=Profile 1',
+        '--new-window',
+        'https://a.com',
+        placeholderUrl('https://b.com', ''),
+      ]);
+      expect(result).toMatchObject({ success: true, message: expect.stringContaining('2 tabs') });
+    });
+
+    it('reopens the tabs last open in its window instead of the step’s old URLs', async () => {
+      const [spec] = await chromeTool.resources!(
+        { profile: 'Default', urls: ['https://a.com'] },
+        CTX,
+      );
+      sessions.save(identityKeyFor(spec!), {
+        tabs: [
+          { title: 'Docs', url: 'https://docs.com' },
+          { title: 'Mail', url: 'https://mail.com' },
+        ],
+        activeTabIndex: 2,
+      });
+      const result = await chromeTool.run({ profile: 'Default', urls: ['https://a.com'] }, RUN);
+      expect(openArgs().slice(6)).toEqual([
+        'https://docs.com',
+        placeholderUrl('https://mail.com', 'Mail'),
+      ]);
+      expect(result.message).toContain('from last time');
+    });
+
+    it('reuses its window while it’s open — never a second one', async () => {
+      const [spec] = await chromeTool.resources!({ profile: 'Default', urls: [] }, CTX);
+      const result = await chromeTool.run(
+        { profile: 'Default', urls: [] },
+        { ...RUN, liveResourceKeys: new Set([identityKeyFor(spec!)]) },
+      );
+      expect(openBrowserWindow).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ success: true, message: expect.stringContaining('reused') });
+    });
+
+    it('opens the profile on its own first when the browser isn’t running, and waits for its windows', async () => {
+      // Not running, then starting up: 1 window, 2 (its last session coming back), 2 — settled.
+      browserWindowCounts = ['not-running', 1, 2, 2];
+      await chromeTool.run({ profile: 'Default', urls: ['https://a.com'] }, RUN);
+      expect(openUrlInBrowserProfile).toHaveBeenCalledWith(CHROME, 'Default');
+      expect(openUrlInBrowserProfile.mock.invocationCallOrder[0]).toBeLessThan(
+        openBrowserWindow.mock.invocationCallOrder[0]!,
+      );
+      expect(browserWindowCounts).toEqual([2]);
+    }, 10_000);
+
+    it('never starts a browser that’s already running', async () => {
+      await chromeTool.run({ profile: 'Default', urls: [] }, RUN);
+      expect(openUrlInBrowserProfile).not.toHaveBeenCalled();
+    });
+
+    it('opens an empty window of the profile when the step has no URLs', async () => {
+      await chromeTool.run({ profile: 'Default', urls: [] }, RUN);
+      expect(openArgs().at(-1)).toBe('--new-window');
     });
 
     it('fails loudly and never opens the browser at all when resolution fails', async () => {
-      mockedResolveAppLaunchTarget.mockResolvedValueOnce({
+      mockedResolveAppLaunchTarget.mockResolvedValue({
         ok: false,
         message: 'Google Chrome not found at /old/path — it may have moved or been uninstalled.',
       });
 
-      const result = await chromeTool.run(
-        { profile: 'Work', urls: ['https://a.com'] },
-        { workspaceId: 'ws-1' },
-      );
+      const result = await chromeTool.run({ profile: 'Work', urls: ['https://a.com'] }, RUN);
 
       expect(result.success).toBe(false);
       expect(result.message).toContain('not found at /old/path');
       expect(result.message).toContain('Chrome was not opened');
       expect(result.code).toBe(ERROR_CODES.APP_PATH_NOT_FOUND.code);
-      expect(openUrlInBrowserProfile).not.toHaveBeenCalled();
+      expect(openBrowserWindow).not.toHaveBeenCalled();
     });
 
-    it('opens each url sequentially, in order, against the same profile', async () => {
-      const order: string[] = [];
-      openUrlInBrowserProfile.mockImplementation(
-        async (_browser: string, _profile: string, url?: string) => {
-          order.push(url ?? '(none)');
-          return { success: true, message: `Opened ${url}.` };
-        },
-      );
-
-      const result = await chromeTool.run(
-        { profile: 'Work', urls: ['https://a.com', 'https://b.com', 'https://c.com'] },
-        { workspaceId: 'ws-1' },
-      );
-
-      expect(openUrlInBrowserProfile).toHaveBeenCalledTimes(3);
-      expect(order).toEqual(['https://a.com', 'https://b.com', 'https://c.com']);
-      expect(openUrlInBrowserProfile).toHaveBeenNthCalledWith(
-        1,
-        'Google Chrome',
-        'Work',
-        'https://a.com',
-      );
-      expect(openUrlInBrowserProfile).toHaveBeenNthCalledWith(
-        2,
-        'Google Chrome',
-        'Work',
-        'https://b.com',
-      );
-      expect(openUrlInBrowserProfile).toHaveBeenNthCalledWith(
-        3,
-        'Google Chrome',
-        'Work',
-        'https://c.com',
-      );
-      expect(result.success).toBe(true);
-      expect(result.message).toContain('3 tabs');
-    });
-
-    it('reports a partial failure, naming which url(s) failed and why, without throwing', async () => {
-      openUrlInBrowserProfile
-        .mockResolvedValueOnce({ success: true, message: 'Opened https://a.com.' })
-        .mockResolvedValueOnce({ success: false, message: 'Chrome not found.' })
-        .mockResolvedValueOnce({ success: true, message: 'Opened https://c.com.' });
-
-      const result = await chromeTool.run(
-        { profile: 'Work', urls: ['https://a.com', 'https://b.com', 'https://c.com'] },
-        { workspaceId: 'ws-1' },
-      );
-
-      expect(result.success).toBe(false);
-      expect(result.message).toContain('https://b.com');
-      expect(result.message).toContain('Chrome not found.');
-      expect(result.message).toContain('2 of 3');
-      expect(result.code).toBe(ERROR_CODES.CHROME_TABS_FAILED.code);
-    });
-
-    it('surfaces a platform-launcher failure as a failed StepResult for the zero-urls case', async () => {
-      openUrlInBrowserProfile.mockResolvedValueOnce({
+    it('reports a failed open as a failed step', async () => {
+      openBrowserWindow.mockResolvedValue({
         success: false,
-        message: 'profile not found',
+        message: `Failed to open a ${CHROME_APP_NAME} window (profile: Default): boom`,
       });
-
-      const result = await chromeTool.run({ profile: 'Ghost', urls: [] }, { workspaceId: 'ws-1' });
-
-      expect(result.success).toBe(false);
-      expect(result.message).toContain('profile not found');
-      expect(result.code).toBe(ERROR_CODES.CHROME_TABS_FAILED.code);
+      const result = await chromeTool.run({ profile: 'Default', urls: [] }, RUN);
+      expect(result).toMatchObject({
+        success: false,
+        code: ERROR_CODES.CHROME_TABS_FAILED.code,
+        message: expect.stringContaining(CHROME_APP_NAME),
+      });
     });
   });
 
@@ -224,19 +276,10 @@ describe('chromeTool', () => {
   });
 
   describe('detail', () => {
-    it('reports a profile-only launch with zero tabs', () => {
-      expect(chromeTool.detail?.({ profile: 'Work', urls: [] })).toBe(
-        'Opens Chrome (profile: Work).',
-      );
-    });
-
-    it('pluralizes correctly for one vs multiple tabs', () => {
-      expect(chromeTool.detail?.({ profile: 'Work', urls: ['https://a.com'] })).toBe(
-        'Opens 1 tab in Chrome (profile: Work).',
-      );
-      expect(
-        chromeTool.detail?.({ profile: 'Work', urls: ['https://a.com', 'https://b.com'] }),
-      ).toBe('Opens 2 tabs in Chrome (profile: Work).');
+    it('says it reopens the tabs last open in its own window — whatever old URLs it has', () => {
+      const expected = 'Opens its own Chrome window (profile: Work) with the tabs last open in it.';
+      expect(chromeTool.detail?.({ profile: 'Work', urls: [] })).toBe(expected);
+      expect(chromeTool.detail?.({ profile: 'Work', urls: ['https://a.com'] })).toBe(expected);
     });
 
     it('degrades gracefully when profile is missing/invalid raw input', () => {
@@ -249,26 +292,22 @@ describe('chromeTool', () => {
 
     it('prefers the human profileName over the raw folder name when present', () => {
       expect(chromeTool.detail?.({ profile: 'Profile 2', profileName: 'Work', urls: [] })).toBe(
-        'Opens Chrome (profile: Work).',
+        'Opens its own Chrome window (profile: Work) with the tabs last open in it.',
       );
     });
 
     it('falls back to the raw folder name when no profileName is set (legacy config)', () => {
       expect(chromeTool.detail?.({ profile: 'Profile 2', urls: [] })).toBe(
-        'Opens Chrome (profile: Profile 2).',
+        'Opens its own Chrome window (profile: Profile 2) with the tabs last open in it.',
       );
     });
   });
 
   describe('expand', () => {
-    it('returns Profile + Tab rows when profile is present', () => {
+    it('returns just the Profile row — even for a step with old URLs', () => {
       expect(chromeTool.expand?.({ profile: 'Work', urls: ['https://a.com'] })).toEqual([
         { i: 'globe', label: 'Profile', mono: 'Work' },
-        { i: 'check', label: 'Tab', mono: 'https://a.com' },
       ]);
-    });
-
-    it('returns just the Profile row when there are no urls', () => {
       expect(chromeTool.expand?.({ profile: 'Work', urls: [] })).toEqual([
         { i: 'globe', label: 'Profile', mono: 'Work' },
       ]);

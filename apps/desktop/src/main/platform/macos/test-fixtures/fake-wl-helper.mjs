@@ -19,7 +19,8 @@
 // crash (exits 3 without answering), silent (never answers), garbage
 // (a junk line, then the answer), split (the answer written in two
 // chunks), batch (the answer and a stray unknown-id response in one
-// chunk), malformed (a well-formed line that isn't a valid response).
+// chunk), malformed (a well-formed line that isn't a valid response),
+// watchApp (answers, then pushes one app-changed event for that bundle).
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
@@ -41,7 +42,7 @@ if (scenario === 'flaky-start') {
 if (scenario === 'never-ready') {
   setInterval(() => {}, 1000);
 } else {
-  send({ event: 'ready', protocolVersion: scenario === 'bad-version' ? 99 : 1, pid: process.pid });
+  send({ event: 'ready', protocolVersion: scenario === 'bad-version' ? 99 : 2, pid: process.pid });
 }
 
 const rl = createInterface({ input: process.stdin });
@@ -84,6 +85,9 @@ function respond({ id, method, params }) {
       );
     case 'malformed':
       return send({ id, ok: 'yes' });
+    case 'watchApp':
+      send({ id, ok: true, result: { watching: true, pids: [4242] } });
+      return send({ event: 'app-changed', bundleId: params.bundleId, pid: 4242 });
     default:
       return send({ id, ok: false, error: { code: 'unknown-method', message: method } });
   }

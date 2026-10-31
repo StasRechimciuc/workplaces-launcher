@@ -2,7 +2,6 @@ import { useState } from 'react';
 import type { ChromeProfileInfo } from '@workspace-launcher/shared';
 import { Icon } from '../../icons';
 import { useIsMounted } from '../../lib/useIsMounted';
-import { EditableStringList } from '../EditableStringList';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,10 +24,9 @@ const BUTTON_CLASS =
  * the picker's first open, same convention as spotify-fields.tsx's
  * fetchPlaylists — avoids a read nobody asked for on every modal open.
  *
- * URLs render via EditableStringList — same reasoning as
- * vscode-fields.tsx's terminal commands: an in-progress empty row is a
- * normal editing state, only surfaced as this tool's own "each url must
- * be a non-empty string" save-time validation error if left blank.
+ * No URL list: the step's window remembers the tabs last open in it and
+ * reopens exactly those (WCs/WC__window-tracking.md, Phase 4) — a second
+ * list to keep in sync with the window would only disagree with it.
  */
 export function ChromeFields({
   params,
@@ -42,9 +40,6 @@ export function ChromeFields({
   const [error, setError] = useState<string | null>(null);
   const isMountedRef = useIsMounted();
 
-  const urls = Array.isArray(params['urls'])
-    ? params['urls'].filter((u): u is string => typeof u === 'string')
-    : [];
   const profile = typeof params['profile'] === 'string' ? params['profile'] : '';
   const profileName = typeof params['profileName'] === 'string' ? params['profileName'] : '';
   const appPath = typeof params['appPath'] === 'string' ? params['appPath'] : '';
@@ -125,15 +120,10 @@ export function ChromeFields({
         <p className="text-[11px] text-danger">{fieldErrors['profile']}</p>
       )}
 
-      <EditableStringList
-        values={urls}
-        onChange={(next) => {
-          onChange({ urls: next });
-        }}
-        placeholder="e.g. https://example.com"
-        addLabel="Add URL"
-        removeAriaLabel="Remove URL"
-      />
+      <p className="mt-1 text-[11.5px] text-text-faint">
+        Opens its own Chrome window and remembers the tabs you leave open in it — the next Restore
+        reopens exactly those.
+      </p>
     </div>
   );
 }

@@ -19,9 +19,21 @@ struct WindowInfo {
   /// helper windows Chrome creates (finding H), which must never be
   /// mistaken for a step's window.
   let standard: Bool
+  /// Position and size on screen — what matches a window to the one a
+  /// browser's scripting interface reports (Phase 4 spike: identical).
+  let frame: CGRect?
 
   var json: JSONObject {
-    ["windowId": id, "pid": pid, "title": title, "minimized": minimized, "standard": standard]
+    var json: JSONObject = [
+      "windowId": id, "pid": pid, "title": title, "minimized": minimized, "standard": standard,
+    ]
+    if let frame {
+      json["frame"] = [
+        "x": Int(frame.origin.x), "y": Int(frame.origin.y),
+        "width": Int(frame.size.width), "height": Int(frame.size.height),
+      ]
+    }
+    return json
   }
 }
 
@@ -49,9 +61,15 @@ final class WindowRegistry {
   /// would report the window alive again on the next call.
   private var gone: Set<CGWindowID> = []
 
+  /// Strict: an app that's running but whose windows can't be read is
+  /// an error here, never an empty list — an empty list reads as "no
+  /// windows open", and callers act on that (it once made the user's
+  /// window look new). Capturing keeps its own lenient read: it polls.
   func listWindows(bundleId: String) throws -> [WindowInfo] {
     try runningApps(bundleId).flatMap { app in
-      try axWindows(app.processIdentifier).compactMap { info($0, pid: app.processIdentifier) }
+      let windows: [AXUIElement] =
+        try attribute(AXUIElementCreateApplication(app.processIdentifier), kAXWindowsAttribute) ?? []
+      return windows.compactMap { info($0, pid: app.processIdentifier) }
     }
   }
 
@@ -130,6 +148,84 @@ final class WindowRegistry {
       return ["state": "alive", "reachable": false]
     }
     return ["state": "gone", "reachable": false]
+  }
+
+  /// The titles of the tabs in the window's own tab strip, in order —
+  /// cheap to read, and how a change to a browser window's tabs is
+  /// noticed (its URLs need the browser's scripting interface). A
+  /// window with no tab strip reports `hasTabStrip: false`.
+  func windowTabs(pid: pid_t, windowId: CGWindowID) throws -> JSONObject {
+    guard let window = try element(pid: pid, windowId: windowId) else {
+      throw RpcError(code: "gone", message: "Window \(windowId) is gone")
+    }
+    guard let strip = try tabStrip(window) else { return ["hasTabStrip": false, "titles": []] }
+    let tabs = try tabs(in: strip, depth: 3)
+    var result: JSONObject = [
+      "hasTabStrip": true,
+      "titles": tabs.map { tab in (try? attribute(tab, kAXTitleAttribute)) ?? "" },
+    ]
+    // 1-based, like the browser's own; the selected tab's radio button has value 1.
+    if let selected = tabs.firstIndex(where: { tab in
+      let value: NSNumber? = try? attribute(tab, kAXValueAttribute)
+      return value?.intValue == 1
+    }) {
+      result["selectedIndex"] = selected + 1
+    }
+    // The page on screen — the only tab whose URL Accessibility exposes.
+    if let page = try webArea(window), let url: URL = try? attribute(page, "AXURL") {
+      result["activeUrl"] = url.absoluteString
+    }
+    return result
+  }
+
+  /// The window's page (its first `AXWebArea`), breadth first.
+  private func webArea(_ window: AXUIElement) throws -> AXUIElement? {
+    var level: [AXUIElement] = [window]
+    for _ in 0..<12 {
+      var next: [AXUIElement] = []
+      for element in level {
+        let children: [AXUIElement] = try attribute(element, kAXChildrenAttribute) ?? []
+        for child in children {
+          let role: String? = try? attribute(child, kAXRoleAttribute)
+          if role == "AXWebArea" { return child }
+          next.append(child)
+        }
+      }
+      if next.isEmpty { return nil }
+      level = next
+    }
+    return nil
+  }
+
+  /// Tabs inside a tab strip, in order — grouped tabs sit one level
+  /// down, inside their group.
+  private func tabs(in element: AXUIElement, depth: Int) throws -> [AXUIElement] {
+    let children: [AXUIElement] = try attribute(element, kAXChildrenAttribute) ?? []
+    return try children.flatMap { child -> [AXUIElement] in
+      let role: String? = try? attribute(child, kAXRoleAttribute)
+      if role == kAXRadioButtonRole { return [child] }
+      return depth > 1 ? try tabs(in: child, depth: depth - 1) : []
+    }
+  }
+
+  /// The window's first tab group outside any page, breadth first.
+  private func tabStrip(_ window: AXUIElement) throws -> AXUIElement? {
+    // Chrome's sits 7 levels down (window > 6 groups > tab group).
+    var level: [AXUIElement] = [window]
+    for _ in 0..<10 {
+      var next: [AXUIElement] = []
+      for element in level {
+        let children: [AXUIElement] = try attribute(element, kAXChildrenAttribute) ?? []
+        for child in children {
+          let role: String? = try? attribute(child, kAXRoleAttribute)
+          if role == kAXTabGroupRole { return child }
+          if role != "AXWebArea" { next.append(child) }
+        }
+      }
+      if next.isEmpty { return nil }
+      level = next
+    }
+    return nil
   }
 
   /// Presses the window's own close button — never a forced close.
@@ -266,7 +362,19 @@ final class WindowRegistry {
       pid: pid,
       title: (try? attribute(element, kAXTitleAttribute)) ?? "",
       minimized: (try? attribute(element, kAXMinimizedAttribute)) ?? false,
-      standard: subrole == (kAXStandardWindowSubrole as String))
+      standard: subrole == (kAXStandardWindowSubrole as String),
+      frame: frameOf(element))
+  }
+
+  private func frameOf(_ element: AXUIElement) -> CGRect? {
+    guard let position: AXValue = try? attribute(element, kAXPositionAttribute),
+      let size: AXValue = try? attribute(element, kAXSizeAttribute)
+    else { return nil }
+    var origin = CGPoint.zero
+    var extent = CGSize.zero
+    guard AXValueGetValue(position, .cgPoint, &origin), AXValueGetValue(size, .cgSize, &extent)
+    else { return nil }
+    return CGRect(origin: origin, size: extent)
   }
 
   private func hasSheet(_ window: AXUIElement) throws -> Bool {

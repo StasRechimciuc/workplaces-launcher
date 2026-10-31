@@ -161,6 +161,13 @@ export const ERROR_CODES = {
     explanation:
       "This workspace couldn't be saved because one or more of its steps have invalid settings.",
   },
+  WORKSPACE_NAME_TAKEN: {
+    code: 'ER-CFG-04',
+    title: 'Workspace name already used',
+    headline: 'Another workspace already has this name.',
+    explanation:
+      "Every workspace needs its own name — its browser window is named after it, and that name is how the app tells its window apart from the others. Choose a name no other workspace uses (capitalization doesn't count as different).",
+  },
   WORKSPACE_NOT_FOUND: {
     code: 'ER-CFG-03',
     title: 'Workspace not found',

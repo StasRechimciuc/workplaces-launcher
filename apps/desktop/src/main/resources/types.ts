@@ -66,7 +66,7 @@ export interface ResourceKindPlugin {
    */
   readonly closesWholeApp: boolean;
   /** Before the step runs: whatever capture() needs to tell what's new. */
-  snapshot(identity: ResourceSpec['identity']): Promise<unknown>;
+  snapshot(identity: ResourceSpec['identity'], options?: ResourceSpec['options']): Promise<unknown>;
   /**
    * After the step runs: the instance it opened (or found already
    * open). `options` (ResourceSpec.options) is the kind's to keep in

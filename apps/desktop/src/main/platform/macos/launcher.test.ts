@@ -117,6 +117,54 @@ describe('macosLauncher', () => {
     });
   });
 
+  describe('openBrowserWindow', () => {
+    it('opens its own new window of the profile with every URL — never tabs in an existing one', async () => {
+      runCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
+
+      const result = await macosLauncher.openBrowserWindow!(
+        '/Applications/Google Chrome.app',
+        'Profile 1',
+        ['https://a.com', 'https://b.com'],
+      );
+
+      expect(runCommand).toHaveBeenCalledWith('open', [
+        '-n',
+        '-a',
+        '/Applications/Google Chrome.app',
+        '--args',
+        '--profile-directory=Profile 1',
+        '--new-window',
+        'https://a.com',
+        'https://b.com',
+      ]);
+      expect(result.success).toBe(true);
+    });
+
+    it('refuses anything that isn’t a URL — it would reach Chrome as a flag', async () => {
+      const result = await macosLauncher.openBrowserWindow!('Google Chrome', 'Default', [
+        'https://a.com',
+        '--load-extension=/tmp/evil',
+      ]);
+      expect(result.success).toBe(false);
+      expect(runCommand).not.toHaveBeenCalled();
+      await expect(
+        macosLauncher.openUrlInBrowserProfile('Google Chrome', 'Default', '--incognito'),
+      ).resolves.toMatchObject({ success: false });
+    });
+
+    it('reports a failed open', async () => {
+      runCommand.mockResolvedValueOnce({
+        success: false,
+        message: 'boom',
+        stdout: '',
+        stderr: '',
+        code: 1,
+      });
+      const result = await macosLauncher.openBrowserWindow!('Google Chrome', 'Default', []);
+      expect(result).toMatchObject({ success: false, message: expect.stringContaining('boom') });
+    });
+  });
+
   describe('openUrlInBrowserProfile', () => {
     it('passes --profile-directory and the URL through --args', async () => {
       runCommand.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });

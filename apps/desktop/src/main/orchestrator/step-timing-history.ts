@@ -65,6 +65,9 @@ export const DOCKER_MIN_ADAPTIVE_TIMEOUT_MS = 4 * 60 * 1000;
  * a slower Terminal start then "timed out" with its window open but
  * never recorded (found 2026-10-30).
  */
+/** A Chrome step's floor: starting Chrome and letting it reopen its windows (up to 15s) comes first. */
+export const CHROME_MIN_ADAPTIVE_TIMEOUT_MS = 30_000;
+
 export const TERMINAL_OPEN_WORST_CASE_MS =
   TERMINAL_SCRIPT_START_TIMEOUT_MS + TERMINAL_COMMAND_POLL_TIMEOUT_MS + 1000;
 
@@ -107,6 +110,8 @@ function timingHistoryKey(type: string, params: Record<string, unknown>): string
 
 function minAdaptiveTimeoutMsFor(key: string, params: Record<string, unknown>): number {
   if (key.startsWith('docker:')) return DOCKER_MIN_ADAPTIVE_TIMEOUT_MS;
+  // Starting the browser first (chrome-tool.ts) can take a while on its own.
+  if (key === 'chrome') return CHROME_MIN_ADAPTIVE_TIMEOUT_MS;
   if (key === 'terminal') {
     const terminals = Array.isArray(params['terminals']) ? params['terminals'].length : 1;
     return Math.max(1, terminals) * TERMINAL_OPEN_WORST_CASE_MS;

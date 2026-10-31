@@ -51,3 +51,38 @@ export function validateStepsWithRegisteredTools(
   }
   return null;
 }
+
+/**
+ * Drops the blank rows a form leaves behind — an empty "URL" or
+ * "command" input the user added but never filled in. A blank row is an
+ * unused input, not a mistake to reject the whole save over. Raw,
+ * untrusted input (it comes over IPC): anything not shaped as expected
+ * is passed through untouched for validation to judge.
+ */
+export function withoutBlankRows(steps: unknown): unknown {
+  if (!Array.isArray(steps)) return steps;
+  return steps.map((step: unknown) => {
+    if (typeof step !== 'object' || step === null) return step;
+    const { type, params } = step as { type?: unknown; params?: unknown };
+    if (typeof params !== 'object' || params === null) return step;
+    const p = params as Record<string, unknown>;
+    if (type === 'chrome' && Array.isArray(p['urls'])) {
+      return { ...step, params: { ...p, urls: withoutBlanks(p['urls']) } };
+    }
+    if (type === 'terminal' && Array.isArray(p['terminals'])) {
+      const terminals = p['terminals'].map((entry: unknown) =>
+        typeof entry === 'object' &&
+        entry !== null &&
+        Array.isArray((entry as { commands?: unknown }).commands)
+          ? { ...entry, commands: withoutBlanks((entry as { commands: unknown[] }).commands) }
+          : entry,
+      );
+      return { ...step, params: { ...p, terminals } };
+    }
+    return step;
+  });
+}
+
+function withoutBlanks(values: unknown[]): unknown[] {
+  return values.filter((v) => typeof v !== 'string' || v.trim() !== '');
+}

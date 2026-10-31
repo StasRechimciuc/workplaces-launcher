@@ -26,10 +26,8 @@ export function chromeStepSummary(params: Record<string, unknown>): string {
   // Prefers the real display name; falls back to the raw folder name
   // for a config saved before profileName existed.
   const name = typeof params['profileName'] === 'string' ? params['profileName'].trim() : '';
-  const label = name || profile;
-  const urls = Array.isArray(params['urls']) ? params['urls'] : [];
-  const count = urls.length;
-  return count > 0 ? `${label}, ${count} tab${count === 1 ? '' : 's'}` : label;
+  // Its tabs are whatever was last open in its window — not part of the step.
+  return name || profile;
 }
 
 export function spotifyStepSummary(params: Record<string, unknown>): string {

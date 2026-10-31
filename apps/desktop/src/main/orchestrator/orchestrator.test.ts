@@ -433,7 +433,10 @@ describe('retryStep', () => {
 
     expect(result).toMatchObject({ success: true, message: 'ok' });
     expect(goodTool.run).toHaveBeenCalledTimes(1);
-    expect(goodTool.run).toHaveBeenCalledWith({ a: 2 }, { workspaceId: 'ws-1' });
+    expect(goodTool.run).toHaveBeenCalledWith(
+      { a: 2 },
+      { workspaceId: 'ws-1', stepId: expect.any(String) },
+    );
   });
 
   it('reports a failed result, not a throw, for an out-of-range index', async () => {

@@ -66,6 +66,55 @@ async function waitFor(check: () => boolean, timeoutMs = 3000): Promise<void> {
   }
 }
 
+describe('WlHelperClient events', () => {
+  it('delivers a watched app’s change events to subscribers', async () => {
+    const { client } = makeClient(['normal']);
+    const events: unknown[] = [];
+    client.onEvent((e) => events.push(e));
+    await expect(client.watch('com.google.Chrome')).resolves.toMatchObject({ ok: true });
+    await waitFor(() => events.length >= 1);
+    expect(events[0]).toEqual({ event: 'app-changed', bundleId: 'com.google.Chrome', pid: 4242 });
+  });
+
+  it('watches again after the helper restarts — subscribers never notice', async () => {
+    const { client } = makeClient(['normal']);
+    const events: unknown[] = [];
+    client.onEvent((e) => events.push(e));
+    await client.watch('com.google.Chrome');
+    await waitFor(() => events.length >= 1);
+    const before = events.length;
+    await call(client, 'crash');
+    await call(client, 'echo');
+    await waitFor(() => events.length > before);
+  });
+
+  it('keeps delivering when one subscriber throws, and logs it', async () => {
+    const { client, logs } = makeClient(['normal']);
+    const events: unknown[] = [];
+    client.onEvent(() => {
+      throw new Error('boom');
+    });
+    client.onEvent((e) => events.push(e));
+    await client.watch('com.google.Chrome');
+    await waitFor(() => events.length >= 1);
+    expect(logs.some((l) => l.includes('boom'))).toBe(true);
+  });
+
+  it('stops re-watching once unwatched', async () => {
+    const { client } = makeClient(['normal']);
+    const events: unknown[] = [];
+    client.onEvent((e) => events.push(e));
+    await client.watch('com.google.Chrome');
+    await waitFor(() => events.length >= 1);
+    await client.unwatch('com.google.Chrome');
+    const before = events.length;
+    await call(client, 'crash');
+    await call(client, 'echo');
+    await new Promise((r) => setTimeout(r, 100));
+    expect(events).toHaveLength(before);
+  });
+});
+
 describe('WlHelperClient', () => {
   it('spawns lazily and resolves a result matched by id', async () => {
     const { client } = makeClient(['normal']);

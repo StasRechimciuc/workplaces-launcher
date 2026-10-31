@@ -129,20 +129,24 @@ describe('toWorkspaceDisplay', () => {
     expect(display.tools[0]?.detail).toContain('~/projects/x');
   });
 
-  it('writes a real, honest detail line for an implemented chrome step with tabs', () => {
+  it('writes a real, honest detail line for an implemented chrome step — its old URLs don’t count', () => {
     const display = toWorkspaceDisplay(
       baseConfig([
         { type: 'chrome', params: { profile: 'Work', urls: ['https://a.com', 'https://b.com'] } },
       ]),
     );
-    expect(display.tools[0]?.detail).toBe('Opens 2 tabs in Chrome (profile: Work).');
+    expect(display.tools[0]?.detail).toBe(
+      'Opens its own Chrome window (profile: Work) with the tabs last open in it.',
+    );
   });
 
   it('writes a real, honest detail line for an implemented chrome step with zero tabs', () => {
     const display = toWorkspaceDisplay(
       baseConfig([{ type: 'chrome', params: { profile: 'Work', urls: [] } }]),
     );
-    expect(display.tools[0]?.detail).toBe('Opens Chrome (profile: Work).');
+    expect(display.tools[0]?.detail).toBe(
+      'Opens its own Chrome window (profile: Work) with the tabs last open in it.',
+    );
   });
 
   it('writes a real, honest detail line for an implemented spotify step with a playlist', () => {
@@ -198,17 +202,13 @@ describe('toWorkspaceDisplay', () => {
       ]);
     });
 
-    it('gives a chrome step a Profile row plus one Tab row per url', () => {
+    it('gives a chrome step just a Profile row — its tabs aren’t part of the step', () => {
       const display = toWorkspaceDisplay(
         baseConfig([
           { type: 'chrome', params: { profile: 'Work', urls: ['https://a.com', 'https://b.com'] } },
         ]),
       );
-      expect(display.tools[0]?.expand).toEqual([
-        { i: 'globe', label: 'Profile', mono: 'Work' },
-        { i: 'check', label: 'Tab', mono: 'https://a.com' },
-        { i: 'check', label: 'Tab', mono: 'https://b.com' },
-      ]);
+      expect(display.tools[0]?.expand).toEqual([{ i: 'globe', label: 'Profile', mono: 'Work' }]);
     });
 
     it('gives a spotify step a Playlist row when one is set', () => {

@@ -83,3 +83,30 @@ describe('validateStepsWithRegisteredTools', () => {
     expect(result).not.toHaveProperty('fieldErrors');
   });
 });
+
+describe('withoutBlankRows', () => {
+  it('drops blank URL and command rows a form left behind', async () => {
+    const { withoutBlankRows } = await import('./validate-steps');
+    expect(
+      withoutBlankRows([
+        { type: 'chrome', params: { profile: 'Default', urls: ['https://a.com', '', '  '] } },
+        {
+          type: 'terminal',
+          params: { terminals: [{ cwd: '~', commands: ['npm run dev', ''] }] },
+        },
+      ]),
+    ).toEqual([
+      { type: 'chrome', params: { profile: 'Default', urls: ['https://a.com'] } },
+      { type: 'terminal', params: { terminals: [{ cwd: '~', commands: ['npm run dev'] }] } },
+    ]);
+  });
+
+  it('passes anything unexpected through untouched, for validation to judge', async () => {
+    const { withoutBlankRows } = await import('./validate-steps');
+    expect(withoutBlankRows('nope')).toBe('nope');
+    expect(withoutBlankRows([null, { type: 'chrome', params: 'x' }])).toEqual([
+      null,
+      { type: 'chrome', params: 'x' },
+    ]);
+  });
+});

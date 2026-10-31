@@ -6,7 +6,7 @@ import Foundation
 /// refuse a helper binary from a different build instead of
 /// misreading its replies. Bump on any incompatible change to a
 /// method's params or result shape.
-let protocolVersion = 1
+let protocolVersion = 2
 
 typealias JSONObject = [String: Any]
 

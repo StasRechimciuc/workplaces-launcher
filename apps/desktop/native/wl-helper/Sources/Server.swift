@@ -12,6 +12,7 @@ import ApplicationServices
 /// can never outlive the app as an orphan.
 final class Server {
   private let windows = WindowRegistry()
+  private let watcher = AppWatcher()
 
   func run() -> Never {
     // Global default for every element: an app that stops answering
@@ -84,6 +85,12 @@ final class Server {
         wait: params.milliseconds("waitMs", default: 1_500))
     case "focusWindow":
       return try windows.focusWindow(pid: params.pid("pid"), windowId: params.windowId("windowId"))
+    case "windowTabs":
+      return try windows.windowTabs(pid: params.pid("pid"), windowId: params.windowId("windowId"))
+    case "watchApp":
+      return watcher.watch(bundleId: try params.bundleId("bundleId"))
+    case "unwatchApp":
+      return watcher.unwatch(bundleId: try params.bundleId("bundleId"))
     case "isRunning":
       return Apps.isRunning(bundleId: try params.bundleId("bundleId"))
     case "activateApp":

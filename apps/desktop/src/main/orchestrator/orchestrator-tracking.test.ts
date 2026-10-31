@@ -390,6 +390,21 @@ describe('restore', () => {
     errorSpy.mockRestore();
   });
 
+  it('says on the step when what it opened can’t be tracked — Close won’t close it', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    registerTool({
+      ...(trackedTool('t-elsewhere', 'fake-window') as ToolPlugin),
+      // Opens nothing the kind can find (another desktop, say).
+      run: async () => ({ success: true, message: 'Opened it.', durationMs: 1 }),
+    });
+    const [result] = await runWorkspace(ws('A', [{ type: 't-elsewhere', params: { name: 'x' } }]));
+    expect(result).toMatchObject({
+      success: true,
+      message: expect.stringMatching(/^Opened it\. Not tracked, so Close won't close it — x: /),
+    });
+    errorSpy.mockRestore();
+  });
+
   it('releases and closes what steps edited out of the workspace had opened', async () => {
     const before = ws('A', [
       { id: 'keep', type: 't-window', params: { name: 'one' } },

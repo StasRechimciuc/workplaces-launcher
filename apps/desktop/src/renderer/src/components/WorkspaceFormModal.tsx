@@ -281,6 +281,7 @@ export function WorkspaceFormModal({
     stepKey?: number;
     fieldErrors?: Record<string, string>;
   } | null>(null);
+  const nameTaken = saveError?.code === ERROR_CODES.WORKSPACE_NAME_TAKEN.code;
   // StepChangeConfirm: a row's ✕ or Save waiting for the user's answer,
   // and what's already been confirmed via ✕ — Save never asks about
   // that again, and closes it once saved.
@@ -603,6 +604,10 @@ export function WorkspaceFormModal({
     stepIndex?: number;
     fieldErrors?: Record<string, string>;
   }): void {
+    if (result.code === ERROR_CODES.WORKSPACE_NAME_TAKEN.code) {
+      nameInputRef.current?.focus();
+      nameInputRef.current?.select();
+    }
     const stepKey =
       typeof result.stepIndex === 'number' ? createSteps[result.stepIndex]?.key : undefined;
     setSaveError({
@@ -804,12 +809,18 @@ export function WorkspaceFormModal({
           <div className="mb-4.5">
             <input
               ref={nameInputRef}
-              className="h-8.5 w-full rounded-sm border border-border-strong bg-bg-elevated px-2.75 text-[13px] text-text placeholder:text-text-faint focus:border-accent-border focus:outline-none"
+              className={cn(
+                'h-8.5 w-full rounded-sm border border-border-strong bg-bg-elevated px-2.75 text-[13px] text-text placeholder:text-text-faint focus:border-accent-border focus:outline-none',
+                nameTaken && 'border-danger focus:border-danger',
+              )}
               type="text"
               placeholder="e.g. Client C — Backend"
               value={name}
+              aria-invalid={nameTaken}
               onChange={(e) => {
                 setName(e.target.value);
+                // A new name answers "already used" — the error goes with it.
+                if (nameTaken) setSaveError(null);
               }}
             />
             {duplicateOf && (

@@ -37,20 +37,12 @@ describe('chromeStepSummary', () => {
     expect(chromeStepSummary({ profile: 'Default' })).toBe('Default');
   });
 
-  it('appends a singular/plural tab count', () => {
-    expect(chromeStepSummary({ profile: 'Default', urls: ['https://a.com'] })).toBe(
-      'Default, 1 tab',
-    );
-    expect(
-      chromeStepSummary({ profile: 'Default', urls: ['https://a.com', 'https://b.com'] }),
-    ).toBe('Default, 2 tabs');
+  it('never counts URLs — its tabs are whatever was last open in its window', () => {
+    expect(chromeStepSummary({ profile: 'Default', urls: ['https://a.com'] })).toBe('Default');
   });
 
   it('shows the human profileName instead of the raw folder name when set', () => {
     expect(chromeStepSummary({ profile: 'Profile 2', profileName: 'Work' })).toBe('Work');
-    expect(
-      chromeStepSummary({ profile: 'Profile 2', profileName: 'Work', urls: ['https://a.com'] }),
-    ).toBe('Work, 1 tab');
   });
 });
 

@@ -32,6 +32,13 @@ export interface PlatformLauncher {
    */
   openUrlInBrowserProfile(browser: string, profile: string, url?: string): Promise<PlatformResult>;
   /**
+   * Opens a new window of `browser` (an app path or name) in `profile`
+   * holding `urls` — always its own window, never tabs added to one the
+   * user already has. No URLs = an empty window of that profile.
+   * Optional: a platform without it can't run browser steps yet.
+   */
+  openBrowserWindow?(browser: string, profile: string, urls: string[]): Promise<PlatformResult>;
+  /**
    * Opens a terminal window at `cwd`, running each of `commands` in
    * order, left running/interactive afterward. An empty `commands`
    * array still opens a terminal at `cwd` with nothing queued — a

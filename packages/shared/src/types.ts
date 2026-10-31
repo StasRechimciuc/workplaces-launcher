@@ -194,6 +194,8 @@ export interface RunContext {
    */
   liveResourceKeys?: ReadonlySet<string>;
   workspaceId: string;
+  /** The step being run (see ResourceContext.stepId). */
+  stepId?: string;
 }
 
 /**
@@ -209,6 +211,13 @@ export interface RunContext {
  * step whose spec matches a live resource reuses it rather than
  * opening a second copy.
  */
+/** What a step's resources may depend on beyond its own params. */
+export interface ResourceContext {
+  workspaceName: string;
+  /** The step's own id — what a resource that belongs to one step alone is keyed by. */
+  stepId: string;
+}
+
 export interface ResourceSpec {
   /** A registered resource kind ('app', …) — main/resources/kind-registry.ts. */
   kind: string;
@@ -243,8 +252,10 @@ export interface ToolPlugin<TParams = unknown> {
    * Close/Switch behavior. Never throws — a spec that can't be worked
    * out (e.g. an app whose bundle can't be read) is left out and the
    * reason logged, so the step still runs, just untracked.
+   * `context` is the workspace the step belongs to (a browser window is
+   * named after it).
    */
-  resources?(params: TParams): Promise<ResourceSpec[]>;
+  resources?(params: TParams, context?: ResourceContext): Promise<ResourceSpec[]>;
   /** Reserved for Tier 2 (docs/build-shell.md) — a no-op today. */
   teardown(params: TParams): Promise<StepResult>;
   /**

@@ -660,6 +660,185 @@ Revisit only if real users skip it and complain.
 
 Order: 3a → 3b → 3c → 3d, each hand-checked before the next.
 
+## Phase 4 technical plan: browser windows, Chrome first (2026-10-30, spike passed, draft)
+
+Correction to an earlier claim: Chrome is already never quit
+(`isExcludedFromAutoClose`), and today a Chrome step's tabs are never
+closed either — they pile up as duplicate tabs on every Restore.
+
+### What the user gets (founder decisions, 2026-10-30)
+
+- **One window per Chrome step**, named after its workspace through
+  Chrome's own "Name window" (visible in Mission Control / Window menu).
+- **Restore**: the window is reused if it's open; otherwise it opens
+  with the tabs saved last time (first time, or nothing saved: the
+  step's URLs). Only the first tab loads; every other tab is a
+  placeholder that loads the moment it's clicked — no load spike.
+- **While the workspace is active**, the window's tabs are saved
+  whenever they change (Accessibility change signals, ~2s debounce) —
+  so closing the window by hand loses nothing. No polling.
+- **Close / Switch**: save the tabs, then close the window, whatever it
+  holds — tabs opened and closed while working are the workspace's
+  session, never "the user's". The same step in the target workspace
+  → the window is handed over (and renamed) instead. Chrome itself and
+  windows the app didn't open are never read, saved or closed.
+- **Chrome restart or crash**: the window is found again by its name
+  and re-adopted — no duplicate.
+- **"Leave site?" blocks the close** (unsaved page input): the window
+  stays open, the workspace stays active, and the app shows its own
+  clear message naming the site — never a silent failure.
+- **Editing the step's URLs** resets its saved tabs to the new list.
+- **Permission**: "control Chrome" (Automation) — to be asked in the
+  first-run tour; until the tour exists, at the first Restore of a
+  Chrome step (never mid-Close). Denied → the window still opens with
+  the step's URLs, but Close leaves it open and says why: tabs are
+  never closed unsaved.
+- **Not kept**: tab groups (tabs come back ungrouped — Accessibility
+  can see groups, nothing outside Chrome can recreate them), page state
+  (scroll, typed input). Incognito windows are never read. A window
+  that opens on another desktop / behind a full-screen app can't be
+  caught → the step works, untracked, with a message.
+
+### Spike results (`spikes/chrome-windows/`, this Mac, Chrome running)
+
+| Check                      | Result                                                                                                                                                      |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--new-window` + URLs      | one new standard window holding all URLs; caught alone by the window diff (~7s); AX close closed it, no prompt                                              |
+| Change signals             | every action sends one: tab opened/closed/switched, link followed, window opened/closed (`AXTitleChanged` on the window and tab buttons, created/destroyed) |
+| Cost of listening          | Chrome idles at 0.3–0.8% CPU with the observer on — no measurable cost; page content is noisy (video timers) and filtered out by role                       |
+| Reading tabs (scripting)   | every tab's title + full URL (18/18)                                                                                                                        |
+| Matching windows           | scripting bounds = AX frame exactly; AX title = active tab's title                                                                                          |
+| Window name (`given name`) | settable; survives ⌘Q + reopen and a force-kill + crash restore; Chrome's own window id changed every time — the name is the anchor                         |
+| Placeholder tabs           | a `data:` page with the real title stays unloaded until selected, then replaces itself with the real URL                                                    |
+| Accessibility alone        | reads tab titles and groups ("Part of group …") but not URLs — so the Chrome permission can't be avoided                                                    |
+
+Chrome loads every URL passed on the command line immediately (all 5
+test tabs had their real titles within seconds) and offers no outside
+way to open a tab unloaded (only extensions can discard tabs) — hence
+the placeholders.
+
+### Browser base (built for more than Chrome)
+
+Everything browser-specific sits behind one **browser adapter**: open a
+window (profile, tabs, lazy), read windows with their tabs, name a
+window. Watching for changes is Accessibility — the same for every
+browser. Each adapter declares what it can do; a missing capability
+degrades with a message, never silently. Chrome first; Brave and Edge
+share Chrome's scripting vocabulary (parameterized by app); Arc to be
+verified; Safari (scripting, no window names) and Firefox (no tab
+scripting — extension only) later.
+
+### Slices
+
+1. **Helper change events** — `observe(pid)` / `unobserve(pid)`: the
+   helper pushes event lines (window title changed, window
+   created/destroyed, tab-strip title changed) for that app, filtered
+   by role so page content never reaches the app; the client exposes
+   them as events. Real check on Chrome.
+2. **Chromium adapter** — scripting through `osascript` with every
+   value passed as an argument (never spliced into script text): read
+   windows (name, bounds, tabs), name a window, close nothing (closing
+   stays AX). Opening: one `open -n -a <browser> --args
+--profile-directory=<p> --new-window <tab1> <placeholders…>`;
+   placeholders built with escaped title/URL, and decoded back to the
+   real URL when tabs are read.
+3. **Saved tabs** — per workspace step, persisted next to the ledger;
+   stored with the step's configured URLs so an edit resets them.
+4. **`chrome-window` kind** — identity `{browser, profile, configured
+URLs}` (two workspaces with the same step share one window). Handle:
+   pid + window id + its name. capture = window diff, then name it;
+   check = window state, and a gone window is looked for by name before
+   it counts as gone (restart/crash); close = save tabs → AX close →
+   a dialog → `refused` with the site; reconcileOpening = find by name.
+   Opens serialized behind one lock so concurrent opens can't swap
+   windows.
+5. **chrome-tool** — `resources()`, run (reuse / open with saved or
+   configured tabs), the change watcher started and stopped with the
+   workspace's activity, permission check + interim prompt.
+6. **UI** — the blocked-close message; permission denied message.
+7. **Tests** (adapter argv + placeholder escaping, kind with a fake
+   helper/adapter, tool, orchestrator: Close closes and saves, Switch
+   hands over, restart re-adopts) and hand tests on the Mac.
+
+**Built (2026-10-30), uncommitted, waiting for the hand test.** Real
+checks on this Mac: helper events (open → events, idle → none), tab
+titles via AX, the adapter (read 19/19 tabs, name, active tab), and an
+end-to-end open → name → save on Close → reopen with the saved tabs on
+the saved active tab → close. Differences from the plan above:
+
+- No launch lock: the helper's capture already refuses when two new
+  windows appear at once, and the script-id diff (+ first-tab match on
+  a cold start) picks the right window to name — concurrent opens end
+  untracked with a reason, never swapped.
+- The first tab always opens for real (Chrome always shows it), every
+  other web tab as a placeholder; the saved active tab is then
+  selected, so at most two tabs load.
+- `chrome://` tabs are dropped by Chrome when passed on the command
+  line — not restored (rare: settings pages).
+- Tab reads fetch each window's titles and URLs in one request and
+  retry when the user changes tabs mid-read (seen once for real).
+- **Review round (2026-10-30, two agents):** identification rebuilt so a
+  window counts as the step's only when independent signals agree —
+  the one new window Accessibility saw, the one new browser window
+  holding exactly the tabs opened, the same frame; after naming, and
+  before every save or close, exactly one non-incognito window carries
+  the name and exactly one on-screen window has that exact title and
+  frame. Unnamed / unconfirmable windows aren't tracked (the step still
+  opens). While the browser is quit the window is 'unknown' (kept,
+  found again by name), so the workspace still shows active then.
+  Saves also trigger on tab switches / same-title navigation (selected
+  tab + active URL via AX), are guaranteed every 10s under constant
+  change, and only remember a state once saved. Page titles can't forge
+  records (separators stripped in the script); incognito tabs are never
+  read; flag-like "URLs" are refused. Helper: watches re-sent on every
+  ready, failed attaches retried, retries stop once unwatched.
+- Browser-step opens go through the platform launcher
+  (`openBrowserWindow`) — tests that fake the launcher can never open
+  real windows (an earlier draft shelled out directly and a test run
+  opened ~15 real Chrome windows; closed by hand).
+- Saved tabs aren't pruned at startup while any Chrome step can't be
+  resolved (its saved tabs must never be lost to a passing failure).
+- **Wrong-window guard (found for real, 2026-10-30):** an end-to-end
+  check caught — and later closed — the founder's own main Chrome window
+  (reopened with ⌘⇧T). Most likely cause: the pre-open window list
+  failed and was treated as empty, so an existing window looked new.
+  Now: an unlistable snapshot never captures; a caught window that
+  doesn't show the name it was given isn't tracked; and Close only ever
+  closes a window whose title still carries that name.
+
+- **Cold start (found and verified for real, 2026-10-31):** opening a
+  profile together with URLs makes Chrome reopen the profile's session
+  and drop the URLs into one of those windows (and a plain start can
+  stop at the "Who's using Chrome?" picker). Now the profile is opened on
+  its own first, the step waits until its windows are back, then opens
+  its window into the running profile — always a window of its own.
+  Capture identifies the window through Chrome's view (one new unnamed
+  window holding exactly the opened tabs) then confirms it on screen by
+  name + frame, so several windows reappearing at once is fine; a copy
+  of the workspace's own window that Chrome reopened by itself is
+  closed (its tabs were saved). A quit browser = the window is gone.
+  End-to-end on the founder's Chrome: quit → Restore → main window back
+  untouched + exactly one named window → Close closed only that.
+
+**Built (founder decision, 2026-10-31):**
+
+1. Drop the Chrome step's URL field: the step only picks the profile;
+   its window reopens the tabs last open in it (first Restore = an empty
+   window; existing steps' URLs seed the first Restore once). Identity no
+   longer includes URLs — each workspace's step owns its own window.
+2. Workspace names must be unique (case-insensitive) — create/rename
+   refuse a duplicate with a clear error; window names then always match
+   their workspace ("(2)" stays only for a clash with the user's own
+   Chrome window names).
+   Still to hand-test: a page asking before it closes (Close keeps the
+   window and names the page); Switch to a workspace without Chrome closes
+   only the workspace's window.
+
+**Open questions for building:** naming when two workspaces share a
+window or have the same name (rename on hand-over; keep names unique
+among open windows); whether Chrome's "Leave site?" dialog is visible
+to Accessibility so its site can be named (else a generic message).
+
 ## Status
 
 Idea approved, research + spike done, Stage 2 plan approved
@@ -750,6 +929,10 @@ view: the modal is too narrow to read what was detected (long paths,
 commands, several terminals and windows stacked in expand-in-place
 rows). Needs a wider, scannable layout — plan through /judge.
 
+Follow-up (founder, 2026-10-31): when every step was already open
+("Already open — reused"), the Detail header still says "Restored — 1
+of 1 steps succeeded · 0.0s" — say "Already open" instead.
+
 Follow-up (founder, 2026-10-30): while a workspace is restoring,
 closing or switching, the ⋯ menu next to Restore/Close (Edit, Delete,
 etc.) is still clickable — disable it for the duration, like the
@@ -765,5 +948,16 @@ dev: VS Code + Docker + Chrome") that decide which requisites to ask
 for, and possibly seed a first workspace. Touches onboarding, the
 extension bundling limitation, and workspace templates — needs its own
 /judge before the validation build, not a quick add.
+
+Added (founder, 2026-10-30): the tour is where **every** permission is
+asked — together, once, up front — never as prompts popping up later
+mid-action. It starts by asking what the user will use the app for
+(e.g. "development", "everyday use", or both) and asks only for what
+that needs: Accessibility for everyone who tracks windows; "control
+Chrome" (Automation, needed to save a Chrome step's tabs — Phase 4)
+only for Chrome users; VS Code extension / Docker checks only for
+developers. Known so far: Accessibility can read a tab's title and its
+group but not its URL, so the Chrome permission can't be avoided for
+saving tabs; import/export through the file picker needs none.
 
 Next: phase 2.

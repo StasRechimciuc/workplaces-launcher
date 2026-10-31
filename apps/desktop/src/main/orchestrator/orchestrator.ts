@@ -754,6 +754,7 @@ async function runStep(
     const result = await withTimeout(
       tool.run(validation.data, {
         workspaceId,
+        stepId: step.id,
         ...(liveResourceKeys ? { liveResourceKeys } : {}),
       }),
       timeoutMs,

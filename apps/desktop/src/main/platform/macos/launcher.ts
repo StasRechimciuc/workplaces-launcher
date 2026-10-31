@@ -286,6 +286,15 @@ async function waitForEarlyCommandFailure(
 }
 
 /**
+ * Whether a browser argument is a URL (it has a scheme), never a flag:
+ * everything after `--args` reaches the browser's own command line, so
+ * a configured "URL" like `--load-extension=…` would become a flag.
+ */
+export function isUrlArgument(value: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:/i.test(value);
+}
+
+/**
  * macOS implementation of PlatformLauncher, via `open -a`
  * (docs/architecture.md #1). All methods shell out through
  * lib/shell-exec.ts's runCommand — argv arrays only, shell:false — so
@@ -310,6 +319,31 @@ export const macosLauncher: PlatformLauncher = {
       success: false,
       message: `Failed to open ${targetPath} in ${appName}: ${result.message}`,
     };
+  },
+
+  async openBrowserWindow(browser, profile, urls): Promise<PlatformResult> {
+    const notUrl = urls.find((url) => !isUrlArgument(url));
+    if (notUrl !== undefined) {
+      return { success: false, message: `Not a URL, so it wasn't opened: ${notUrl.slice(0, 200)}` };
+    }
+    // `-n` for the same reason as openUrlInBrowserProfile below (only a
+    // newly spawned process receives `--args`); `--new-window` so it's
+    // always its own window.
+    const result = await runCommand('open', [
+      '-n',
+      '-a',
+      browser,
+      '--args',
+      `--profile-directory=${profile}`,
+      '--new-window',
+      ...urls,
+    ]);
+    return result.success
+      ? { success: true, message: `Opened a ${browser} window (profile: ${profile}).` }
+      : {
+          success: false,
+          message: `Failed to open a ${browser} window (profile: ${profile}): ${result.message}`,
+        };
   },
 
   async openUrlInBrowserProfile(browser, profile, url): Promise<PlatformResult> {
@@ -338,6 +372,9 @@ export const macosLauncher: PlatformLauncher = {
     // designed to be driven per-profile from the CLI regardless of
     // whether it's already open; on a cold start (nothing running yet)
     // it behaves identically to a plain launch.
+    if (url !== undefined && !isUrlArgument(url)) {
+      return { success: false, message: `Not a URL, so it wasn't opened: ${url.slice(0, 200)}` };
+    }
     const args = ['-n', '-a', browser, '--args', `--profile-directory=${profile}`];
     if (url !== undefined) {
       args.push(url);

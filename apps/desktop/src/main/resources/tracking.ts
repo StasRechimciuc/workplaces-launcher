@@ -1,5 +1,6 @@
 import type {
   LeftOpenEntry,
+  ResourceContext,
   ResourceSpec,
   StepResult,
   WorkspaceConfig,
@@ -65,7 +66,9 @@ export async function resolveTrackedSteps(
   const tracked: TrackedStep[] = [];
   const untracked: WorkspaceStep[] = [];
   for (const step of config.steps) {
-    const specs = getLedgerStore() ? await specsFor(step) : [];
+    const specs = getLedgerStore()
+      ? await specsFor(step, { workspaceName: config.name, stepId: step.id })
+      : [];
     if (specs.length > 0 && specs.every((s) => getResourceKind(s.kind))) {
       tracked.push({ step, specs });
     } else {
@@ -75,13 +78,13 @@ export async function resolveTrackedSteps(
   return { tracked, untracked };
 }
 
-async function specsFor(step: WorkspaceStep): Promise<ResourceSpec[]> {
+async function specsFor(step: WorkspaceStep, context: ResourceContext): Promise<ResourceSpec[]> {
   const tool = getTool(step.type);
   if (!tool?.resources) return [];
   const validation = tool.validate(step.params);
   if (!validation.valid) return [];
   try {
-    return await tool.resources(validation.data);
+    return await tool.resources(validation.data, context);
   } catch (err) {
     console.error(
       `Couldn't work out what "${step.type}" opens — running it untracked: ${err instanceof Error ? err.message : String(err)}`,
@@ -139,7 +142,7 @@ export async function openTrackedStep(
         }
         continue;
       }
-      const snapshot = await kind.snapshot(spec.identity);
+      const snapshot = await kind.snapshot(spec.identity, spec.options);
       let opening!: Resource;
       store.update((l) => {
         const added = addResource(l, {
@@ -167,6 +170,7 @@ export async function openTrackedStep(
           durationMs: 0,
         };
 
+    const notTracked: string[] = [];
     for (const { spec, kind, id, snapshot } of pending) {
       const captured = await kind.capture(spec.identity, snapshot, spec.options);
       if (captured.found) {
@@ -180,9 +184,17 @@ export async function openTrackedStep(
       } else {
         console.error(`Not tracking ${spec.label} for this step: ${captured.reason}`);
         store.update((l) => removeResource(l, id));
+        // Said on the step itself, not only logged: what it opened won't
+        // be closed (or saved) with the workspace.
+        notTracked.push(`${spec.label}: ${captured.reason}`);
       }
     }
-    return result;
+    return notTracked.length === 0
+      ? result
+      : {
+          ...result,
+          message: `${result.message} Not tracked, so Close won't close it — ${notTracked.join('; ')}.`,
+        };
   });
 }
 

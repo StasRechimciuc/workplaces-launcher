@@ -241,6 +241,7 @@ function setAppPackaged(value: boolean): void {
 const mockedGetPlatformLauncher = vi.mocked(getPlatformLauncher);
 const openInApp = vi.fn();
 const openUrlInBrowserProfile = vi.fn();
+const openBrowserWindow = vi.fn();
 const openTerminal = vi.fn();
 
 beforeAll(() => {
@@ -254,11 +255,13 @@ beforeEach(async () => {
   testUserDataDir = await mkdtemp(join(tmpdir(), 'workspace-launcher-test-'));
   openInApp.mockReset().mockResolvedValue({ success: true, message: 'Opened.' });
   openUrlInBrowserProfile.mockReset().mockResolvedValue({ success: true, message: 'Opened.' });
+  openBrowserWindow.mockReset().mockResolvedValue({ success: true, message: 'Opened.' });
   openTerminal.mockReset().mockResolvedValue({ success: true, message: 'Opened a terminal.' });
   mockedGetPlatformLauncher.mockReset().mockReturnValue({
     launchApp: vi.fn(),
     openInApp,
     openUrlInBrowserProfile,
+    openBrowserWindow,
     openTerminal,
     openFileDefault: vi.fn(),
     openUrlDefault: vi.fn(),
@@ -347,8 +350,8 @@ describe('restoreWorkspace', () => {
     expect(results).toHaveLength(5);
     // vscode's path + spotify's playlist both go through openInApp.
     expect(openInApp).toHaveBeenCalledTimes(2);
-    // chrome's one configured url.
-    expect(openUrlInBrowserProfile).toHaveBeenCalledTimes(1);
+    // chrome's window, holding its one configured url.
+    expect(openBrowserWindow).toHaveBeenCalledTimes(1);
   });
 
   it('runs the registered vscode step as a real success, not a stub', async () => {
@@ -926,6 +929,36 @@ describe('createWorkspace', () => {
   });
 });
 
+describe('unique workspace names', () => {
+  it('refuses a second workspace with the same name — capitalization and spaces don’t count', async () => {
+    const first = await createWorkspace({ name: 'Client X', steps: [] });
+    expect(first.success).toBe(true);
+    const second = await createWorkspace({ name: '  client x ', steps: [] });
+    expect(second).toMatchObject({
+      success: false,
+      code: ERROR_CODES.WORKSPACE_NAME_TAKEN.code,
+      error: expect.stringContaining('"Client X"'),
+    });
+  });
+
+  it('refuses renaming to another workspace’s name, but keeps your own name fine', async () => {
+    const a = await createWorkspace({ name: 'A', steps: [] });
+    const b = await createWorkspace({ name: 'B', steps: [] });
+    if (!a.success || !b.success) throw new Error('setup failed');
+    await expect(updateWorkspace({ id: b.config.id, name: 'a', steps: [] })).resolves.toMatchObject(
+      {
+        success: false,
+        code: ERROR_CODES.WORKSPACE_NAME_TAKEN.code,
+      },
+    );
+    await expect(updateWorkspace({ id: b.config.id, name: 'B', steps: [] })).resolves.toMatchObject(
+      {
+        success: true,
+      },
+    );
+  });
+});
+
 describe('updateWorkspace', () => {
   it('rejects a non-object input', async () => {
     await expect(updateWorkspace('nope')).rejects.toThrow(/id, name, steps/);
@@ -941,6 +974,21 @@ describe('updateWorkspace', () => {
     if (!result.success) {
       expect(result.error).toMatch(/No workspace found/);
       expect(result.code).toBe(ERROR_CODES.WORKSPACE_NOT_FOUND.code);
+    }
+  });
+
+  it('drops a blank URL row instead of refusing the whole save', async () => {
+    const created = await createWorkspace({ name: 'Chrome', steps: [] });
+    if (!created.success) throw new Error('setup failed');
+
+    const result = await updateWorkspace({
+      id: created.config.id,
+      name: 'Chrome',
+      steps: [{ type: 'chrome', params: { profile: 'Default', urls: ['https://a.com', '  '] } }],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.config.steps[0]!.params).toMatchObject({ urls: ['https://a.com'] });
     }
   });
 

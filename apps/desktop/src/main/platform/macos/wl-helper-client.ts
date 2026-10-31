@@ -29,6 +29,10 @@ import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'n
  * is never failed for that wait, nor counted towards presuming the
  * helper hung.
  *
+ * Events: the helper also pushes unsolicited lines for apps being
+ * watched (`watch`) — see Watcher.swift. Watches are re-established
+ * on every restart, so a subscriber never has to notice one.
+ *
  * Lifecycle: spawned on the first request, not at app start. After a
  * crash it's restarted with exponential backoff (requests made
  * meanwhile wait, each bounded by its own timeout); the backoff resets
@@ -45,7 +49,18 @@ export interface HelperWindow {
   minimized: boolean;
   /** AXStandardWindow — false for panels and invisible helper windows. */
   standard: boolean;
+  /** Position and size on screen, when Accessibility reports them. */
+  frame?: { x: number; y: number; width: number; height: number };
 }
+
+/** Pushed by the helper for watched apps (Watcher.swift). */
+export interface HelperEvent {
+  event: 'app-changed' | 'app-launched' | 'app-terminated';
+  bundleId: string;
+  pid: number;
+}
+
+const HELPER_EVENTS = new Set<string>(['app-changed', 'app-launched', 'app-terminated']);
 
 /** Method → params/result, mirroring Server.swift's dispatch table. */
 export interface HelperMethods {
@@ -80,6 +95,13 @@ export interface HelperMethods {
       apps: { pid: number; startedAt: number | null }[];
     };
   };
+  windowTabs: {
+    params: { pid: number; windowId: number };
+    /** `selectedIndex` is 1-based; `activeUrl` is the page on screen. */
+    result: { hasTabStrip: boolean; titles: string[]; selectedIndex?: number; activeUrl?: string };
+  };
+  watchApp: { params: { bundleId: string }; result: { watching: true; pids: number[] } };
+  unwatchApp: { params: { bundleId: string }; result: { watching: false } };
   quitApp: {
     params: { pid: number; waitMs?: number };
     result: { outcome: 'quit' | 'not-running' | 'still-running' };
@@ -115,7 +137,7 @@ export interface WlHelperClientOptions {
 }
 
 /** Matches native/wl-helper/Sources/Protocol.swift's protocolVersion. */
-export const WL_HELPER_PROTOCOL_VERSION = 1;
+export const WL_HELPER_PROTOCOL_VERSION = 2;
 
 // Methods that wait helper-side for up to their own timeoutMs/waitMs
 // get that much extra on top of this margin, so the client never gives
@@ -150,6 +172,8 @@ export class WlHelperClient {
   private startTimer: NodeJS.Timeout | null = null;
   private stableTimer: NodeJS.Timeout | null = null;
   private backoffTimer: NodeJS.Timeout | null = null;
+  private readonly watched = new Set<string>();
+  private readonly listeners = new Set<(event: HelperEvent) => void>();
 
   constructor(options: WlHelperClientOptions) {
     this.options = {
@@ -198,6 +222,29 @@ export class WlHelperClient {
       }
       // 'starting' / 'backoff': flushed once the helper reports ready.
     });
+  }
+
+  /**
+   * Starts pushing `bundleId`'s change events to `onEvent` listeners —
+   * across helper restarts and the app's own relaunches. Resolves to
+   * whether the first watch took (e.g. not without Accessibility).
+   */
+  async watch(bundleId: string): Promise<HelperResponse<HelperMethods['watchApp']['result']>> {
+    this.watched.add(bundleId);
+    return this.request('watchApp', { bundleId });
+  }
+
+  async unwatch(bundleId: string): Promise<void> {
+    if (!this.watched.delete(bundleId)) return;
+    const response = await this.request('unwatchApp', { bundleId });
+    if (!response.ok)
+      this.options.log(`couldn't stop watching ${bundleId}: ${response.error.message}`);
+  }
+
+  /** Subscribes to pushed events; returns the unsubscribe. */
+  onEvent(listener: (event: HelperEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
   }
 
   /** Fails everything outstanding and lets the helper exit on stdin EOF. */
@@ -307,6 +354,29 @@ export class WlHelperClient {
       this.options.log(`helper rejected a request: ${String(m.message)}`);
       return;
     }
+    if (typeof m.event === 'string') {
+      if (
+        HELPER_EVENTS.has(m.event) &&
+        typeof m.bundleId === 'string' &&
+        typeof m.pid === 'number'
+      ) {
+        const event: HelperEvent = {
+          event: m.event as HelperEvent['event'],
+          bundleId: m.bundleId,
+          pid: m.pid,
+        };
+        for (const listener of this.listeners) {
+          try {
+            listener(event);
+          } catch (err) {
+            this.options.log(`an event listener threw: ${errorMessage(err)}`);
+          }
+        }
+      } else {
+        this.options.log(`unknown event: ${line.slice(0, 200)}`);
+      }
+      return;
+    }
 
     const request = typeof m.id === 'number' ? this.pending.get(m.id) : undefined;
     if (!request) {
@@ -341,6 +411,17 @@ export class WlHelperClient {
       this.restartAttempts = 0;
     }, this.options.stableAfterMs);
     this.flush();
+    // A fresh helper watches nothing: re-establish every watch on every
+    // ready — a watch request can also time out before the first helper
+    // is ready, and watching twice is harmless (the helper's watch is
+    // idempotent).
+    for (const bundleId of this.watched) {
+      void this.request('watchApp', { bundleId }).then((response) => {
+        if (!response.ok) {
+          this.options.log(`couldn't re-watch ${bundleId}: ${response.error.message}`);
+        }
+      });
+    }
   }
 
   private onExit(

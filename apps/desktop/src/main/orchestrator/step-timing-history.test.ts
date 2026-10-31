@@ -7,6 +7,7 @@ import {
   MIN_ADAPTIVE_TIMEOUT_MS,
   recordSuccessfulStepDuration,
   TERMINAL_OPEN_WORST_CASE_MS,
+  CHROME_MIN_ADAPTIVE_TIMEOUT_MS,
 } from './step-timing-history';
 
 // electron-store needs a real Electron `app` to resolve its storage
@@ -61,15 +62,20 @@ describe('step-timing-history', () => {
     expect(TERMINAL_OPEN_WORST_CASE_MS).toBe(11_500);
   });
 
+  it('gives a Chrome step time to start Chrome first, however fast its usual runs', () => {
+    for (let i = 0; i < 3; i++) recordSuccessfulStepDuration('chrome', NO_PARAMS, 300);
+    expect(getStepTimeoutMs('chrome', NO_PARAMS)).toBe(CHROME_MIN_ADAPTIVE_TIMEOUT_MS);
+  });
+
   it('keeps only the most recent 10 samples, dropping older ones', () => {
-    recordSuccessfulStepDuration('chrome', NO_PARAMS, 1000); // will be dropped
+    recordSuccessfulStepDuration('sample-tool', NO_PARAMS, 1000); // will be dropped
     for (let i = 0; i < 10; i++) {
-      recordSuccessfulStepDuration('chrome', NO_PARAMS, 10000);
+      recordSuccessfulStepDuration('sample-tool', NO_PARAMS, 10000);
     }
     // If the dropped 1000ms sample were still counted (11 samples),
     // the average — and therefore the timeout — would be lower than
     // this.
-    expect(getStepTimeoutMs('chrome', NO_PARAMS)).toBe(15000);
+    expect(getStepTimeoutMs('sample-tool', NO_PARAMS)).toBe(15000);
   });
 
   it('tracks separate history per tool type', () => {

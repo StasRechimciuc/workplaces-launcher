@@ -99,8 +99,12 @@ function describeLeftOpen(entry: LeftOpenEntry): string {
   switch (entry.reason) {
     case 'failed':
       return `Couldn't close ${entry.appName}${detail}`;
+    // The detail names which permission (Accessibility, or control of a
+    // browser — its tabs can't be saved without it).
     case 'needs-permission':
-      return `Couldn't close ${entry.appName} — it needs Accessibility access${detail}`;
+      return entry.detail
+        ? `Couldn't close ${entry.appName}: ${entry.detail}`
+        : `Couldn't close ${entry.appName} — it needs Accessibility access.`;
     case 'kept-running':
       return `Left ${entry.appName} running${entry.detail ? ` (${entry.detail})` : ''}.`;
     case 'not-ours':

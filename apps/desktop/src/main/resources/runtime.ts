@@ -14,6 +14,13 @@ import {
 } from './kinds/vscode-window-kind';
 import { readBundleId } from '../platform/macos/bundle-id';
 import { createTerminalKind, defaultTerminalDeps } from './kinds/terminal-kind';
+import { createBrowserWindowKind, parseBrowserWindowHandle } from './kinds/browser-window-kind';
+import { BrowserWatch } from './kinds/browser-watch';
+import { BROWSER_WINDOW_KIND } from './kinds/browser-window-spec';
+import { createBrowserSessions, type BrowserSessions } from './browser-sessions';
+import { createChromiumAdapter, type BrowserAdapter } from '../platform/macos/chromium-browser';
+import { identityKeyFor } from './kind-registry';
+import { resolveTrackedSteps } from './tracking';
 
 /**
  * The live resource ledger, or null when tracking is off: not macOS,
@@ -25,6 +32,25 @@ let ledgerStore: ResourceLedgerStore | null = null;
 
 export function getLedgerStore(): ResourceLedgerStore | null {
   return ledgerStore;
+}
+
+/** Saved browser tabs (browser-sessions.ts); null when tracking is off. */
+let browserSessions: BrowserSessions | null = null;
+
+export function getBrowserSessions(): BrowserSessions | null {
+  return browserSessions;
+}
+
+const browserAdapters = new Map<string, BrowserAdapter>();
+
+/** The scripting adapter for a browser, by the app name it answers to. */
+export function browserAdapterFor(appName: string): BrowserAdapter {
+  let adapter = browserAdapters.get(appName);
+  if (!adapter) {
+    adapter = createChromiumAdapter(appName);
+    browserAdapters.set(appName, adapter);
+  }
+  return adapter;
 }
 
 /** Installs (or, with null, turns off) the ledger — startup below, and tests. */
@@ -46,6 +72,21 @@ export async function initResourceTracking(configs: readonly WorkspaceConfig[]):
     registerResourceKind(createComposeKind());
     registerResourceKind(createTerminalKind({ helper: getWlHelper(), ...defaultTerminalDeps }));
     registerResourceKind(createVscodeWindowKind(vscodeWindowDeps()));
+    const sessions = createBrowserSessions();
+    const browserWatch = new BrowserWatch({
+      helper: getWlHelper(),
+      adapterFor: browserAdapterFor,
+      sessions: () => browserSessions,
+      ledger: () => ledgerStore,
+    });
+    registerResourceKind(
+      createBrowserWindowKind({
+        helper: getWlHelper(),
+        adapterFor: browserAdapterFor,
+        sessions: () => browserSessions,
+        watch: (bundleId, appName) => browserWatch.watch(bundleId, appName),
+      }),
+    );
     const store = createResourceLedgerStore();
     const loaded = store.load(await readBootSessionUuid());
     if (!loaded.ok) {
@@ -55,9 +96,46 @@ export async function initResourceTracking(configs: readonly WorkspaceConfig[]):
     await reconcileOpeningRecords(store);
     store.update((ledger) => releaseUnknownWorkspaces(ledger, new Set(configs.map((c) => c.id))));
     ledgerStore = store;
+    browserSessions = sessions;
+    // Windows still open from before this launch keep being saved.
+    for (const resource of store.get().resources) {
+      const handle =
+        resource.kind === BROWSER_WINDOW_KIND && resource.handle
+          ? parseBrowserWindowHandle(resource.handle)
+          : null;
+      if (handle) browserWatch.watch(handle.bundleId, handle.appName);
+    }
+    await pruneBrowserSessions(sessions, configs).catch((err: unknown) => {
+      console.error(
+        `Couldn't tidy saved browser tabs: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
   } catch (err) {
     console.error(`Resource tracking is off: ${err instanceof Error ? err.message : String(err)}`);
   }
+}
+
+/**
+ * Forgets saved tabs no workspace step can reopen any more (steps
+ * removed or edited). Skipped when any browser step couldn't be
+ * resolved right now (its app unreadable): its saved tabs must never be
+ * lost to a passing lookup failure.
+ */
+async function pruneBrowserSessions(
+  sessions: BrowserSessions,
+  configs: readonly WorkspaceConfig[],
+): Promise<void> {
+  const live = new Set<string>();
+  for (const config of configs) {
+    const { tracked, untracked } = await resolveTrackedSteps(config);
+    if (untracked.some((step) => step.type === 'chrome')) return;
+    for (const { specs } of tracked) {
+      for (const spec of specs) {
+        if (spec.kind === BROWSER_WINDOW_KIND) live.add(identityKeyFor(spec));
+      }
+    }
+  }
+  sessions.prune(live);
 }
 
 /**

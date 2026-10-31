@@ -35,14 +35,18 @@ interface RestoreResultsProps {
 export function RestoreResults({ results, tools, restoredAt }: RestoreResultsProps): JSX.Element {
   const { successCount, failureCount } = getRestoreResultCounts(results);
   const totalMs = results.reduce((sum, r) => sum + r.durationMs, 0);
+  // Nothing needed opening — Restore just brought it forward (Phase 5).
+  const allReused = results.length > 0 && results.every((r) => r.reused === true);
 
   return (
     <div className="mb-5.5 flex flex-col gap-1.5">
       <p className="mb-4.5 flex items-center gap-2 text-[11px] font-semibold tracking-[0.07em] text-text-faint uppercase">
         <span>
-          {failureCount === 0
-            ? `Restored — ${successCount} of ${results.length} steps succeeded`
-            : `${successCount} of ${results.length} steps succeeded`}
+          {allReused
+            ? 'Already open — brought to the front'
+            : failureCount === 0
+              ? `Restored — ${successCount} of ${results.length} steps succeeded`
+              : `${successCount} of ${results.length} steps succeeded`}
         </span>
         <span className="font-normal normal-case tracking-normal text-text-faint">
           · {formatPreciseDuration(totalMs)} · restored {formatRelativeTime(restoredAt, Date.now())}

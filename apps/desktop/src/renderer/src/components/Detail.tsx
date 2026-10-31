@@ -27,6 +27,8 @@ import {
 import { TimelineStep } from './TimelineStep';
 import { RestoreResults } from './RestoreResults';
 import { StepChangeConfirm } from './StepChangeConfirm';
+import { AddToolMenu } from './AddToolMenu';
+import type { CreateToolPreset } from '../constants';
 import { ErrorCode } from './ErrorCode';
 import { WorkspaceHotkeyControl } from './WorkspaceHotkeyControl';
 
@@ -63,6 +65,8 @@ interface DetailProps {
    * WorkspaceFormModal.tsx already computes this from. */
   allWorkspaces: WorkspaceDisplay[];
   onEditWorkspace: (workspace: WorkspaceDisplay) => void;
+  /** "+ Add step" for a tool with fields to fill in: opens the Edit form with it added. */
+  onAddStepInForm: (workspace: WorkspaceDisplay, type: string) => void;
   onDeleteWorkspace: (workspace: WorkspaceDisplay) => void;
   /** Fires after a successful inline quick-edit save, mirroring
    * WorkspaceFormModal's onSaved — App.tsx uses it to refresh the
@@ -130,6 +134,7 @@ export function Detail({
   workspace,
   allWorkspaces,
   onEditWorkspace,
+  onAddStepInForm,
   onDeleteWorkspace,
   onQuickEditSaved,
   onShowErrorCode,
@@ -181,6 +186,7 @@ export function Detail({
   // step is currently expanded (expandedIndex), same one-at-a-time
   // shape that already governs expand/collapse.
   const [draftParams, setDraftParams] = useState<Record<string, unknown> | null>(null);
+  const [addStepError, setAddStepError] = useState<{ message: string; code: string } | null>(null);
   const [isSavingStep, setIsSavingStep] = useState(false);
   const [saveStepError, setSaveStepError] = useState<SaveStepDisplayError | null>(null);
   // Removing a single step — independent of the quick-edit state above
@@ -273,6 +279,44 @@ export function Detail({
     } finally {
       stepChangeBusyRef.current = false;
       setIsSavingStep(false);
+    }
+  }
+
+  /**
+   * "+ Add step": an App step is complete the moment an app is chosen,
+   * so it's picked and saved right here (two clicks, no form); any other
+   * tool has fields to fill in, so the Edit form opens with it added.
+   */
+  async function handleAddStep(preset: CreateToolPreset): Promise<void> {
+    if (preset.type !== 'app') {
+      onAddStepInForm(workspace, preset.type);
+      return;
+    }
+    if (stepChangeBusyRef.current) return;
+    setAddStepError(null);
+    const path = await window.api.selectApp();
+    if (path === null || !isMountedRef.current) return;
+    stepChangeBusyRef.current = true;
+    setIsSavingStep(true);
+    try {
+      const result = await window.api.updateWorkspace({
+        id: workspace.id,
+        name: workspace.name,
+        steps: [...currentSteps(), { type: 'app', params: { path } }],
+      });
+      if (!isMountedRef.current) return;
+      if (result.success) recordSaved(result.config);
+      else setAddStepError({ message: result.error, code: result.code });
+    } catch (err) {
+      if (isMountedRef.current) {
+        setAddStepError({
+          message: err instanceof Error ? err.message : String(err),
+          code: ERROR_CODES.SYSTEM_UNEXPECTED.code,
+        });
+      }
+    } finally {
+      stepChangeBusyRef.current = false;
+      if (isMountedRef.current) setIsSavingStep(false);
     }
   }
 
@@ -677,7 +721,10 @@ export function Detail({
               <button
                 type="button"
                 aria-label={`Actions for ${workspace.name}`}
-                className="flex h-10 w-10 items-center justify-center rounded-md border border-border-strong bg-bg-elevated text-text-muted transition-[transform,background-color,border-color] duration-150 hover:-translate-y-px hover:bg-bg-hover hover:text-text active:translate-y-0 data-[state=open]:bg-bg-hover data-[state=open]:text-text"
+                // Editing or deleting mid-restore/close/switch would pull the
+                // workspace out from under the run in progress.
+                disabled={actionsDisabled}
+                className="flex h-10 w-10 items-center justify-center rounded-md border border-border-strong bg-bg-elevated text-text-muted transition-[transform,background-color,border-color] duration-150 hover:-translate-y-px hover:bg-bg-hover hover:text-text active:translate-y-0 disabled:pointer-events-none disabled:opacity-60 data-[state=open]:bg-bg-hover data-[state=open]:text-text"
               >
                 <Icon name="more" size={15} />
               </button>
@@ -978,6 +1025,33 @@ export function Detail({
             />
           );
         })}
+      </div>
+
+      <div className="mt-3">
+        <AddToolMenu
+          onPick={(preset) => {
+            void handleAddStep(preset);
+          }}
+        >
+          <button
+            type="button"
+            disabled={actionsDisabled || isSavingStep}
+            className="flex h-8 w-full items-center justify-center gap-1.5 rounded-sm border border-dashed border-border-strong text-xs text-text-faint hover:border-text-faint hover:text-text-muted disabled:pointer-events-none disabled:opacity-60"
+          >
+            <Icon name="plus" size={12} />
+            Add step
+          </button>
+        </AddToolMenu>
+        {addStepError && (
+          <div className="mt-2 flex items-center gap-2 rounded-sm border border-border bg-bg-elevated px-2.5 py-2 text-[12.5px] text-text-muted">
+            <Icon name="x" size={13} className="text-danger" />
+            <ErrorCode
+              code={addStepError.code}
+              message={addStepError.message}
+              onLearnMore={onShowErrorCode}
+            />
+          </div>
+        )}
       </div>
 
       <StepChangeConfirm

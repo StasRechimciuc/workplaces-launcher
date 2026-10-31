@@ -334,7 +334,11 @@ describe('restore', () => {
     const [second] = await runWorkspace(a);
     expect(runs).toEqual(['term']);
     expect(world.get('term')).toHaveLength(1);
-    expect(second).toMatchObject({ success: true, message: 'Already open — reused.' });
+    expect(second).toMatchObject({
+      success: true,
+      message: 'Already open — reused.',
+      reused: true,
+    });
   });
 
   it('re-runs a finished terminal’s commands in the same window instead of opening another', async () => {
@@ -349,6 +353,8 @@ describe('restore', () => {
       success: true,
       message: 'Already open — re-ran its commands there.',
     });
+    // Something ran — so not "already open" for the header.
+    expect(result!.reused).toBeUndefined();
   });
 
   it('never learns a launch time from a run that reused what was already open', async () => {
@@ -383,6 +389,14 @@ describe('restore', () => {
     await runWorkspace(a);
     expect(runs).toEqual(['Spotify', 'Spotify']);
     expect(store.get().resources).toHaveLength(1);
+  });
+
+  it('counts an app step whose app was already open as reused — nothing new opened', async () => {
+    const a = ws('A', [{ type: 't-app', params: { name: 'Spotify' } }]);
+    const [first] = await runWorkspace(a);
+    expect(first!.reused).toBeUndefined();
+    const [second] = await runWorkspace(a);
+    expect(second).toMatchObject({ success: true, message: 'opened', reused: true });
   });
 
   it('records an app the user already had open as not ours', async () => {

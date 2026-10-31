@@ -96,6 +96,7 @@ async function specsFor(step: WorkspaceStep, context: ResourceContext): Promise<
 const REUSED_RESULT: Omit<StepResult, 'durationMs'> = {
   success: true,
   message: 'Already open — reused.',
+  reused: true,
 };
 
 /**
@@ -162,13 +163,19 @@ export async function openTrackedStep(
       mustRun = true;
     }
 
-    const result = mustRun
-      ? await run(liveKeys)
-      : {
-          ...REUSED_RESULT,
-          ...(revived > 0 ? { message: 'Already open — re-ran its commands there.' } : {}),
-          durationMs: 0,
-        };
+    // Re-running finished commands in place is doing something — not
+    // "reused" for the header. Re-running a step whose every resource
+    // was already open (an app: it just comes forward, a playlist
+    // restarts) opened nothing new — that still counts as reused.
+    const ran = mustRun ? await run(liveKeys) : null;
+    const result: StepResult =
+      ran !== null
+        ? ran.success && pending.length === 0 && revived === 0
+          ? { ...ran, reused: true }
+          : ran
+        : revived > 0
+          ? { success: true, message: 'Already open — re-ran its commands there.', durationMs: 0 }
+          : { ...REUSED_RESULT, durationMs: 0 };
 
     const notTracked: string[] = [];
     for (const { spec, kind, id, snapshot } of pending) {

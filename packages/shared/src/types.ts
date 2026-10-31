@@ -10,6 +10,8 @@ export interface StepResult {
   success: boolean;
   message: string;
   durationMs: number;
+  /** Everything the step opens was already open — nothing was opened or run. */
+  reused?: true;
   /** Stable lookup key into ERROR_CODES (error-codes.ts) — absent on success. */
   code?: string;
   /**

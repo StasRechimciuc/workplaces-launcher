@@ -858,7 +858,7 @@ to Accessibility so its site can be named (else a generic message).
   apps and Compose stacks have none. `focusWorkspace` runs after every
   Restore (button and hotkey, once the app's own pin is released) and
   after Switch, in step order with VS Code last; failures are logged.
-- Follow-up: `dockerTool > teardown > reports a durationMs…` is a timing
+- Done (2026-10-31, now on controlled time): `dockerTool > teardown > reports a durationMs…` was a timing
   test that occasionally fails under the full suite's load (passes
   alone) — make it robust.
 
@@ -931,7 +931,7 @@ Same pass: the sidebar's status badge is solid red for a step that
 Detail strip shows that step half green / half red (founder,
 2026-10-29) — make the two agree.
 
-Follow-up (founder, 2026-10-30): global keyboard support for every
+Done (2026-10-31 — Esc was already built in; Enter was missing only on the Accessibility dialog, the one other dialog with a single primary action; Settings and the error viewer have none): global keyboard support for every
 dialog and modal (confirmations, Edit form, Save current, etc.) — Esc
 cancels/closes, Enter runs the primary button (confirm / submit / save).
 One shared behavior in the dialog component, not per-dialog wiring
@@ -952,11 +952,11 @@ view: the modal is too narrow to read what was detected (long paths,
 commands, several terminals and windows stacked in expand-in-place
 rows). Needs a wider, scannable layout — plan through /judge.
 
-Follow-up (founder, 2026-10-31): when every step was already open
+Done (2026-10-31): when every step was already open
 ("Already open — reused"), the Detail header still says "Restored — 1
 of 1 steps succeeded · 0.0s" — say "Already open" instead.
 
-Follow-up (founder, 2026-10-30): while a workspace is restoring,
+Done (2026-10-31): while a workspace is restoring,
 closing or switching, the ⋯ menu next to Restore/Close (Edit, Delete,
 etc.) is still clickable — disable it for the duration, like the
 Restore/Close button itself.

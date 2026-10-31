@@ -44,6 +44,8 @@ export function App(): JSX.Element {
   const [isCreateModalOpen, setCreateModalOpen] = useState(false);
   const [isSaveCurrentModalOpen, setSaveCurrentModalOpen] = useState(false);
   const [editingWorkspace, setEditingWorkspace] = useState<WorkspaceDisplay | null>(null);
+  // "+ Add step" for a tool with fields to fill in: the Edit form opens with it added.
+  const [addOnOpen, setAddOnOpen] = useState<string | null>(null);
   const [deletingWorkspace, setDeletingWorkspace] = useState<WorkspaceDisplay | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isSettingsOpen, setSettingsOpen] = useState(false);
@@ -348,6 +350,10 @@ export function App(): JSX.Element {
             workspace={activeWorkspace}
             allWorkspaces={workspaces}
             onEditWorkspace={setEditingWorkspace}
+            onAddStepInForm={(workspace, type) => {
+              setAddOnOpen(type);
+              setEditingWorkspace(workspace);
+            }}
             onDeleteWorkspace={setDeletingWorkspace}
             onQuickEditSaved={(config) => {
               void refreshWorkspaces(config.id);
@@ -367,14 +373,17 @@ export function App(): JSX.Element {
       <WorkspaceFormModal
         open={isCreateModalOpen || editingWorkspace !== null}
         editingWorkspace={editingWorkspace}
+        addOnOpen={addOnOpen}
         workspaces={workspaces}
         onClose={() => {
           setCreateModalOpen(false);
           setEditingWorkspace(null);
+          setAddOnOpen(null);
         }}
         onSaved={(config: WorkspaceConfig) => {
           setCreateModalOpen(false);
           setEditingWorkspace(null);
+          setAddOnOpen(null);
           void refreshWorkspaces(config.id);
         }}
         onStepsChangeApplied={(workspaceId, outcome) => {

@@ -469,14 +469,23 @@ describe('dockerTool', () => {
         ) // docker info — slow
         .mockResolvedValueOnce({ success: true, stdout: '', stderr: '' }); // compose down
 
-      const result = await dockerTool.teardown({
-        ...validCompose,
-        downCommand: '',
-        stopOnClose: false,
-      });
+      // Controlled time: a real 30ms timer and the wall clock can
+      // disagree by a millisecond under load, which made this flaky.
+      vi.useFakeTimers();
+      try {
+        const pending = dockerTool.teardown({
+          ...validCompose,
+          downCommand: '',
+          stopOnClose: false,
+        });
+        await vi.advanceTimersByTimeAsync(CHECK_DELAY_MS);
+        const result = await pending;
 
-      expect(result.success).toBe(true);
-      expect(result.durationMs).toBeGreaterThanOrEqual(CHECK_DELAY_MS);
+        expect(result.success).toBe(true);
+        expect(result.durationMs).toBeGreaterThanOrEqual(CHECK_DELAY_MS);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('reports the daemon-down message with a manual-start instruction, never attempting to launch Docker itself', async () => {

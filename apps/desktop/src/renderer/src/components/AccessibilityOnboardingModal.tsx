@@ -125,7 +125,16 @@ export function AccessibilityOnboardingModal({
         if (!next) onClose();
       }}
     >
-      <DialogContent showCloseButton={false} className="w-120">
+      <DialogContent
+        showCloseButton={false}
+        className="w-120"
+        // Enter does what the primary button does: open the settings,
+        // or — once access is on — Done.
+        onEnterKey={() => {
+          if (isGranted) onClose();
+          else void handleOpenSettings();
+        }}
+      >
         <DialogHeader>
           <DialogTitle>{isGranted ? 'Access granted' : 'Allow Accessibility access'}</DialogTitle>
           <DialogClose className="flex h-7 w-7 items-center justify-center rounded-md text-text-muted hover:bg-bg-hover hover:text-text">
